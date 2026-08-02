@@ -207,6 +207,21 @@ CREATE TABLE IF NOT EXISTS image_jobs (
     notified_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS image_share_challenges (
+    id TEXT PRIMARY KEY,
+    resident_id TEXT NOT NULL,
+    image_id TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    participant_id TEXT NOT NULL,
+    destination_kind TEXT NOT NULL,
+    destination_id TEXT NOT NULL,
+    requested_turn_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_turn_id TEXT,
+    consumed_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_image_assets_resident
 ON image_assets(resident_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_image_assets_artifact
@@ -479,6 +494,15 @@ class ContinuityDB:
             ).fetchone()
         return self._row_to_memory(row) if row else None
 
+    def get_memories_by_ids(self, record_ids: Sequence[str]) -> list[MemoryRecord]:
+        if not record_ids:
+            return []
+        placeholders = ",".join("?" for _ in record_ids)
+        sql = self._memory_projection_sql(f"WHERE r.id IN ({placeholders})")
+        with self.connect() as connection:
+            rows = connection.execute(sql, tuple(record_ids)).fetchall()
+        return [self._row_to_memory(row) for row in rows]
+
     def list_memories(
         self,
         *,
@@ -521,24 +545,24 @@ class ContinuityDB:
             ).fetchall()
         return [self._row_to_memory(row) for row in rows]
 
-    def search_fts(self, query: str, limit: int = 100) -> dict[str, float]:
+    def search_fts(self, query: str, resident_id: str, room_id: str, limit: int = 100) -> dict[str, float]:
         clean = query.strip()
         if not clean:
             return {}
-        try:
-            with self.connect() as connection:
-                rows = connection.execute(
-                    """
-                    SELECT record_id, bm25(memory_fts) AS rank
-                    FROM memory_fts
-                    WHERE memory_fts MATCH ?
-                    ORDER BY rank
-                    LIMIT ?
-                    """,
-                    (clean, max(1, int(limit))),
-                ).fetchall()
-        except sqlite3.OperationalError:
-            return {}
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT f.record_id, bm25(f.memory_fts) AS rank
+                FROM memory_fts f
+                JOIN memory_records m ON m.id = f.record_id
+                WHERE f.memory_fts MATCH ?
+                  AND m.resident_id = ?
+                  AND m.room_id = ?
+                ORDER BY rank
+                LIMIT ?
+                """,
+                (clean, resident_id, room_id, max(1, int(limit))),
+            ).fetchall()
         return {str(row["record_id"]): float(row["rank"]) for row in rows}
 
     def add_turn(

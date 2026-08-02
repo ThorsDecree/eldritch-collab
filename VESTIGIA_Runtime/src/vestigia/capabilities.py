@@ -69,13 +69,53 @@ class CapabilitySpec:
         return value
 
 
+class CapabilityPolicyEngine:
+    def __init__(self, config: ResolvedConfig) -> None:
+        self.config = config
+        self.recognized_policies = {
+            "none",
+            "configured_budget",
+            "resident_only_if_private_or_legacy_two_breath",
+            "later_resident_hash_bound_claim",
+            "hash_bound_for_claim",
+        }
+
+    def authorize(
+        self,
+        spec: CapabilitySpec,
+        payload: dict[str, Any],
+        context: dict[str, Any],
+    ) -> None:
+        if spec.confirmation not in self.recognized_policies:
+            raise PermissionError(
+                f"Capability {spec.name} specifies unrecognized confirmation policy: {spec.confirmation}"
+            )
+        if spec.outward_facing:
+            interface = context.get("interface")
+            if not interface or interface not in {"discord", "bell"}:
+                raise PermissionError(
+                    f"Outward facing capability {spec.name} must be executed from an authorized Discord/Bell interface, got: {interface or '(none)'}"
+                )
+
+
+PolicyAuthorizer = Callable[[CapabilitySpec, dict[str, Any], dict[str, Any]], None]
+
+
 class CapabilityRegistry:
     def __init__(self, config: ResolvedConfig) -> None:
         self.config = config
+        self.policy = CapabilityPolicyEngine(config)
         self._specs: dict[str, CapabilitySpec] = {}
         self._handlers: dict[str, CapabilityHandler] = {}
+        self._authorizers: dict[str, PolicyAuthorizer] = {}
 
-    def register(self, spec: CapabilitySpec, handler: CapabilityHandler) -> None:
+    def register(
+        self,
+        spec: CapabilitySpec,
+        handler: CapabilityHandler,
+        *,
+        authorizer: PolicyAuthorizer | None = None,
+    ) -> None:
         name = spec.name.strip().lower()
         if not name or name != spec.name:
             raise ValueError("capability names must already be normalized")
@@ -83,8 +123,22 @@ class CapabilityRegistry:
             raise ValueError(f"duplicate capability: {name}")
         if spec.default_after not in {"continue", "finish"}:
             raise ValueError(f"invalid default continuation for {name}")
+        if spec.confirmation not in self.policy.recognized_policies:
+            raise ValueError(
+                f"Capability {spec.name} specifies unrecognized confirmation policy: {spec.confirmation}"
+            )
+        if spec.outward_facing and spec.confirmation == "none":
+            raise ValueError(
+                f"Outward facing capability {spec.name} must declare a non-none confirmation policy."
+            )
+        if spec.confirmation != "none" and authorizer is None:
+            raise ValueError(
+                f"Capability {spec.name} requires an executable policy authorizer because it declares confirmation policy: {spec.confirmation}"
+            )
         self._specs[name] = spec
         self._handlers[name] = handler
+        if authorizer is not None:
+            self._authorizers[name] = authorizer
 
     def register_contract(self, spec: CapabilitySpec) -> None:
         """Register a discoverable non-TOOL_ACTION envelope such as BELL_DRAFT."""
@@ -96,6 +150,14 @@ class CapabilityRegistry:
             raise ValueError(f"duplicate capability: {name}")
         if spec.dispatchable_via_tool_action:
             raise ValueError("contract-only capabilities must name another invocation envelope")
+        if spec.confirmation not in self.policy.recognized_policies:
+            raise ValueError(
+                f"Capability {spec.name} specifies unrecognized confirmation policy: {spec.confirmation}"
+            )
+        if spec.outward_facing and spec.confirmation == "none":
+            raise ValueError(
+                f"Outward facing capability {spec.name} must declare a non-none confirmation policy."
+            )
         self._specs[name] = spec
 
     def spec(self, name: str) -> CapabilitySpec:
@@ -130,6 +192,10 @@ class CapabilityRegistry:
         validate_instance(clean, spec.input_schema)
         execution_context = dict(context or {})
         execution_context["turn_id"] = turn_id
+        self.policy.authorize(spec, clean, execution_context)
+        authorizer = self._authorizers.get(spec.name)
+        if authorizer is not None:
+            authorizer(spec, clean, execution_context)
         result = self._handlers[spec.name](clean, execution_context)
         return result, spec, after
 
