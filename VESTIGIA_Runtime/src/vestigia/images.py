@@ -1143,23 +1143,74 @@ class ImageService:
             if not asset:
                 raise KeyError(f"unknown image: {image_id}")
             privacy = str(asset.get("privacy") or "private").strip().lower()
-            if privacy == "private" and payload.get("confirm") is not True:
-                return {
-                    "schema_version": "vestigia.image-share.v2",
-                    "mode": "send",
-                    "image_id": str(asset["id"]),
-                    "status": "resident_confirmation_required",
-                    "privacy": "private",
-                    "recipient": "current_authenticated_doorway",
-                    "content_hash": asset.get("content_hash"),
-                    "next_action": "repeat image.share mode:send with confirm:true",
-                    "outward_action": False,
-                    "invariant": "No outward action occurred.",
-                    "friendly_summary": (
-                        "This picture is private. Resident confirmation is required "
-                        "before a one-time handoff."
-                    ),
-                }
+            if privacy == "private":
+                if payload.get("confirm") is not True:
+                    now = datetime.now(UTC).isoformat()
+                    with self.db.connect() as connection:
+                        connection.execute(
+                            """
+                            INSERT INTO image_events
+                            (id, image_id, event_type, status, actor, reason, payload_json, created_at)
+                            VALUES (?, ?, 'confirmation_requested', 'pending_confirmation',
+                                    ?, ?, ?, ?)
+                            """,
+                            (
+                                new_id("iev"),
+                                str(asset["id"]),
+                                actor,
+                                f"confirmation warning issued in turn {turn_id}",
+                                json.dumps({"turn_id": turn_id}),
+                                now,
+                            ),
+                        )
+                    return {
+                        "schema_version": "vestigia.image-share.v2",
+                        "mode": "send",
+                        "image_id": str(asset["id"]),
+                        "status": "resident_confirmation_required",
+                        "privacy": "private",
+                        "recipient": "current_authenticated_doorway",
+                        "content_hash": asset.get("content_hash"),
+                        "next_action": "repeat image.share mode:send with confirm:true",
+                        "outward_action": False,
+                        "invariant": "No outward action occurred.",
+                        "friendly_summary": (
+                            "This picture is private. Resident confirmation is required "
+                            "before a one-time handoff."
+                        ),
+                    }
+                else:
+                    with self.db.connect() as connection:
+                        row = connection.execute(
+                            """
+                            SELECT payload_json FROM image_events
+                            WHERE image_id = ? AND event_type = 'confirmation_requested'
+                            ORDER BY rowid DESC LIMIT 1
+                            """,
+                            (str(asset["id"]),),
+                        ).fetchone()
+                    
+                    if not row:
+                        raise PermissionError(
+                            "Cannot confirm sharing of a private image without a prior confirmation request warning. "
+                            "Call image.share first without confirm:true."
+                        )
+                    
+                    try:
+                        event_payload = json.loads(row["payload_json"] or "{}")
+                        request_turn_id = event_payload.get("turn_id")
+                    except Exception:
+                        request_turn_id = None
+                    
+                    if request_turn_id == turn_id:
+                        raise PermissionError(
+                            "A private image cannot be confirmed within the same turn/invocation it was requested. "
+                            "The confirmation must occur in a subsequent turn (e.g. after a participant message)."
+                        )
+                    if interface != "discord":
+                        raise PermissionError(
+                            "A private image confirmation must be initiated by a participant turn on Discord."
+                        )
             path = self.resolve_path(str(asset["id"]))
             now = datetime.now(UTC).isoformat()
             reason = str(payload.get("reason", "")).strip() or "resident quick-draw"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,7 @@ class CoreRuntime:
     ) -> None:
         self.config = config
         self.home = config.home_path
+        self._lock = threading.Lock()
         self.resident_id = str(config.get("resident.id"))
         self.room_id = str(config.get("room.id"))
         ensure_v061_contract(self.home)
@@ -113,6 +115,10 @@ class CoreRuntime:
         return normalized
 
     def chat(self, message: NormalizedMessage, *, model_route: str = "default") -> RuntimeResult:
+        with self._lock:
+            return self._chat_unlocked(message, model_route=model_route)
+
+    def _chat_unlocked(self, message: NormalizedMessage, *, model_route: str = "default") -> RuntimeResult:
         turn_id = new_id("turn")
         self.db.add_turn(
             resident_id=self.resident_id,
@@ -232,7 +238,8 @@ class CoreRuntime:
         )
         proposal_ids: list[str] = []
         if bool(self.config.get("memory.auto_extract_conservative_candidates", True)):
-            proposal_ids = self.memory.extract_from_participant_turn(message.content, turn_id)
+            extraction_text = message.participant_text if message.participant_text is not None else message.content
+            proposal_ids = self.memory.extract_from_participant_turn(extraction_text, turn_id)
         atomic_write_json(
             self.home / "traces" / f"{turn_id}.result.json",
             {

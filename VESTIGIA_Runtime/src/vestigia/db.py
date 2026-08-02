@@ -479,6 +479,15 @@ class ContinuityDB:
             ).fetchone()
         return self._row_to_memory(row) if row else None
 
+    def get_memories_by_ids(self, record_ids: Sequence[str]) -> list[MemoryRecord]:
+        if not record_ids:
+            return []
+        placeholders = ",".join("?" for _ in record_ids)
+        sql = self._memory_projection_sql(f"WHERE r.id IN ({placeholders})")
+        with self.connect() as connection:
+            rows = connection.execute(sql, tuple(record_ids)).fetchall()
+        return [self._row_to_memory(row) for row in rows]
+
     def list_memories(
         self,
         *,
