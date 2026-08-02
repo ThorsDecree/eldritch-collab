@@ -2673,6 +2673,7 @@ class LegibleHouseContractTests(HomeCase):
                 "interface": "discord",
                 "delivery_target": {"kind": "discord_channel", "id": "456"},
                 "source_envelope": "REACT",
+                "trigger_message_id": "1234567890",
             },
         )
         self.assertTrue(result["outward_action"])
@@ -3127,6 +3128,307 @@ class CapabilityRegistryAndConcurrencyTests(HomeCase):
         # Verify foreign target is NOT in candidates
         foreign_candidate = next((c for c in candidates if c.record.id == str(foreign_id)), None)
         self.assertIsNone(foreign_candidate)
+
+
+class RevisionPR3Tests(HomeCase):
+    def test_ambient_truncation_preserves_envelope(self) -> None:
+        import sys
+        from unittest.mock import MagicMock
+        if 'discord' not in sys.modules:
+            sys.modules['discord'] = MagicMock()
+            
+        import asyncio
+        import discord
+        from unittest.mock import MagicMock, patch
+        from vestigia.adapters.discord_adapter import discord_recent_context
+        
+        async def run_test():
+            # Mock prior messages
+            mock_messages = []
+            for i in range(5):
+                m = MagicMock()
+                m.id = 1000 + i
+                m.author = MagicMock()
+                m.author.bot = False
+                m.author.id = 123
+                m.author.display_name = f"User{i}"
+                m.content = f"Message number {i} with some long text to force truncation"
+                m.webhook_id = None
+                mock_messages.append(m)
+                
+            channel = MagicMock()
+            async def mock_history(limit, before):
+                for m in reversed(mock_messages):
+                    yield m
+            channel.history = mock_history
+            
+            trigger_msg = MagicMock()
+            trigger_msg.channel = channel
+            mock_client = MagicMock()
+            mock_client.user = MagicMock()
+            mock_client.user.id = 9999
+            
+            with patch("vestigia.adapters.discord_adapter.load_context_controls", return_value={"ambient_visibility": "all_channel"}):
+                # 1. high budget recent_max_chars
+                with patch.dict(self.config.data, {"discord": {"recent_max_chars": 2000, "recent_messages": 10}}):
+                    text, ids = await discord_recent_context(
+                        trigger_msg, self.config, self.db, "test-resident", {"123"}, mock_client
+                    )
+                    self.assertIn("Ambient channel history", text)
+                    self.assertEqual(len(ids), 5)
+                    self.assertIn("User0: Message number 0", text)
+                    
+                # 2. low budget recent_max_chars
+                with patch.dict(self.config.data, {"discord": {"recent_max_chars": 350, "recent_messages": 10}}):
+                    text, ids = await discord_recent_context(
+                        trigger_msg, self.config, self.db, "test-resident", {"123"}, mock_client
+                    )
+                    self.assertIn("Ambient channel history", text)
+                    self.assertTrue(len(text) <= 350)
+                    self.assertGreater(len(ids), 0)
+                    for mid in ids:
+                        self.assertIn(f"[message_id={mid}", text)
+
+            # Test visibility modes
+            with patch("vestigia.adapters.discord_adapter.load_context_controls", return_value={"ambient_visibility": "hidden"}):
+                text, ids = await discord_recent_context(
+                    trigger_msg, self.config, self.db, "test-resident", {"123"}, mock_client
+                )
+                self.assertEqual(text, "")
+                self.assertEqual(ids, [])
+        asyncio.run(run_test())
+
+    def test_discord_reaction_delivery_failures(self) -> None:
+        import sys
+        from unittest.mock import MagicMock
+        if 'discord' not in sys.modules or isinstance(sys.modules['discord'], MagicMock):
+            mock_discord = MagicMock()
+            class NotFound(Exception): pass
+            class Forbidden(Exception): pass
+            mock_discord.NotFound = NotFound
+            mock_discord.Forbidden = Forbidden
+            sys.modules['discord'] = mock_discord
+            
+        import asyncio
+        import discord
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from vestigia.adapters.discord_adapter import discord_apply_outbound_reaction
+        
+        async def run_test():
+            runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+            destination = AsyncMock()
+            destination.id = 123
+            mock_client = MagicMock()
+            mock_client.user = MagicMock()
+            mock_client.user.id = 9999
+            
+            # 1. Invalid message-ID conversion
+            item = {"message_id": "abc", "channel_id": "123", "action": "add", "emoji": "💋"}
+            with self.assertRaises(ValueError):
+                await discord_apply_outbound_reaction(destination, item, runtime, mock_client)
+            receipts = runtime.house.legible.list_receipts(limit=10)
+            failed_brief = next(r for r in receipts if r["action"] == "discord.react.delivery" and r["status"] == "failed" and r["target"].get("message_id") == "abc")
+            failed_receipt = runtime.house.legible.inspect_receipt(failed_brief["id"])
+            self.assertEqual(failed_receipt["result"]["platform_accepted"], False)
+            self.assertEqual(failed_receipt["outward_effect"], "none")
+
+            # 2. Message not found
+            destination.fetch_message.side_effect = discord.NotFound("message not found")
+            item = {"message_id": "999", "channel_id": "123", "action": "add", "emoji": "💋"}
+            with self.assertRaises(discord.NotFound):
+                await discord_apply_outbound_reaction(destination, item, runtime, mock_client)
+            receipts = runtime.house.legible.list_receipts(limit=10)
+            failed_brief = next(r for r in receipts if r["action"] == "discord.react.delivery" and r["status"] == "failed" and r["target"].get("message_id") == "999")
+            failed_receipt = runtime.house.legible.inspect_receipt(failed_brief["id"])
+            self.assertEqual(failed_receipt["result"]["error_type"], "NotFound")
+
+            # 3. Discord permission denial
+            destination.fetch_message.side_effect = None
+            destination.fetch_message.return_value = AsyncMock()
+            destination.fetch_message.return_value.add_reaction.side_effect = discord.Forbidden("forbidden")
+            item = {"message_id": "1000", "channel_id": "123", "action": "add", "emoji": "💋"}
+            with self.assertRaises(discord.Forbidden):
+                await discord_apply_outbound_reaction(destination, item, runtime, mock_client)
+            receipts = runtime.house.legible.list_receipts(limit=10)
+            failed_brief = next(r for r in receipts if r["action"] == "discord.react.delivery" and r["status"] == "failed" and r["target"].get("message_id") == "1000")
+            failed_receipt = runtime.house.legible.inspect_receipt(failed_brief["id"])
+            self.assertEqual(failed_receipt["result"]["error_type"], "Forbidden")
+        asyncio.run(run_test())
+
+    def test_reaction_visibility_scope(self) -> None:
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        context = {
+            "interface": "discord",
+            "delivery_target": {"kind": "discord_channel", "id": "456"},
+            "source_envelope": "REACT",
+            "trigger_message_id": "1000",
+            "ambient_message_ids": ["1001", "1002"],
+        }
+        
+        # Trigger message succeeds
+        res = runtime.house.dispatch({"action": "discord.react", "message_id": "1000", "emoji": "💋"}, context=context)
+        self.assertEqual(res["reaction"]["message_id"], "1000")
+        
+        # Ambient message succeeds
+        res = runtime.house.dispatch({"action": "discord.react", "message_id": "1001", "emoji": "💋"}, context=context)
+        self.assertEqual(res["reaction"]["message_id"], "1001")
+        
+        # Same-channel non-visible fails
+        with self.assertRaises(PermissionError):
+            runtime.house.dispatch({"action": "discord.react", "message_id": "1003", "emoji": "💋"}, context=context)
+
+    def test_operator_hard_ceilings(self) -> None:
+        from vestigia.context_controls import save_context_controls, load_context_controls
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        with patch.dict(self.config.data, {"context": {
+            "resident_max_total_tokens": 15000,
+            "resident_max_verbatim_turns": 10,
+            "resident_max_compression_source_turns": 50,
+            "resident_max_compressed_transcript_tokens": 5000,
+        }}):
+            # Configure values below ceiling works
+            res = runtime.house.dispatch({
+                "action": "context.control",
+                "mode": "configure",
+                "prompt_budget_tokens": 12000,
+                "verbatim_turns": 5,
+            })
+            self.assertEqual(res["controls"]["prompt_budget_tokens"], 12000)
+            
+            # Configure values above ceiling raises ValueError
+            with self.assertRaises(ValueError):
+                runtime.house.dispatch({
+                    "action": "context.control",
+                    "mode": "configure",
+                    "prompt_budget_tokens": 16000,
+                })
+                
+            # Clamping dynamic lowering
+            save_context_controls(self.db, "test-resident", {
+                "prompt_budget_tokens": 18000,
+                "verbatim_turns": 20,
+                "compression_source_turns": 100,
+                "compressed_token_budget": 8000,
+                "ambient_visibility": "allowlisted_only",
+            })
+            controls = load_context_controls(self.config, self.db, "test-resident")
+            self.assertEqual(controls["prompt_budget_tokens"], 15000)
+            self.assertEqual(controls["verbatim_turns"], 10)
+
+    def test_interface_binding_and_migrations(self) -> None:
+        with self.db.connect() as conn:
+            conn.execute("DROP TABLE IF EXISTS image_share_challenges")
+            conn.execute("""
+            CREATE TABLE image_share_challenges (
+                id TEXT PRIMARY KEY,
+                resident_id TEXT NOT NULL,
+                image_id TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                participant_id TEXT NOT NULL,
+                destination_kind TEXT NOT NULL,
+                destination_id TEXT NOT NULL,
+                requested_turn_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_turn_id TEXT,
+                consumed_at TEXT
+            )
+            """)
+        self.db.initialize()
+        with self.db.connect() as conn:
+            conn.execute("""
+            INSERT INTO image_share_challenges (
+                id, resident_id, image_id, content_hash, participant_id,
+                destination_kind, destination_id, requested_turn_id, status, expires_at
+            ) VALUES ('ch_old', 'resident', 'img_123', 'hash', 'user', 'channel', '123', 'turn1', 'pending', '2030-01-01T00:00:00')
+            """)
+            row = conn.execute("SELECT * FROM image_share_challenges WHERE id='ch_old'").fetchone()
+            self.assertEqual(row["requested_interface"], "discord")
+
+        service = ImageService(self.config, self.db, fake=True)
+        asset = service.ingest_bytes(
+            FakeImageProvider._PNG,
+            filename="test.png",
+            source_kind="discord",
+            source={"message_id": "999"},
+        )
+        asset_id = asset["id"]
+        
+        # Create a challenge via Discord
+        res = service.share(
+            {"action": "image.share", "image_id": asset_id, "mode": "send"},
+            turn_id="turn1",
+            actor="resident:test-resident",
+            interface="discord",
+            delivery_target={"kind": "discord_channel", "id": "456"},
+        )
+        ch_id = res["challenge_id"]
+        
+        # Confirming via CLI (wrong interface) fails
+        with self.assertRaises(PermissionError):
+            service.share(
+                {"action": "image.share", "image_id": asset_id, "mode": "send", "confirm": True, "challenge_id": ch_id},
+                turn_id="turn2",
+                actor="resident:test-resident",
+                interface="cli",
+                delivery_target={"kind": "discord_channel", "id": "456"},
+            )
+            
+        # Confirming via Discord (correct interface) succeeds
+        res_ok = service.share(
+            {"action": "image.share", "image_id": asset_id, "mode": "send", "confirm": True, "challenge_id": ch_id},
+            turn_id="turn2",
+            actor="resident:test-resident",
+            interface="discord",
+            delivery_target={"kind": "discord_channel", "id": "456"},
+        )
+        self.assertEqual(res_ok["status"], "handoff_prepared")
+        self.assertEqual(res_ok["delivery_status"], "pending_platform_delivery")
+
+    def test_decouple_orientation_identity_loading(self) -> None:
+        (self.home / "identity" / "breathprint.md").write_text("Unique Breathprint Content", encoding="utf-8")
+        (self.home / "identity" / "current_self.md").write_text("Unique Current Self Content", encoding="utf-8")
+        
+        self.db.add_memory(
+            resident_id="test-resident",
+            room_id="hearth",
+            content="Inherited memory content",
+            memory_type="identity",
+            tier="core",
+            authorship="verified",
+            authority_state="inherited_unreviewed",
+            status="inherited_unreviewed",
+            actor="initializer",
+            reason="test",
+        )
+        
+        with patch.dict(self.config.data, {"retrieval": {"include_inherited_during_orientation": False}}):
+            assembler = ContextAssembler(self.config, self.db)
+            assembly = assembler.assemble(
+                NormalizedMessage(content="hello"),
+                state=RuntimeState.ORIENTATION.value,
+            )
+            identity_layer = next(l for l in assembly.layers if l.name == "identity_core")
+            self.assertIn("Unique Breathprint Content", identity_layer.text)
+            self.assertNotIn("Inherited memory content", identity_layer.text)
+            
+        with patch.dict(self.config.data, {"retrieval": {"include_inherited_during_orientation": True}}):
+            assembler = ContextAssembler(self.config, self.db)
+            assembly = assembler.assemble(
+                NormalizedMessage(content="hello"),
+                state=RuntimeState.ORIENTATION.value,
+            )
+            identity_layer = next(l for l in assembly.layers if l.name == "identity_core")
+            self.assertIn("Unique Breathprint Content", identity_layer.text)
+            self.assertIn("Inherited memory content", identity_layer.text)
+            
+        assembler = ContextAssembler(self.config, self.db)
+        assembly = assembler.assemble(
+            NormalizedMessage(content="hello"),
+            state="ACTIVE",
+        )
+        identity_layer = next(l for l in assembly.layers if l.name == "identity_core")
+        self.assertNotIn("Unique Breathprint Content", identity_layer.text)
 
 
 if __name__ == "__main__":

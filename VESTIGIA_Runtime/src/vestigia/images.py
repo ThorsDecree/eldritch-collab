@@ -1180,6 +1180,11 @@ class ImageService:
                             f"Confirmation destination mismatch: expected {row['destination_kind']}:{row['destination_id']}, "
                             f"got {dest_kind}:{dest_id}."
                         )
+                    if row["requested_interface"] != interface:
+                        raise PermissionError(
+                            f"Confirmation interface mismatch: challenge originating interface was {row['requested_interface']}, "
+                            f"got {interface}."
+                        )
                     if interface != "discord":
                         raise PermissionError(
                             "A private image confirmation must be initiated by the resident in a later authenticated Discord turn."
@@ -1266,8 +1271,8 @@ class ImageService:
                             """
                             INSERT INTO image_share_challenges (
                                 id, resident_id, image_id, content_hash, participant_id,
-                                destination_kind, destination_id, requested_turn_id, status, expires_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                                destination_kind, destination_id, requested_turn_id, requested_interface, status, expires_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
                             """,
                             (
                                 challenge_id,
@@ -1278,6 +1283,7 @@ class ImageService:
                                 dest_kind,
                                 dest_id,
                                 turn_id or "unknown",
+                                interface or "unknown",
                                 expires.isoformat(),
                             ),
                         )

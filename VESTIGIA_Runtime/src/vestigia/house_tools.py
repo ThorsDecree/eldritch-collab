@@ -17,6 +17,7 @@ from .context_controls import (
     VISIBILITY_MODES,
     default_context_controls,
     load_context_controls,
+    load_context_controls_verbose,
     save_context_controls,
 )
 from .db import ContinuityDB
@@ -3578,28 +3579,42 @@ class HousePort:
         mode = str(payload.get("mode") or "inspect").strip().lower()
         if mode not in {"inspect", "configure", "reset", "recompress"}:
             raise ValueError("context.control mode must be inspect, configure, reset, or recompress")
-        current = load_context_controls(self.config, self.db, self.resident_id)
+        
+        report = load_context_controls_verbose(self.config, self.db, self.resident_id)
+        current = report["requested"]
+        
         if mode == "reset":
             current = default_context_controls(self.config)
             save_context_controls(self.db, self.resident_id, current)
+            report = load_context_controls_verbose(self.config, self.db, self.resident_id)
         elif mode in {"configure", "recompress"}:
+            operator_max_total_tokens = report["operator_limits"]["prompt_budget_tokens"]
+            operator_max_verbatim_turns = report["operator_limits"]["verbatim_turns"]
+            operator_max_compression_source_turns = report["operator_limits"]["compression_source_turns"]
+            operator_max_compressed_transcript_tokens = report["operator_limits"]["compressed_token_budget"]
+
             bounds = {
-                "prompt_budget_tokens": (8_000, 100_000),
-                "verbatim_turns": (2, 100),
-                "compression_source_turns": (0, 2_000),
-                "compressed_token_budget": (0, 20_000),
+                "prompt_budget_tokens": (8_000, operator_max_total_tokens),
+                "verbatim_turns": (2, operator_max_verbatim_turns),
+                "compression_source_turns": (0, operator_max_compression_source_turns),
+                "compressed_token_budget": (0, operator_max_compressed_transcript_tokens),
             }
             for field, (minimum, maximum) in bounds.items():
                 if field not in payload:
                     continue
                 value = int(payload[field])
                 if value < minimum or value > maximum:
-                    raise ValueError(f"{field} must be between {minimum} and {maximum}")
+                    raise ValueError(f"{field} must be between {minimum} and {maximum} (operator ceiling: {maximum})")
                 current[field] = value
             save_context_controls(self.db, self.resident_id, current)
+            report = load_context_controls_verbose(self.config, self.db, self.resident_id)
+            
         return {
             "mode": mode,
-            "controls": current,
+            "controls": report["effective"],
+            "requested_values": report["requested"],
+            "operator_hard_limits": report["operator_limits"],
+            "effective_values": report["effective"],
             "turns_available": self.db.recent_turn_count(self.resident_id, self.room_id),
             "compression_kind": "extractive_source_linked",
             "effective_next_turn": mode != "inspect",
@@ -3634,8 +3649,16 @@ class HousePort:
             raise PermissionError("REACT is available only through an authenticated Discord doorway")
         if not context.get("delivery_target", {}).get("id"):
             raise PermissionError("REACT requires the current Discord destination")
-        if not str(payload.get("message_id") or context.get("trigger_message_id") or "").strip():
+        message_id = str(
+            payload.get("message_id") or context.get("trigger_message_id") or ""
+        ).strip()
+        if not message_id:
             raise ValueError("REACT requires message_id when no current message is available")
+        triggering_id = str(context.get("trigger_message_id") or "").strip()
+        ambient_ids = context.get("ambient_message_ids") or []
+        allowed_ids = {triggering_id} | {str(mid).strip() for mid in ambient_ids}
+        if message_id not in allowed_ids:
+            raise PermissionError("REACT is limited to messages exposed in the current authenticated turn")
 
     def _discord_react(
         self, payload: dict[str, Any], context: dict[str, Any]

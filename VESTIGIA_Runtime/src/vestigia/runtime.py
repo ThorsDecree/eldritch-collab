@@ -211,6 +211,7 @@ class CoreRuntime:
                 "interface": message.interface,
                 "participant_id": message.speaker_id,
                 "trigger_message_id": message.external_id,
+                "ambient_message_ids": message.metadata.get("ambient_message_ids"),
                 "delivery_target": (
                     {
                         "kind": "discord_channel",
@@ -607,6 +608,7 @@ class CoreRuntime:
                                 "delivery_target": metadata.get("delivery_target"),
                                 "participant_id": metadata.get("participant_id"),
                                 "trigger_message_id": metadata.get("trigger_message_id"),
+                                "ambient_message_ids": metadata.get("ambient_message_ids"),
                                 "source_envelope": (
                                     "HOUSE_TOOL"
                                     if kind == "house_tool"

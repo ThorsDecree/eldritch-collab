@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .config import ResolvedConfig
-from .context_controls import load_context_controls
+from .context_controls import load_context_controls, load_context_controls_verbose
 from .db import ContinuityDB
 from .models import ContextAssembly, ContextLayer, NormalizedMessage, RetrievedMemory, RuntimeState
 from .retrieval import Retriever
@@ -32,8 +32,10 @@ class ContextAssembler:
         turn_id: str | None = None,
     ) -> ContextAssembly:
         actual_turn_id = turn_id or new_id("turn")
-        controls = load_context_controls(self.config, self.db, self.resident_id)
-        include_inherited = (
+        report = load_context_controls_verbose(self.config, self.db, self.resident_id)
+        controls = report["effective"]
+        include_full_identity_files = state == RuntimeState.ORIENTATION.value
+        include_inherited_memories = (
             state == RuntimeState.ORIENTATION.value
             and bool(self.config.get("retrieval.include_inherited_during_orientation", True))
         )
@@ -42,7 +44,7 @@ class ContextAssembler:
             resident_id=self.resident_id,
             room_id=self.room_id,
             limit=int(self.config.get("retrieval.limit", 18)),
-            include_inherited=include_inherited,
+            include_inherited=include_inherited_memories,
         )
         layers = [
             self._file_layer(
@@ -52,21 +54,22 @@ class ContextAssembler:
             ),
             self._identity_layer(
                 int(self.config.get("context.identity_core_tokens")),
-                include_inherited=include_inherited,
+                include_full_identity_files=include_full_identity_files,
+                include_inherited_memories=include_inherited_memories,
             ),
             self._typed_memory_layer(
                 "relationship_overlay",
                 int(self.config.get("context.relationship_tokens")),
                 ["relationship"],
                 [self.home / "identity" / "relationships"],
-                include_inherited,
+                include_inherited_memories,
             ),
             self._typed_memory_layer(
                 "commitments_and_tensions",
                 int(self.config.get("context.tension_tokens")),
                 ["commitment", "boundary", "tension"],
                 [self.home / "identity" / "commitments.md"],
-                include_inherited,
+                include_inherited_memories,
             ),
             self._retrieval_layer(
                 int(self.config.get("context.retrieval_tokens")),
@@ -149,6 +152,11 @@ class ContextAssembler:
                     if key.startswith("context.")
                 },
                 "resident_context_controls": controls,
+                "resident_context_controls_verbose": {
+                    "requested": report["requested"],
+                    "operator_limits": report["operator_limits"],
+                    "effective": report["effective"],
+                },
             },
             "current_message_hash": sha256_text(current),
             "retrieved_details": [
@@ -191,9 +199,15 @@ class ContextAssembler:
             messages=messages,
         )
 
-    def _identity_layer(self, budget: int, *, include_inherited: bool) -> ContextLayer:
+    def _identity_layer(
+        self,
+        budget: int,
+        *,
+        include_full_identity_files: bool,
+        include_inherited_memories: bool,
+    ) -> ContextLayer:
         paths = [self.home / "identity" / "identity_context.md"]
-        if include_inherited:
+        if include_full_identity_files:
             paths.extend(
                 [
                     self.home / "identity" / "breathprint.md",
@@ -202,7 +216,7 @@ class ContextAssembler:
                 ]
             )
         items = self._read_files(paths)
-        statuses = ["accepted"] + (["inherited_unreviewed"] if include_inherited else [])
+        statuses = ["accepted"] + (["inherited_unreviewed"] if include_inherited_memories else [])
         records = self.db.list_memories(
             resident_id=self.resident_id,
             room_id=self.room_id,
