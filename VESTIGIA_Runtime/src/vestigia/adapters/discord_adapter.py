@@ -387,13 +387,29 @@ def run_discord(
         lines: list[str] = []
         try:
             async for prior in message.channel.history(limit=count, before=message):
+                if prior.author.bot and (client.user is None or prior.author.id != client.user.id):
+                    continue
+                if getattr(prior, "webhook_id", None) is not None:
+                    continue
+                
+                author_id = str(prior.author.id)
+                if client.user is not None and author_id == str(client.user.id):
+                    trust_class = "resident"
+                elif author_id in allowed_users:
+                    trust_class = "allowlisted"
+                else:
+                    continue
+                
                 author = getattr(prior.author, "display_name", str(prior.author))
                 content = str(prior.content or "").strip()
                 if content:
-                    lines.append(f"{author}: {content}")
+                    lines.append(f"[{trust_class}] {author}: {content}")
         except Exception:
             return ""
-        text = "\n".join(reversed(lines))
+        if not lines:
+            return ""
+        header = "[Ambient channel history (allowlisted participants only)]\n"
+        text = header + "\n".join(reversed(lines))
         return text[-maximum:]
 
     async def text_attachments(message: Any) -> str:
@@ -704,6 +720,7 @@ def run_discord(
                 "guild_id": str(message.guild.id) if message.guild else None,
                 "jump_url": getattr(message, "jump_url", None),
             },
+            participant_text=content,
         )
         activity_message = None
         activity_enabled = bool(config.get("discord.activity_window", False))

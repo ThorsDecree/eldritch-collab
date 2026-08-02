@@ -70,6 +70,7 @@ class NormalizedMessage:
     ambient_context: str = ""
     attachments: tuple[Path, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    participant_text: str | None = None
 
 
 @dataclass(frozen=True)

@@ -190,7 +190,7 @@ virtual pockets. A card is a retrieval aid, not proof of memory, identity, or ad
 
 `image.share` schema v2 gives the resident a quick-draw route through the already authenticated
 Discord doorway. Shareable pictures may be sent in one action. Private pictures require
-resident-side `confirm:true` for a one-time handoff; no participant permission turn is required,
+resident-side `confirm:true` and the returned `challenge_id` in a subsequent turn once a participant responds,
 and privacy does not silently change. The v1 hash-bound route remains available as optional
 high assurance. Platform acceptance remains a separate delivery event.
 

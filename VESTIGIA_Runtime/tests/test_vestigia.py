@@ -1136,10 +1136,18 @@ class ImageTests(HomeCase):
             "required only for private send or legacy claim",
             focused["capability"]["input_schema"]["confirm"],
         )
+        examples = focused["capability"]["copyable_examples"]
+        self.assertTrue(
+            any(
+                '"confirm":true' in example
+                and '"challenge_id":"ch_..."' in example
+                for example in examples
+            )
+        )
         self.assertEqual(1, len(focused["capabilities"]))
         plaque = runtime._live_capability_plaque()
         self.assertIn("PICTURE DRAWER AND QUICK-DRAW", plaque)
-        self.assertIn("No participant permission turn", plaque)
+        self.assertIn("A private picture first returns a resident confirmation challenge", plaque)
         self.assertLessEqual(
             runtime.counter.count(plaque),
             int(self.config.get("context.capability_panel_tokens")),
@@ -1381,11 +1389,22 @@ class ImageTests(HomeCase):
             invocation="conversation",
         )
         self.assertEqual("resident_confirmation_required", preview["status"])
-        self.assertFalse(preview["outward_action"])
         self.assertEqual("No outward action occurred.", preview["invariant"])
+        challenge_id = preview["challenge_id"]
+
+        # Test that same-turn confirmation is rejected
+        with self.assertRaises(PermissionError):
+            service.share(
+                {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": challenge_id},
+                turn_id="turn-one",
+                actor="resident:test-resident",
+                interface="discord",
+                invocation="conversation",
+            )
+
         private_once = service.share(
-            {"mode": "send", "image_id": private["id"], "confirm": True},
-            turn_id="turn-one",
+            {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": challenge_id},
+            turn_id="turn-two",
             actor="resident:test-resident",
             interface="discord",
             invocation="conversation",
@@ -1408,6 +1427,128 @@ class ImageTests(HomeCase):
         )
         self.assertTrue(immediate["outward_action"])
         self.assertFalse(immediate["private_share_once"])
+
+    def test_image_share_challenges_security_and_replay(self) -> None:
+        service = ImageService(self.config, self.db, fake=True)
+        private = service.ingest_bytes(
+            FakeImageProvider._PNG,
+            filename="challenge-security.png",
+        )
+        
+        # 1. Request confirmation challenge
+        preview = service.share(
+            {"mode": "send", "image_id": private["id"]},
+            turn_id="turn-one",
+            actor="resident:test-resident",
+            interface="discord",
+            invocation="conversation",
+            participant_id="user-alice",
+            delivery_target={"kind": "discord_channel", "id": "channel-general"},
+        )
+        challenge_id = preview["challenge_id"]
+        self.assertTrue(challenge_id.startswith("ch_"))
+        
+        # 2. Replay/Same-turn rejection
+        with self.assertRaises(PermissionError):
+            service.share(
+                {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": challenge_id},
+                turn_id="turn-one",
+                actor="resident:test-resident",
+                interface="discord",
+                invocation="conversation",
+                participant_id="user-alice",
+                delivery_target={"kind": "discord_channel", "id": "channel-general"},
+            )
+            
+        # 3. Confirmation by another user is rejected
+        with self.assertRaises(PermissionError):
+            service.share(
+                {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": challenge_id},
+                turn_id="turn-two",
+                actor="resident:test-resident",
+                interface="discord",
+                invocation="conversation",
+                participant_id="user-bob",
+                delivery_target={"kind": "discord_channel", "id": "channel-general"},
+            )
+            
+        # 4. Confirmation in another channel is rejected
+        with self.assertRaises(PermissionError):
+            service.share(
+                {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": challenge_id},
+                turn_id="turn-two",
+                actor="resident:test-resident",
+                interface="discord",
+                invocation="conversation",
+                participant_id="user-alice",
+                delivery_target={"kind": "discord_channel", "id": "channel-random"},
+            )
+            
+        # 5. Non-Discord interface is rejected
+        with self.assertRaises(PermissionError):
+            service.share(
+                {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": challenge_id},
+                turn_id="turn-two",
+                actor="resident:test-resident",
+                interface="cli",
+                invocation="conversation",
+                participant_id="user-alice",
+                delivery_target={"kind": "discord_channel", "id": "channel-general"},
+            )
+            
+        # 6. Successful confirmation
+        ok_share = service.share(
+            {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": challenge_id},
+            turn_id="turn-two",
+            actor="resident:test-resident",
+            interface="discord",
+            invocation="conversation",
+            participant_id="user-alice",
+            delivery_target={"kind": "discord_channel", "id": "channel-general"},
+        )
+        self.assertTrue(ok_share["outward_action"])
+        
+        # 7. Replay attempt using same challenge is rejected (already consumed)
+        with self.assertRaises(PermissionError):
+            service.share(
+                {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": challenge_id},
+                turn_id="turn-three",
+                actor="resident:test-resident",
+                interface="discord",
+                invocation="conversation",
+                participant_id="user-alice",
+                delivery_target={"kind": "discord_channel", "id": "channel-general"},
+            )
+            
+        # 8. Expired challenge rejection
+        preview_expired = service.share(
+            {"mode": "send", "image_id": private["id"]},
+            turn_id="turn-four",
+            actor="resident:test-resident",
+            interface="discord",
+            invocation="conversation",
+            participant_id="user-alice",
+            delivery_target={"kind": "discord_channel", "id": "channel-general"},
+        )
+        ch_expired_id = preview_expired["challenge_id"]
+        
+        # Manually force expiration in DB
+        with service.db.connect() as connection:
+            connection.execute(
+                "UPDATE image_share_challenges SET expires_at = '2020-01-01T00:00:00Z' WHERE id = ?",
+                (ch_expired_id,),
+            )
+            
+        with self.assertRaises(PermissionError):
+            service.share(
+                {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": ch_expired_id},
+                turn_id="turn-five",
+                actor="resident:test-resident",
+                interface="discord",
+                invocation="conversation",
+                participant_id="user-alice",
+                delivery_target={"kind": "discord_channel", "id": "channel-general"},
+            )
 
     def test_runtime_quick_draw_finishes_in_one_resident_turn(self) -> None:
         runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
@@ -2718,6 +2859,189 @@ class V04MigrationTests(HomeCase):
             contract.read_text(encoding="utf-8"),
         )
         self.assertTrue((self.home / "workspace").is_dir())
+
+
+class CapabilityRegistryAndConcurrencyTests(HomeCase):
+    def test_capability_policy_registration_and_dispatch(self) -> None:
+        from vestigia.capabilities import CapabilityRegistry, CapabilitySpec
+        registry = CapabilityRegistry(self.config)
+        
+        # 1. Reject registering outward_facing with confirm "none"
+        spec_bad = CapabilitySpec(
+            name="test.outward",
+            description="Outward test",
+            outward_facing=True,
+            confirmation="none",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "const": "test.outward"},
+                    "after": {"type": "string", "enum": ["continue", "finish"]},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            }
+        )
+        with self.assertRaises(ValueError):
+            registry.register(spec_bad, lambda p, c: {})
+            
+        # 2. Reject registering unrecognized confirmation policy
+        spec_bad_policy = CapabilitySpec(
+            name="test.policy",
+            description="Bad policy test",
+            confirmation="invalid_policy_name",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "const": "test.policy"},
+                    "after": {"type": "string", "enum": ["continue", "finish"]},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            }
+        )
+        with self.assertRaises(ValueError):
+            registry.register(spec_bad_policy, lambda p, c: {})
+            
+        called = []
+        def test_authorizer(spec, payload, context):
+            called.append(True)
+
+        # 3. Reject registering valid outward capability without authorizer
+        spec_ok = CapabilitySpec(
+            name="test.ok",
+            description="Ok outward",
+            outward_facing=True,
+            confirmation="configured_budget",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "const": "test.ok"},
+                    "after": {"type": "string", "enum": ["continue", "finish"]},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            }
+        )
+        with self.assertRaises(ValueError):
+            registry.register(spec_ok, lambda p, c: {"status": "ok"})
+
+        # Register correctly with authorizer
+        registry.register(spec_ok, lambda p, c: {"status": "ok"}, authorizer=test_authorizer)
+        
+        # 4. Dispatch with wrong interface context is rejected
+        with self.assertRaises(PermissionError):
+            registry.dispatch(
+                {"action": "test.ok"},
+                turn_id="turn-1",
+                context={"interface": "cli"}
+            )
+            
+        # 5. Dispatch with valid interface context is successful and invokes authorizer
+        res, spec, after = registry.dispatch(
+            {"action": "test.ok"},
+            turn_id="turn-1",
+            context={"interface": "discord"}
+        )
+        self.assertEqual("ok", res["status"])
+        self.assertTrue(called)
+        
+    def test_per_home_concurrency_locks_are_shared_per_path(self) -> None:
+        from vestigia.runtime import home_lock
+        from pathlib import Path
+        
+        p1 = Path("/tmp/home1")
+        p2 = Path("/tmp/home1/../home1")
+        p3 = Path("/tmp/home2")
+        
+        lock1 = home_lock(p1)
+        lock2 = home_lock(p2)
+        lock3 = home_lock(p3)
+        
+        # lock1 and lock2 must resolve to the exact same object
+        self.assertIs(lock1, lock2)
+        # lock3 must be a different lock object
+        self.assertIsNot(lock1, lock3)
+        
+        # Verify lock is re-entrant (RLock)
+        self.assertTrue(lock1.acquire(blocking=False))
+        self.assertTrue(lock1.acquire(blocking=False))
+        lock1.release()
+        lock1.release()
+
+    def test_fts_scoping_and_limit_regression(self) -> None:
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        db = runtime.db
+        
+        # 1. Insert target memory for test-resident / hearth
+        target_id = db.add_memory(
+            resident_id="test-resident",
+            room_id="hearth",
+            content="The secret cipher of Cabalism is forty-two.",
+            memory_type="event",
+            tier="warm",
+            authorship="verified",
+            authority_state="accepted",
+            status="accepted",
+            actor="resident:test-resident",
+            reason="test",
+        )
+        
+        # 2. Insert target memory with same word for different room/resident
+        foreign_id = db.add_memory(
+            resident_id="foreign-resident",
+            room_id="attic",
+            content="Do not leak the Cabalism secret in the attic.",
+            memory_type="event",
+            tier="warm",
+            authorship="verified",
+            authority_state="accepted",
+            status="accepted",
+            actor="resident:foreign-resident",
+            reason="test",
+        )
+        
+        # 3. Refresh index to index FTS
+        runtime.house.refresh_index()
+        
+        # 4. Confirm FTS search directly
+        results = db.search_fts("cipher Cabalism", resident_id="test-resident", room_id="hearth")
+        self.assertIn(str(target_id), results)
+        self.assertNotIn(str(foreign_id), results)
+        
+        # 5. Insert 220 newer unrelated memories to push target out of recent window
+        for i in range(220):
+            db.add_memory(
+                resident_id="test-resident",
+                room_id="hearth",
+                content=f"Unrelated memory log event index-{i}.",
+                memory_type="event",
+                tier="warm",
+                authorship="verified",
+                authority_state="accepted",
+                status="accepted",
+                actor="resident:test-resident",
+                reason="test",
+            )
+            
+        runtime.house.refresh_index()
+        
+        # 6. Retrieve memories via retriever and confirm target is retrieved via FTS
+        from vestigia.retrieval import Retriever
+        candidates = Retriever(db).retrieve(
+            "cipher Cabalism",
+            resident_id="test-resident",
+            room_id="hearth",
+            include_cold=False,
+        )
+        # Verify target is in candidates
+        target_candidate = next((c for c in candidates if c.record.id == str(target_id)), None)
+        self.assertIsNotNone(target_candidate)
+        self.assertTrue(any("fts=" in r for r in target_candidate.reasons))
+        
+        # Verify foreign target is NOT in candidates
+        foreign_candidate = next((c for c in candidates if c.record.id == str(foreign_id)), None)
+        self.assertIsNone(foreign_candidate)
 
 
 if __name__ == "__main__":
