@@ -150,13 +150,13 @@ authenticated Discord doorway immediately on the resident's action:
 ```
 
 If the picture is private, the first call returns a resident confirmation challenge ID and explicitly
-states that nothing was sent. The resident may then share it once in a subsequent turn (after a participant responds) by supplying both `confirm:true` and the returned `challenge_id`:
+states that nothing was sent. The resident may then share it once in a subsequent resident turn by supplying both `confirm:true` and the returned `challenge_id`:
 
 ```text
 [[TOOL_ACTION {"action":"image.share","schema_version":"v2","mode":"send","image_id":"img_...","confirm":true,"challenge_id":"ch_...","after":"finish"}]]
 ```
 
-A participant-originated later turn is required. The challenge must be submitted from the same authenticated Discord participant and destination. The resident is the actor choosing whether to speak through the doorway. JSON still cannot select an arbitrary person or channel.
+A later resident turn is required. The challenge remains bound to the resident, exact image and content hash, original participant context, interface, and destination, but the participant who opens the later conversational turn is not the authorizer. The resident is the actor choosing whether to speak through the same doorway. JSON still cannot select an arbitrary person or channel.
 
 The v1 `prepare → preview → later hash-bound claim` route remains available as optional high
 assurance:

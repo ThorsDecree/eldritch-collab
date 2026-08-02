@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.0 — Unreleased
+
+- Raised the default assembled prompt budget from 15,000 to 20,000 tokens while retaining
+  per-home and environment overrides
+- Added resident-owned `context.control` drawers for the prompt ceiling, newest verbatim
+  turns, older compression horizon, and compressed-token budget
+- Replaced the always-loaded legacy session projection with deterministic, source-linked
+  extractive transcript capsules carrying turn IDs, timestamps, speakers, and content hashes
+- Reduced the always-loaded identity stock to a protected kernel; larger identity anchors
+  remain retrievable instead of being repeated every turn
+- Added `source.visibility` without weakening ingress authorization, with hidden,
+  allowlisted-only, mentions-only, and all-channel ambient modes
+- Labeled non-allowlisted ambient messages as untrusted data-only context and exposed stable
+  Discord message IDs in visible history
+- Added resident-authored `[[REACT {...}]]` emoji reactions, same-channel message resolution,
+  idempotent platform behavior, and distinct delivery receipts
+- Returned private-picture confirmation to the resident while preserving single use, expiry,
+  image/content hash, resident, destination, interface, later-turn, and replay protections
+- Added root collaboration guidance, pull-request templates, and cross-platform CI
+- Expanded deterministic regression coverage from 109 to 112 tests
+
 ## 0.6.1 — 2026-07-30
 
 - Replaced broad detailed capability dumps with a compact grouped navigation index and

@@ -216,6 +216,7 @@ CREATE TABLE IF NOT EXISTS image_share_challenges (
     destination_kind TEXT NOT NULL,
     destination_id TEXT NOT NULL,
     requested_turn_id TEXT NOT NULL,
+    requested_interface TEXT NOT NULL,
     status TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     consumed_turn_id TEXT,
@@ -265,6 +266,12 @@ class ContinuityDB:
             }
             if "authority_state" not in memory_event_columns:
                 connection.execute("ALTER TABLE memory_events ADD COLUMN authority_state TEXT")
+            challenge_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(image_share_challenges)").fetchall()
+            }
+            if "requested_interface" not in challenge_columns:
+                connection.execute("ALTER TABLE image_share_challenges ADD COLUMN requested_interface TEXT NOT NULL DEFAULT 'discord'")
             connection.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES(?, ?)",
                 ("schema_version", "4"),
@@ -624,6 +631,14 @@ class ContinuityDB:
             item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
             result.append(item)
         return result
+
+    def recent_turn_count(self, resident_id: str, room_id: str) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM turns WHERE resident_id=? AND room_id=?",
+                (resident_id, room_id),
+            ).fetchone()
+        return int(row["count"] if row else 0)
 
     def get_turn(self, turn_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:

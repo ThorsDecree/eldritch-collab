@@ -62,7 +62,14 @@ class CapabilitySpec:
         value["effects"] = list(self.effects)
         value["related_actions"] = list(self.related_actions)
         value["copyable_examples"] = [
-            wrap_example(self.invocation_envelope, item)
+            wrap_example(
+                self.invocation_envelope,
+                (
+                    {key: val for key, val in item.items() if key != "action"}
+                    if self.invocation_envelope != "TOOL_ACTION"
+                    else item
+                ),
+            )
             for item in self.example_envelopes
         ]
         value.pop("config_key", None)
@@ -78,6 +85,7 @@ class CapabilityPolicyEngine:
             "resident_only_if_private_or_legacy_two_breath",
             "later_resident_hash_bound_claim",
             "hash_bound_for_claim",
+            "resident_authenticated_doorway",
         }
 
     def authorize(

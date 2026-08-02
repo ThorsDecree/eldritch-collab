@@ -198,7 +198,7 @@ class CoreRuntime:
                     ),
                 },
             )
-        reply, house_receipts, outbound_attachments = self._complete_with_house_tools(
+        reply, house_receipts, outbound_attachments, outbound_reactions = self._complete_with_house_tools(
             turn_id=turn_id,
             model_route=model_route,
             messages=tuple(messages),
@@ -210,6 +210,8 @@ class CoreRuntime:
                 "invocation": "conversation",
                 "interface": message.interface,
                 "participant_id": message.speaker_id,
+                "trigger_message_id": message.external_id,
+                "ambient_message_ids": message.metadata.get("ambient_message_ids"),
                 "delivery_target": (
                     {
                         "kind": "discord_channel",
@@ -319,6 +321,7 @@ class CoreRuntime:
             provider=reply.provider,
             model=reply.model,
             outbound_attachments=tuple(outbound_attachments),
+            outbound_reactions=tuple(outbound_reactions),
         )
 
     @staticmethod
@@ -401,6 +404,9 @@ class CoreRuntime:
             "`receipt.inspect`, `receipt.pin`, `activity.status`, `activity.note`, "
             "`attention.tray`, `search.session`, `retrieval.inspect`, "
             "`curation.list`, `curation.inspect`, and `curation.history`.\n\n"
+            "Resident-owned attention controls are `context.control` and "
+            "`source.visibility`. Emoji reactions use the compact "
+            '`[[REACT {"message_id":"...","emoji":"💋"}]]` envelope.\n\n'
             "`house://workspace/` is the immediate low-authority writable shelf. "
             "Identity changes remain proposals until a later hash-bound claim.\n\n"
             "Call an action privately with exactly one envelope on its own line:\n"
@@ -429,7 +435,7 @@ class CoreRuntime:
                 "doorway immediately with `image.share`, `mode:\"send\"`, and its image_id. "
                 "A private picture first returns a resident confirmation challenge; the "
                 "same send must be repeated in a subsequent turn with `confirm:true` and the "
-                "returned `challenge_id` once a participant responds. The challenge is "
+                "returned `challenge_id` in a later resident turn. The challenge is "
                 "single-use and expires. Discord acceptance remains a "
                 "separate delivery receipt. The v1 prepare/preview/hash-claim route remains "
                 "available as optional high assurance. Any failure means: No outward action "
@@ -453,11 +459,12 @@ class CoreRuntime:
         model_route: str,
         messages: tuple[dict[str, str], ...],
         metadata: dict[str, Any],
-    ) -> tuple[ProviderReply, list[str], list[Path]]:
+    ) -> tuple[ProviderReply, list[str], list[Path], list[dict[str, Any]]]:
         """Run a bounded private local-tool loop before final resident speech."""
         working = list(messages)
         receipts: list[str] = []
         outbound_attachments: list[Path] = []
+        outbound_reactions: list[dict[str, Any]] = []
         budget = self.house.private_turn_budget()
         maximum_private_turns = budget["maximum_private_turns"]
         maximum_rounds = maximum_private_turns - 1
@@ -509,7 +516,7 @@ class CoreRuntime:
                         operation="Private work complete; outward response ready",
                         complete=True,
                     )
-                    return reply, receipts, outbound_attachments
+                    return reply, receipts, outbound_attachments, outbound_reactions
                 if round_index >= maximum_rounds:
                     receipts.append(
                         "tool_action:stopped:maximum private tool rounds reached"
@@ -526,7 +533,7 @@ class CoreRuntime:
                         model=reply.model,
                         response_id=reply.response_id,
                         usage=reply.usage,
-                    ), receipts, outbound_attachments
+                    ), receipts, outbound_attachments, outbound_reactions
                 if remaining_result_tokens <= 0:
                     receipts.append(
                         "tool_action:stopped:maximum private result-token budget reached"
@@ -543,7 +550,7 @@ class CoreRuntime:
                         model=reply.model,
                         response_id=reply.response_id,
                         usage=reply.usage,
-                    ), receipts, outbound_attachments
+                    ), receipts, outbound_attachments, outbound_reactions
                 if len(calls) > 4:
                     calls = calls[:4]
                     call_kinds = call_kinds[:4]
@@ -600,15 +607,20 @@ class CoreRuntime:
                                 "invocation": metadata.get("invocation"),
                                 "delivery_target": metadata.get("delivery_target"),
                                 "participant_id": metadata.get("participant_id"),
+                                "trigger_message_id": metadata.get("trigger_message_id"),
+                                "ambient_message_ids": metadata.get("ambient_message_ids"),
                                 "source_envelope": (
                                     "HOUSE_TOOL"
                                     if kind == "house_tool"
+                                    else "REACT"
+                                    if kind == "react"
                                     else "TOOL_ACTION"
                                 ),
                                 "activity_id": activity_id,
                             },
                         )
                         hidden_path = result.pop("_outbound_path", None)
+                        hidden_reaction = result.pop("_outbound_reaction", None)
                         if hidden_path:
                             path = Path(str(hidden_path)).resolve()
                             try:
@@ -622,6 +634,8 @@ class CoreRuntime:
                                     "outbound attachment is unavailable"
                                 )
                             outbound_attachments.append(path)
+                        if hidden_reaction:
+                            outbound_reactions.append(dict(hidden_reaction))
                         results.append(result)
                         should_continue = (
                             should_continue or result.get("after") == "continue"
@@ -671,7 +685,7 @@ class CoreRuntime:
                         model=reply.model,
                         response_id=reply.response_id,
                         usage=reply.usage,
-                    ), receipts, outbound_attachments
+                    ), receipts, outbound_attachments, outbound_reactions
                 remaining_calls = max(0, maximum_calls - calls_used)
                 next_round = round_index + 2
                 delivery_manifest = {
@@ -856,7 +870,7 @@ class CoreRuntime:
         batch_id = str(packet["batch_id"])
         prompt = self.curator.internal_prompt(packet)
         try:
-            reply, house_receipts, outbound_attachments = self._complete_with_house_tools(
+            reply, house_receipts, outbound_attachments, outbound_reactions = self._complete_with_house_tools(
                 turn_id=batch_id,
                 model_route=str(self.config.get("curation.model_route", "default")),
                 messages=(
@@ -914,6 +928,7 @@ class CoreRuntime:
                 "curation_receipts": curation_receipts,
                 "agency_receipts": agency_receipts,
                 "outbound_attachments_suppressed": len(outbound_attachments),
+                "outbound_reactions_suppressed": len(outbound_reactions),
                 "ordinary_prose_posted": False,
                 "surfaced_reflection_count": len(surfaced),
             },

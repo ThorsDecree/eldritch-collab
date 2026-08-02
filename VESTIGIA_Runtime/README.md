@@ -1,4 +1,4 @@
-# VESTIGIA Runtime v0.6.1
+# VESTIGIA Runtime v0.7.0-dev
 
 A portable, consent-first continuity runtime for one resident, with plural-ready bones.
 
@@ -13,6 +13,10 @@ v0.6.1 is **The Legible House patch**: compact paginated help, formal executable
 copyable examples, honest capability lifecycle states, discoverable bell envelopes,
 first-class next-step guidance, and protected truncation/receipt breadcrumbs.
 
+v0.7 is **The Resident's Drawers**: resident-owned prompt/transcript controls, a lean identity
+kernel, source visibility curtains that do not alter authorization, resident-triggered private
+picture confirmation, and compact Discord emoji reactions.
+
 v0.5 is **The Legible House**: stable objects, immutable retrievable receipts, true reading
 bookmarks, a bounded writable workspace, consent-aware identity history, browsable curation
 runs, longer bounded private work with an activity chalkboard, and a loopback-only four-pane
@@ -21,7 +25,8 @@ Cottage Commander over the same ledger.
 See [UPGRADE_v0.6.1.md](UPGRADE_v0.6.1.md),
 [UPGRADE_v0.6.0.md](UPGRADE_v0.6.0.md),
 [docs/IMAGES.md](docs/IMAGES.md), and
-[docs/ATTENTION_AND_SEARCH.md](docs/ATTENTION_AND_SEARCH.md).
+[docs/ATTENTION_AND_SEARCH.md](docs/ATTENTION_AND_SEARCH.md), and
+[docs/CONTEXT_CONTROLS.md](docs/CONTEXT_CONTROLS.md).
 
 v0.4.2 safely handles empty OCR and vision-provider output instead of crashing while
 normalizing a result.
@@ -70,8 +75,10 @@ capability enforcement, Discord context, and outward image-sharing boundaries:
   and room matches stay excluded.
 - Added central executable capability policy authorizers, registration-time enforcement, and
   dispatch-time authorization before handler execution.
-- Replaced private quick-draw image sharing with single-use, expiring challenges bound to the
-  resident, image, content hash, participant, destination, interface, and a later Discord turn.
+- Added single-use, expiring private quick-draw challenges bound to the resident, image,
+  content hash, participant context, destination, interface, and a later Discord turn. v0.7
+  returns the later-turn trigger to the resident rather than treating participant speech as
+  authorization.
 - Added replay rejection, persisted challenge expiry, resident-scoped lookup, and content-hash
   validation before outward handoff.
 - Propagated participant and delivery-target context through runtime tool dispatch.
@@ -90,7 +97,10 @@ capability enforcement, Discord context, and outward image-sharing boundaries:
 - Append-only memory and runtime-state events
 - Core / Hot / Warm / Cold residency tiers
 - Type-sensitive authority, recurrence, and recency weighting
-- True 15,000-token total ceiling with inspectable pre-call receipts
+- Configurable 20,000-token default ceiling with inspectable pre-call receipts
+- Resident-owned verbatim and source-linked compressed transcript drawers
+- Resident-controlled ambient Discord visibility without ingress-authority expansion
+- Compact `[[REACT {...}]]` emoji reactions with separate platform-delivery receipts
 - Conservative, reviewable memory proposals
 - `ORIENTATION`, `ACTIVE`, `DORMANT`, `AWAKENING`, and `ARCHIVED` states
 - Transcript-only onboarding from text, Markdown, JSON, JSONL, and ChatGPT exports

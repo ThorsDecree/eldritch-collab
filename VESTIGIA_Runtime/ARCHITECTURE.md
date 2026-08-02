@@ -83,7 +83,8 @@ Default layer maxima:
 | Verbatim transcript tail | 3,800 |
 | Current message | 2,000 maximum |
 
-The familiar layer maxima are quotas, while `context.total_tokens=15000` is a real ceiling.
+The familiar layer maxima are quotas, while the resident-controlled prompt budget (20,000
+tokens by default) is a real ceiling.
 The current message counts toward that ceiling. When necessary, the assembler trims in this
 order:
 
