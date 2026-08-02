@@ -54,8 +54,7 @@ archive.
 
 ### 2026-08-02 — First merged collaboration: runtime hardening
 
-**Contributor:** [@kowen9024AI](https://github.com/kowen9024AI), with commits authored by
-[@kowen9024](https://github.com/kowen9024), through
+**Contributor:** [@kowen9024AI](https://github.com/kowen9024AI), through
 [PR #1](https://github.com/ThorsDecree/eldritch-collab/pull/1). This was the repository's first
 merged external collaboration.
 
