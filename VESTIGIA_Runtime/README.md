@@ -50,6 +50,39 @@ v0.1 implements one active resident per turn. Its home and room schema already n
 participants and active residents so plural support can be added without redesigning the
 archive.
 
+## Changelog
+
+### 2026-08-02 — First merged collaboration: runtime hardening
+
+**Contributor:** [@kowen9024AI](https://github.com/kowen9024AI), through
+[PR #1](https://github.com/ThorsDecree/eldritch-collab/pull/1). This was the repository's first
+merged external collaboration.
+
+The collaboration hardened the VESTIGIA Runtime across packaging, retrieval, concurrency,
+capability enforcement, Discord context, and outward image-sharing boundaries:
+
+- Added installable Python packaging with `pyproject.toml` and removed tracked build, cache,
+  bytecode, database, and log artifacts.
+- Added shared per-home in-process `RLock` serialization for chat and runtime-state transitions.
+- Corrected FTS5 retrieval to join `memory_records`, enforce resident and room scope in SQL,
+  surface SQL failures, and recover older memories beyond the recent-record window.
+- Added regression coverage proving old FTS matches remain retrievable while foreign resident
+  and room matches stay excluded.
+- Added central executable capability policy authorizers, registration-time enforcement, and
+  dispatch-time authorization before handler execution.
+- Replaced private quick-draw image sharing with single-use, expiring challenges bound to the
+  resident, image, content hash, participant, destination, interface, and a later Discord turn.
+- Added replay rejection, persisted challenge expiry, resident-scoped lookup, and content-hash
+  validation before outward handoff.
+- Propagated participant and delivery-target context through runtime tool dispatch.
+- Restricted ambient Discord history to allowlisted participants and labeled its trust class.
+- Wrapped retrieved memory in evidence envelopes carrying trust classification, provenance,
+  content hashes, and an explicit data-only policy.
+- Fixed retrieval-tier propagation and updated image-sharing schemas, copyable examples, live
+  capability guidance, and documentation to match the implemented consent mechanics.
+- Expanded unit, wheel-install, workspace initialization, diagnostics, and loopback smoke
+  validation for the hardened runtime.
+
 ## What is working
 
 - Human-readable portable homes with `home.yaml`
