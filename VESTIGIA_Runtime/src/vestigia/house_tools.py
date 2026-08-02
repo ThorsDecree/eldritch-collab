@@ -1325,8 +1325,14 @@ class HousePort:
                 "image.review": self._image_review,
                 "image.share": self._image_share,
             }
+            image_authorizers = {
+                "image.share": self._image_share_authorizer,
+                "image.generate": self._image_generate_authorizer,
+                "image.edit": self._image_edit_authorizer,
+            }
             for spec in image_specs:
                 contract = contract_for(spec.name)
+                authorizer = image_authorizers.get(spec.name)
                 self.registry.register(
                     CapabilitySpec(
                         **{
@@ -1335,6 +1341,7 @@ class HousePort:
                         }
                     ),
                     image_handlers[spec.name],
+                    authorizer=authorizer,
                 )
         bell_draft, bell_control = bell_contracts()
         self.registry.register_contract(
@@ -3299,16 +3306,39 @@ class HousePort:
             ),
         )
 
+    def _image_share_authorizer(
+        self, spec: CapabilitySpec, payload: dict[str, Any], context: dict[str, Any]
+    ) -> None:
+        self._require_images().authorize_share(
+            payload,
+            turn_id=str(context.get("turn_id") or "") or None,
+            interface=str(context.get("interface") or "") or None,
+            participant_id=str(context.get("participant_id") or "") or None,
+            delivery_target=context.get("delivery_target"),
+        )
+
+    def _image_generate_authorizer(
+        self, spec: CapabilitySpec, payload: dict[str, Any], context: dict[str, Any]
+    ) -> None:
+        if bool(self.config.get("images.require_confirmation", False)):
+            raise PermissionError(
+                "this home requires the authenticated operator image doorway"
+            )
+
+    def _image_edit_authorizer(
+        self, spec: CapabilitySpec, payload: dict[str, Any], context: dict[str, Any]
+    ) -> None:
+        if bool(self.config.get("images.require_confirmation", False)):
+            raise PermissionError(
+                "this home requires the authenticated operator image doorway"
+            )
+
     def _image_generate(
         self, payload: dict[str, Any], context: dict[str, Any]
     ) -> dict[str, Any]:
         prompt = str(payload.get("prompt", "")).strip()
         if not prompt:
             raise ValueError("image.generate requires a prompt")
-        if bool(self.config.get("images.require_confirmation", False)):
-            raise PermissionError(
-                "this home requires the authenticated operator image doorway"
-            )
         if bool(payload.get("background", True)):
             return self._require_images().queue_job(
                 "generate",
@@ -3342,10 +3372,6 @@ class HousePort:
             raise ValueError("image.edit requires a prompt")
         if not isinstance(image_ids, list) or not image_ids:
             raise ValueError("image.edit requires a non-empty image_ids list")
-        if bool(self.config.get("images.require_confirmation", False)):
-            raise PermissionError(
-                "this home requires the authenticated operator image doorway"
-            )
         if bool(payload.get("background", True)):
             return self._require_images().queue_job(
                 "edit",

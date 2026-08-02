@@ -98,14 +98,24 @@ class CapabilityPolicyEngine:
                 )
 
 
+PolicyAuthorizer = Callable[[CapabilitySpec, dict[str, Any], dict[str, Any]], None]
+
+
 class CapabilityRegistry:
     def __init__(self, config: ResolvedConfig) -> None:
         self.config = config
         self.policy = CapabilityPolicyEngine(config)
         self._specs: dict[str, CapabilitySpec] = {}
         self._handlers: dict[str, CapabilityHandler] = {}
+        self._authorizers: dict[str, PolicyAuthorizer] = {}
 
-    def register(self, spec: CapabilitySpec, handler: CapabilityHandler) -> None:
+    def register(
+        self,
+        spec: CapabilitySpec,
+        handler: CapabilityHandler,
+        *,
+        authorizer: PolicyAuthorizer | None = None,
+    ) -> None:
         name = spec.name.strip().lower()
         if not name or name != spec.name:
             raise ValueError("capability names must already be normalized")
@@ -121,8 +131,14 @@ class CapabilityRegistry:
             raise ValueError(
                 f"Outward facing capability {spec.name} must declare a non-none confirmation policy."
             )
+        if spec.confirmation != "none" and authorizer is None:
+            raise ValueError(
+                f"Capability {spec.name} requires an executable policy authorizer because it declares confirmation policy: {spec.confirmation}"
+            )
         self._specs[name] = spec
         self._handlers[name] = handler
+        if authorizer is not None:
+            self._authorizers[name] = authorizer
 
     def register_contract(self, spec: CapabilitySpec) -> None:
         """Register a discoverable non-TOOL_ACTION envelope such as BELL_DRAFT."""
@@ -177,6 +193,9 @@ class CapabilityRegistry:
         execution_context = dict(context or {})
         execution_context["turn_id"] = turn_id
         self.policy.authorize(spec, clean, execution_context)
+        authorizer = self._authorizers.get(spec.name)
+        if authorizer is not None:
+            authorizer(spec, clean, execution_context)
         result = self._handlers[spec.name](clean, execution_context)
         return result, spec, after
 
