@@ -26,6 +26,16 @@ from .providers.openai_provider import OpenAIProvider
 from .utils import TokenCounter, atomic_write_json, atomic_write_text, new_id, sha256_text, stable_json, utc_now_iso
 
 
+_HOME_LOCKS: dict[Path, threading.RLock] = {}
+_HOME_LOCKS_GUARD = threading.Lock()
+
+
+def home_lock(path: Path) -> threading.RLock:
+    key = path.resolve()
+    with _HOME_LOCKS_GUARD:
+        return _HOME_LOCKS.setdefault(key, threading.RLock())
+
+
 class CoreRuntime:
     def __init__(
         self,
@@ -36,7 +46,7 @@ class CoreRuntime:
     ) -> None:
         self.config = config
         self.home = config.home_path
-        self._lock = threading.Lock()
+        self._lock = home_lock(self.home)
         self.resident_id = str(config.get("resident.id"))
         self.room_id = str(config.get("room.id"))
         ensure_v061_contract(self.home)
@@ -77,6 +87,10 @@ class CoreRuntime:
         return self.db.current_state(self.resident_id) or RuntimeState.ORIENTATION.value
 
     def transition_state(self, target: str, *, actor: str, reason: str) -> str:
+        with self._lock:
+            return self._transition_state_unlocked(target, actor=actor, reason=reason)
+
+    def _transition_state_unlocked(self, target: str, *, actor: str, reason: str) -> str:
         normalized = RuntimeState(target.upper()).value
         current = self.state
         if current == RuntimeState.ARCHIVED.value and normalized != RuntimeState.ARCHIVED.value:
@@ -195,6 +209,7 @@ class CoreRuntime:
                 "context_receipt": str(assembly.receipt_path),
                 "invocation": "conversation",
                 "interface": message.interface,
+                "participant_id": message.speaker_id,
                 "delivery_target": (
                     {
                         "kind": "discord_channel",
@@ -412,9 +427,10 @@ class CoreRuntime:
                 "browse/search resident-owned image cards, aliases, summaries, notes, and "
                 "pockets. A shareable picture may cross the current authenticated Discord "
                 "doorway immediately with `image.share`, `mode:\"send\"`, and its image_id. "
-                "A private picture first returns a resident confirmation card; repeat the "
-                "same send with `confirm:true` to share it once without changing privacy. "
-                "No participant permission turn is required. Discord acceptance remains a "
+                "A private picture first returns a resident confirmation challenge; the "
+                "same send must be repeated in a subsequent turn with `confirm:true` and the "
+                "returned `challenge_id` once a participant responds. The challenge is "
+                "single-use and expires. Discord acceptance remains a "
                 "separate delivery receipt. The v1 prepare/preview/hash-claim route remains "
                 "available as optional high assurance. Any failure means: No outward action "
                 "occurred.\n"
@@ -583,6 +599,7 @@ class CoreRuntime:
                                 "interface": metadata.get("interface"),
                                 "invocation": metadata.get("invocation"),
                                 "delivery_target": metadata.get("delivery_target"),
+                                "participant_id": metadata.get("participant_id"),
                                 "source_envelope": (
                                     "HOUSE_TOOL"
                                     if kind == "house_tool"

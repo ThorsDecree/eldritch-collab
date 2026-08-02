@@ -1101,6 +1101,8 @@ class ImageService:
         actor: str,
         interface: str | None = None,
         invocation: str | None = None,
+        participant_id: str | None = None,
+        delivery_target: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Draft or claim an outward image attachment.
 
@@ -1145,22 +1147,33 @@ class ImageService:
             privacy = str(asset.get("privacy") or "private").strip().lower()
             if privacy == "private":
                 if payload.get("confirm") is not True:
-                    now = datetime.now(UTC).isoformat()
+                    challenge_id = new_id("ch")
+                    now = datetime.now(UTC)
+                    expires = now + timedelta(minutes=5)
+                    p_id = participant_id or "local-user"
+                    dest_kind = "unknown"
+                    dest_id = "unknown"
+                    if delivery_target:
+                        dest_kind = delivery_target.get("kind") or "unknown"
+                        dest_id = delivery_target.get("id") or "unknown"
                     with self.db.connect() as connection:
                         connection.execute(
                             """
-                            INSERT INTO image_events
-                            (id, image_id, event_type, status, actor, reason, payload_json, created_at)
-                            VALUES (?, ?, 'confirmation_requested', 'pending_confirmation',
-                                    ?, ?, ?, ?)
+                            INSERT INTO image_share_challenges (
+                                id, resident_id, image_id, content_hash, participant_id,
+                                destination_kind, destination_id, requested_turn_id, status, expires_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
                             """,
                             (
-                                new_id("iev"),
+                                challenge_id,
+                                self.resident_id,
                                 str(asset["id"]),
-                                actor,
-                                f"confirmation warning issued in turn {turn_id}",
-                                json.dumps({"turn_id": turn_id}),
-                                now,
+                                asset.get("content_hash") or "",
+                                p_id,
+                                dest_kind,
+                                dest_id,
+                                turn_id or "unknown",
+                                expires.isoformat(),
                             ),
                         )
                     return {
@@ -1171,45 +1184,79 @@ class ImageService:
                         "privacy": "private",
                         "recipient": "current_authenticated_doorway",
                         "content_hash": asset.get("content_hash"),
-                        "next_action": "repeat image.share mode:send with confirm:true",
+                        "challenge_id": challenge_id,
+                        "next_action": f"repeat image.share mode:send with confirm:true and challenge_id:{challenge_id}",
                         "outward_action": False,
                         "invariant": "No outward action occurred.",
                         "friendly_summary": (
-                            "This picture is private. Resident confirmation is required "
+                            f"This picture is private. Participant confirmation is required (challenge_id: {challenge_id}) "
                             "before a one-time handoff."
                         ),
                     }
                 else:
+                    ch_id = str(payload.get("challenge_id") or "").strip()
+                    if not ch_id:
+                        raise ValueError(
+                            "Confirming a private image share requires a valid challenge_id. "
+                            "Call image.share first without confirm:true to obtain a challenge."
+                        )
+                    p_id = participant_id or "local-user"
+                    dest_kind = "unknown"
+                    dest_id = "unknown"
+                    if delivery_target:
+                        dest_kind = delivery_target.get("kind") or "unknown"
+                        dest_id = delivery_target.get("id") or "unknown"
+                    now_str = datetime.now(UTC).isoformat()
                     with self.db.connect() as connection:
+                        connection.execute("BEGIN IMMEDIATE")
                         row = connection.execute(
                             """
-                            SELECT payload_json FROM image_events
-                            WHERE image_id = ? AND event_type = 'confirmation_requested'
-                            ORDER BY rowid DESC LIMIT 1
+                            SELECT * FROM image_share_challenges
+                            WHERE id = ? AND image_id = ?
                             """,
-                            (str(asset["id"]),),
+                            (ch_id, str(asset["id"])),
                         ).fetchone()
-                    
-                    if not row:
-                        raise PermissionError(
-                            "Cannot confirm sharing of a private image without a prior confirmation request warning. "
-                            "Call image.share first without confirm:true."
-                        )
-                    
-                    try:
-                        event_payload = json.loads(row["payload_json"] or "{}")
-                        request_turn_id = event_payload.get("turn_id")
-                    except Exception:
-                        request_turn_id = None
-                    
-                    if request_turn_id == turn_id:
-                        raise PermissionError(
-                            "A private image cannot be confirmed within the same turn/invocation it was requested. "
-                            "The confirmation must occur in a subsequent turn (e.g. after a participant message)."
-                        )
-                    if interface != "discord":
-                        raise PermissionError(
-                            "A private image confirmation must be initiated by a participant turn on Discord."
+                        if not row:
+                            raise PermissionError(
+                                f"No pending confirmation challenge found matching challenge_id={ch_id} and image_id={asset['id']}"
+                            )
+                        if row["status"] != "pending":
+                            raise PermissionError(
+                                f"Confirmation challenge {ch_id} has already been {row['status']}."
+                            )
+                        if row["expires_at"] < now_str:
+                            connection.execute(
+                                "UPDATE image_share_challenges SET status='expired' WHERE id=?",
+                                (ch_id,),
+                            )
+                            raise PermissionError(
+                                f"Confirmation challenge {ch_id} has expired."
+                            )
+                        if row["requested_turn_id"] == turn_id:
+                            raise PermissionError(
+                                "A private image cannot be confirmed within the same turn/invocation it was requested. "
+                                "The confirmation must occur in a subsequent turn (e.g. after a participant message)."
+                            )
+                        if row["participant_id"] != p_id:
+                            raise PermissionError(
+                                f"Confirmation challenger participant ID mismatch: expected {row['participant_id']}, got {p_id}."
+                            )
+                        if row["destination_id"] != dest_id or row["destination_kind"] != dest_kind:
+                            raise PermissionError(
+                                f"Confirmation destination mismatch: expected {row['destination_kind']}:{row['destination_id']}, "
+                                f"got {dest_kind}:{dest_id}."
+                            )
+                        if interface != "discord":
+                            raise PermissionError(
+                                "A private image confirmation must be initiated by a participant turn on Discord."
+                            )
+                        connection.execute(
+                            """
+                            UPDATE image_share_challenges
+                            SET status='consumed', consumed_turn_id=?, consumed_at=?
+                            WHERE id=?
+                            """,
+                            (turn_id, now_str, ch_id),
                         )
             path = self.resolve_path(str(asset["id"]))
             now = datetime.now(UTC).isoformat()

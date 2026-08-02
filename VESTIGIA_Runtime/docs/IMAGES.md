@@ -149,15 +149,14 @@ authenticated Discord doorway immediately on the resident's action:
 [[TOOL_ACTION {"action":"image.share","schema_version":"v2","mode":"send","image_id":"img_...","reason":"affectionate ambush","after":"finish"}]]
 ```
 
-If the picture is private, the first call returns a resident confirmation card and explicitly
-states that nothing was sent. The resident may then share it once without changing privacy:
+If the picture is private, the first call returns a resident confirmation challenge ID and explicitly
+states that nothing was sent. The resident may then share it once in a subsequent turn (after a participant responds) by supplying both `confirm:true` and the returned `challenge_id`:
 
 ```text
-[[TOOL_ACTION {"action":"image.share","schema_version":"v2","mode":"send","image_id":"img_...","confirm":true,"after":"finish"}]]
+[[TOOL_ACTION {"action":"image.share","schema_version":"v2","mode":"send","image_id":"img_...","confirm":true,"challenge_id":"ch_...","after":"finish"}]]
 ```
 
-No participant permission turn is required. The resident is the actor choosing whether to
-speak through the doorway. JSON still cannot select an arbitrary person or channel.
+A participant permission turn is required (the confirmation challenge must be submitted in a later turn and must originate from an authenticated Discord participant). The resident is the actor choosing whether to speak through the doorway. JSON still cannot select an arbitrary person or channel.
 
 The v1 `prepare → preview → later hash-bound claim` route remains available as optional high
 assurance:
