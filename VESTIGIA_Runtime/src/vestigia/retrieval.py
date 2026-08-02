@@ -73,15 +73,56 @@ class Retriever:
         tiers = ["core", "hot", "warm"]
         if include_cold:
             tiers.append("cold")
-        candidates = self.db.list_memories(
+
+        fts_query = self._fts_query(query)
+        ranks = self.db.search_fts(fts_query, limit=max(200, limit * 10)) if fts_query else {}
+
+        fts_records = []
+        if ranks:
+            fts_records = self.db.get_memories_by_ids(list(ranks.keys()))
+
+        recent_records = self.db.list_memories(
             resident_id=resident_id,
             room_id=room_id,
             statuses=statuses,
             tiers=tiers,
             limit=max(200, limit * 10),
         )
-        fts_query = self._fts_query(query)
-        ranks = self.db.search_fts(fts_query, limit=max(200, limit * 10)) if fts_query else {}
+
+        core_records = self.db.list_memories(
+            resident_id=resident_id,
+            room_id=room_id,
+            statuses=statuses,
+            tiers=["core"],
+            limit=500,
+        )
+
+        special_records = self.db.list_memories(
+            resident_id=resident_id,
+            room_id=room_id,
+            statuses=statuses,
+            memory_types=["relationship", "commitment", "boundary", "tension"],
+            limit=500,
+        )
+
+        candidates_map = {}
+        for r in recent_records:
+            candidates_map[r.id] = r
+        for r in core_records:
+            candidates_map[r.id] = r
+        for r in special_records:
+            candidates_map[r.id] = r
+        for r in fts_records:
+            if r.resident_id != resident_id or r.room_id != room_id:
+                continue
+            if r.status not in statuses:
+                continue
+            if r.tier not in tiers:
+                continue
+            candidates_map[r.id] = r
+
+        candidates = list(candidates_map.values())
+
         lowered = query.casefold()
         now = datetime.now(UTC)
         results: list[RetrievedMemory] = []
@@ -114,7 +155,7 @@ class Retriever:
 
     @staticmethod
     def _fts_query(query: str) -> str:
-        words = re.findall(r"[A-Za-z0-9_#-]{2,}", query)
+        words = re.findall(r"[\w#-]{2,}", query)
         unique = list(dict.fromkeys(word.casefold() for word in words))[:24]
         return " OR ".join(f'"{word}"' for word in unique)
 

@@ -83,6 +83,10 @@ class CapabilityRegistry:
             raise ValueError(f"duplicate capability: {name}")
         if spec.default_after not in {"continue", "finish"}:
             raise ValueError(f"invalid default continuation for {name}")
+        if spec.outward_facing and spec.confirmation == "none":
+            raise ValueError(
+                f"Outward facing capability {spec.name} must declare a non-none confirmation policy."
+            )
         self._specs[name] = spec
         self._handlers[name] = handler
 

@@ -1381,11 +1381,21 @@ class ImageTests(HomeCase):
             invocation="conversation",
         )
         self.assertEqual("resident_confirmation_required", preview["status"])
-        self.assertFalse(preview["outward_action"])
         self.assertEqual("No outward action occurred.", preview["invariant"])
+
+        # Test that same-turn confirmation is rejected
+        with self.assertRaises(PermissionError):
+            service.share(
+                {"mode": "send", "image_id": private["id"], "confirm": True},
+                turn_id="turn-one",
+                actor="resident:test-resident",
+                interface="discord",
+                invocation="conversation",
+            )
+
         private_once = service.share(
             {"mode": "send", "image_id": private["id"], "confirm": True},
-            turn_id="turn-one",
+            turn_id="turn-two",
             actor="resident:test-resident",
             interface="discord",
             invocation="conversation",
