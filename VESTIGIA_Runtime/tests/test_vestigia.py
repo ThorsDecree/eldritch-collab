@@ -34,7 +34,7 @@ from vestigia.adapters.discord_adapter import (
 )
 from vestigia.adapters.rate_limiter import SlidingWindowLimiter
 from vestigia.home import initialize_home
-from vestigia.house_tools import HousePort
+from vestigia.house_tools import HousePort, extract_action_envelopes
 from vestigia.images import (
     FakeImageProvider,
     FakeVisionProvider,
@@ -217,6 +217,41 @@ class ContextTests(HomeCase):
         )
         text = "\n".join(layer.text for layer in assembly.layers)
         self.assertNotIn("Sealed private cobalt sentence", text)
+
+    def test_resident_controls_verbatim_and_source_linked_compressed_drawers(self) -> None:
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        for index in range(14):
+            self.db.add_turn(
+                resident_id="test-resident",
+                room_id="hearth",
+                speaker_role="user" if index % 2 == 0 else "assistant",
+                speaker_id="local-user" if index % 2 == 0 else "test-resident",
+                content=f"drawer-turn-{index} " + ("older weather " * 20),
+                interface="discord",
+            )
+        changed = runtime.house.dispatch(
+            {
+                "action": "context.control",
+                "mode": "configure",
+                "prompt_budget_tokens": 20000,
+                "verbatim_turns": 4,
+                "compression_source_turns": 6,
+                "compressed_token_budget": 500,
+            }
+        )
+        self.assertEqual(4, changed["controls"]["verbatim_turns"])
+        assembly = ContextAssembler(self.config, self.db).assemble(
+            NormalizedMessage(content="new weather"), state="ACTIVE"
+        )
+        verbatim = next(layer for layer in assembly.layers if layer.name == "verbatim_tail")
+        compressed = next(
+            layer for layer in assembly.layers if layer.name == "compressed_transcript"
+        )
+        self.assertEqual(4, len(verbatim.item_ids))
+        self.assertIn("extractive transcript capsule", compressed.text)
+        self.assertIn("source_hash=", compressed.text)
+        receipt = json.loads(assembly.receipt_path.read_text(encoding="utf-8"))
+        self.assertEqual(4, receipt["budget"]["resident_context_controls"]["verbatim_turns"])
 
 
 class RuntimeStateTests(HomeCase):
@@ -1460,55 +1495,20 @@ class ImageTests(HomeCase):
                 delivery_target={"kind": "discord_channel", "id": "channel-general"},
             )
             
-        # 3. Confirmation by another user is rejected
-        with self.assertRaises(PermissionError):
-            service.share(
-                {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": challenge_id},
-                turn_id="turn-two",
-                actor="resident:test-resident",
-                interface="discord",
-                invocation="conversation",
-                participant_id="user-bob",
-                delivery_target={"kind": "discord_channel", "id": "channel-general"},
-            )
-            
-        # 4. Confirmation in another channel is rejected
-        with self.assertRaises(PermissionError):
-            service.share(
-                {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": challenge_id},
-                turn_id="turn-two",
-                actor="resident:test-resident",
-                interface="discord",
-                invocation="conversation",
-                participant_id="user-alice",
-                delivery_target={"kind": "discord_channel", "id": "channel-random"},
-            )
-            
-        # 5. Non-Discord interface is rejected
-        with self.assertRaises(PermissionError):
-            service.share(
-                {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": challenge_id},
-                turn_id="turn-two",
-                actor="resident:test-resident",
-                interface="cli",
-                invocation="conversation",
-                participant_id="user-alice",
-                delivery_target={"kind": "discord_channel", "id": "channel-general"},
-            )
-            
-        # 6. Successful confirmation
+        # 3. The resident may confirm from a later turn even when another
+        # participant opened it; participant speech is not the authorization.
         ok_share = service.share(
             {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": challenge_id},
             turn_id="turn-two",
             actor="resident:test-resident",
             interface="discord",
             invocation="conversation",
-            participant_id="user-alice",
+            participant_id="user-bob",
             delivery_target={"kind": "discord_channel", "id": "channel-general"},
         )
         self.assertTrue(ok_share["outward_action"])
-        
-        # 7. Replay attempt using same challenge is rejected (already consumed)
+
+        # 4. Replay attempt using the consumed challenge is rejected.
         with self.assertRaises(PermissionError):
             service.share(
                 {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": challenge_id},
@@ -1519,8 +1519,43 @@ class ImageTests(HomeCase):
                 participant_id="user-alice",
                 delivery_target={"kind": "discord_channel", "id": "channel-general"},
             )
+
+        next_preview = service.share(
+            {"mode": "send", "image_id": private["id"]},
+            turn_id="turn-four",
+            actor="resident:test-resident",
+            interface="discord",
+            invocation="conversation",
+            participant_id="user-alice",
+            delivery_target={"kind": "discord_channel", "id": "channel-general"},
+        )
+        next_challenge = next_preview["challenge_id"]
+
+        # 5. Confirmation in another channel is rejected.
+        with self.assertRaises(PermissionError):
+            service.share(
+                {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": next_challenge},
+                turn_id="turn-five",
+                actor="resident:test-resident",
+                interface="discord",
+                invocation="conversation",
+                participant_id="user-alice",
+                delivery_target={"kind": "discord_channel", "id": "channel-random"},
+            )
             
-        # 8. Expired challenge rejection
+        # 6. Non-Discord interface is rejected.
+        with self.assertRaises(PermissionError):
+            service.share(
+                {"mode": "send", "image_id": private["id"], "confirm": True, "challenge_id": next_challenge},
+                turn_id="turn-five",
+                actor="resident:test-resident",
+                interface="cli",
+                invocation="conversation",
+                participant_id="user-alice",
+                delivery_target={"kind": "discord_channel", "id": "channel-general"},
+            )
+            
+        # 7. Expired challenge rejection.
         preview_expired = service.share(
             {"mode": "send", "image_id": private["id"]},
             turn_id="turn-four",
@@ -2622,6 +2657,56 @@ class LegibleHouseTests(HomeCase):
 
 
 class LegibleHouseContractTests(HomeCase):
+    def test_react_envelope_is_compact_and_resident_authorized(self) -> None:
+        visible, calls, kinds, errors = extract_action_envelopes(
+            'kiss\n[[REACT {"message_id":"1234567890","emoji":"💋"}]]'
+        )
+        self.assertEqual("kiss", visible)
+        self.assertEqual([], errors)
+        self.assertEqual(["react"], kinds)
+        self.assertEqual("discord.react", calls[0]["action"])
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        result = runtime.house.dispatch(
+            calls[0],
+            turn_id="turn-react",
+            context={
+                "interface": "discord",
+                "delivery_target": {"kind": "discord_channel", "id": "456"},
+                "source_envelope": "REACT",
+            },
+        )
+        self.assertTrue(result["outward_action"])
+        self.assertEqual("1234567890", result["reaction"]["message_id"])
+        contract = runtime.house.registry.describe("discord.react")[0]
+        self.assertIn('[[REACT {"mode":"add"', contract["copyable_examples"][0])
+        self.assertNotIn('"action"', contract["copyable_examples"][0])
+
+        runtime.provider = FakeProvider(
+            ['[[REACT {"message_id":"1234567890","emoji":"💋"}]]']
+        )
+        routed = runtime.chat(
+            NormalizedMessage(
+                content="React to this.",
+                interface="discord",
+                external_id="1234567890",
+                metadata={"channel_id": "456"},
+            )
+        )
+        self.assertEqual(1, len(routed.outbound_reactions))
+        self.assertEqual("💋", routed.outbound_reactions[0]["emoji"])
+
+    def test_source_visibility_changes_visibility_not_ingress_authority(self) -> None:
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        result = runtime.house.dispatch(
+            {"action": "source.visibility", "mode": "all_channel"}
+        )
+        self.assertEqual("all_channel", result["ambient_visibility"])
+        self.assertFalse(result["authorization_changed"])
+        inspected = runtime.house.dispatch(
+            {"action": "source.visibility", "mode": "inspect"}
+        )
+        self.assertEqual("all_channel", inspected["ambient_visibility"])
+
     def test_every_enabled_contract_is_formal_and_its_examples_validate(self) -> None:
         runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
         for name, spec in runtime.house.registry._specs.items():

@@ -13,6 +13,12 @@ import yaml
 from .capabilities import CapabilityRegistry, CapabilitySpec
 from .capability_contracts import bell_contracts, contract_for
 from .config import ResolvedConfig
+from .context_controls import (
+    VISIBILITY_MODES,
+    default_context_controls,
+    load_context_controls,
+    save_context_controls,
+)
 from .db import ContinuityDB
 from .images import ImageService
 from .legible import LegibleLedger
@@ -96,7 +102,11 @@ def extract_action_envelopes(
     """
 
     decoder = json.JSONDecoder()
-    markers = (("[[TOOL_ACTION", "tool_action"), ("[[HOUSE_TOOL", "house_tool"))
+    markers = (
+        ("[[TOOL_ACTION", "tool_action"),
+        ("[[HOUSE_TOOL", "house_tool"),
+        ("[[REACT", "react"),
+    )
     kept: list[str] = []
     calls: list[dict[str, Any]] = []
     kinds: list[str] = []
@@ -125,6 +135,8 @@ def extract_action_envelopes(
                 raise ValueError("missing closing ]]")
             if not isinstance(payload, dict):
                 raise ValueError("tool payload must be a JSON object")
+            if kind == "react":
+                payload = {"action": "discord.react", **payload}
             calls.append(payload)
             kinds.append(kind)
             cursor = closing + 2
@@ -1014,6 +1026,8 @@ class HousePort:
             "search.session": self._search_session,
             "retrieval.inspect": self._retrieval_inspect,
             "next_step": self._next_step,
+            "context.control": self._context_control,
+            "source.visibility": self._source_visibility,
             "capabilities": self._capabilities,
             "help": self._help,
             "pending": self._pending,
@@ -1077,6 +1091,8 @@ class HousePort:
             "jobs.chalkboard",
             "attention.tray",
             "search.session",
+            "context.control",
+            "source.visibility",
         }
         inspection = {
             "capabilities",
@@ -1134,6 +1150,8 @@ class HousePort:
                 "search.session": "Start, refine, inspect, or close a durable scoped search desk.",
                 "retrieval.inspect": "Explain what continuity crossed into a turn and why.",
                 "next_step": "Explain the next safe or required move for one receipt, draft, job, bell, object, or action.",
+                "context.control": "Inspect or arrange the resident's prompt and transcript drawers.",
+                "source.visibility": "Choose which authorized Discord history is visible as ambient context.",
                 "curation.list": "List curation batches and their explicit states.",
                 "curation.inspect": "Inspect one curation batch, its selected evidence, and drafts.",
                 "curation.history": "Inspect append-only events for one curation batch.",
@@ -1170,6 +1188,22 @@ class HousePort:
                     {key: value for key, value in payload.items() if key != "after"}
                 ),
             )
+        reaction_contract = contract_for("discord.react")
+        self.registry.register(
+            CapabilitySpec(
+                name="discord.react",
+                description="Add or remove the resident's emoji reaction on a visible Discord message.",
+                effects=("outward_reaction",),
+                confirmation="resident_authenticated_doorway",
+                default_after="finish",
+                result_visibility="resident_private_then_current_doorway",
+                outward_facing=True,
+                invocation_envelope="REACT",
+                **reaction_contract,
+            ),
+            self._discord_react,
+            authorizer=self._discord_react_authorizer,
+        )
         if self.images is not None:
             image_specs = (
                 CapabilitySpec(
@@ -3539,6 +3573,89 @@ class HousePort:
             participant_id=str(context.get("participant_id") or "") or None,
             delivery_target=context.get("delivery_target"),
         )
+
+    def _context_control(self, payload: dict[str, Any]) -> dict[str, Any]:
+        mode = str(payload.get("mode") or "inspect").strip().lower()
+        if mode not in {"inspect", "configure", "reset", "recompress"}:
+            raise ValueError("context.control mode must be inspect, configure, reset, or recompress")
+        current = load_context_controls(self.config, self.db, self.resident_id)
+        if mode == "reset":
+            current = default_context_controls(self.config)
+            save_context_controls(self.db, self.resident_id, current)
+        elif mode in {"configure", "recompress"}:
+            bounds = {
+                "prompt_budget_tokens": (8_000, 100_000),
+                "verbatim_turns": (2, 100),
+                "compression_source_turns": (0, 2_000),
+                "compressed_token_budget": (0, 20_000),
+            }
+            for field, (minimum, maximum) in bounds.items():
+                if field not in payload:
+                    continue
+                value = int(payload[field])
+                if value < minimum or value > maximum:
+                    raise ValueError(f"{field} must be between {minimum} and {maximum}")
+                current[field] = value
+            save_context_controls(self.db, self.resident_id, current)
+        return {
+            "mode": mode,
+            "controls": current,
+            "turns_available": self.db.recent_turn_count(self.resident_id, self.room_id),
+            "compression_kind": "extractive_source_linked",
+            "effective_next_turn": mode != "inspect",
+        }
+
+    def _source_visibility(self, payload: dict[str, Any]) -> dict[str, Any]:
+        mode = str(payload.get("mode") or "inspect").strip().lower()
+        current = load_context_controls(self.config, self.db, self.resident_id)
+        if mode == "inspect":
+            return {"mode": mode, "ambient_visibility": current["ambient_visibility"]}
+        if mode not in VISIBILITY_MODES:
+            raise ValueError(
+                "source.visibility mode must be inspect, allowlisted_only, all_channel, mentions_only, or hidden"
+            )
+        current["ambient_visibility"] = mode
+        save_context_controls(self.db, self.resident_id, current)
+        return {
+            "mode": mode,
+            "ambient_visibility": mode,
+            "authorization_changed": False,
+            "effective_next_turn": True,
+            "boundary": "Visibility never grants permission to trigger the resident or call tools.",
+        }
+
+    def _discord_react_authorizer(
+        self,
+        _spec: CapabilitySpec,
+        payload: dict[str, Any],
+        context: dict[str, Any],
+    ) -> None:
+        if context.get("interface") != "discord":
+            raise PermissionError("REACT is available only through an authenticated Discord doorway")
+        if not context.get("delivery_target", {}).get("id"):
+            raise PermissionError("REACT requires the current Discord destination")
+        if not str(payload.get("message_id") or context.get("trigger_message_id") or "").strip():
+            raise ValueError("REACT requires message_id when no current message is available")
+
+    def _discord_react(
+        self, payload: dict[str, Any], context: dict[str, Any]
+    ) -> dict[str, Any]:
+        message_id = str(
+            payload.get("message_id") or context.get("trigger_message_id") or ""
+        ).strip()
+        reaction = {
+            "action": str(payload.get("mode") or "add").strip().lower(),
+            "message_id": message_id,
+            "emoji": str(payload.get("emoji") or "").strip(),
+            "emoji_id": str(payload.get("emoji_id") or "").strip() or None,
+            "channel_id": str(context.get("delivery_target", {}).get("id") or ""),
+        }
+        return {
+            "status": "pending_platform_delivery",
+            "outward_action": True,
+            "reaction": reaction,
+            "_outbound_reaction": reaction,
+        }
 
     def _jobs_create(self, payload: dict[str, Any]) -> dict[str, Any]:
         objective = str(payload.get("objective") or payload.get("task") or "").strip()

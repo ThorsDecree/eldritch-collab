@@ -30,6 +30,9 @@ GROUPS: dict[str, str] = {
         "image.drawer", "image.review", "image.share",
     )},
     **{name: "attention" for name in ("attention.tray", "retrieval.inspect")},
+    **{name: "context" for name in (
+        "context.control", "source.visibility", "discord.react",
+    )},
     **{name: "editing" for name in ("file.diff", "file.write", "file.patch")},
     **{name: "evidence" for name in (
         "bookmark.add", "bookmark.list", "bookmark.open", "bookmark.remove",
@@ -93,6 +96,22 @@ FIELDS: dict[str, tuple[dict[str, Any], tuple[str, ...]]] = {
     "attention.tray": ({"mode": S(enum=["list", "add", "remove", "clear"]), "reference": REF, "object_id": ID, "image_id": ID, "memory_id": ID, "path": REF, "item_id": ID, "label": S(maxLength=240), "note": S(maxLength=2000), "hours": I(minimum=1, maximum=168)}, ()),
     "search.session": ({"mode": S(enum=["start", "refine", "inspect", "close"]), "session_id": ID, "query": S(minLength=1), "scope": S(enum=["everything", "pictures", "scrolls", "memories", "recent_conversation"]), "limit": I(minimum=1, maximum=20)}, ()),
     "retrieval.inspect": ({"turn_id": ID}, ()),
+    "context.control": ({
+        "mode": S(enum=["inspect", "configure", "reset", "recompress"]),
+        "prompt_budget_tokens": I(minimum=8000, maximum=100000),
+        "verbatim_turns": I(minimum=2, maximum=100),
+        "compression_source_turns": I(minimum=0, maximum=2000),
+        "compressed_token_budget": I(minimum=0, maximum=20000),
+    }, ()),
+    "source.visibility": ({
+        "mode": S(enum=["inspect", "allowlisted_only", "all_channel", "mentions_only", "hidden"]),
+    }, ()),
+    "discord.react": ({
+        "mode": S(enum=["add", "remove"]),
+        "message_id": ID,
+        "emoji": S(minLength=1, maxLength=100),
+        "emoji_id": ID,
+    }, ("emoji",)),
     "memory.search": ({"query": S(minLength=1), "limit": I(minimum=1, maximum=30)}, ("query",)),
     "memory.read": ({"memory_id": ID}, ("memory_id",)),
     "memory.history": ({"memory_id": ID}, ("memory_id",)),
@@ -145,6 +164,18 @@ EXAMPLES: dict[str, tuple[dict[str, Any], ...]] = {
         {"action": "attention.tray", "mode": "list", "after": "continue"},
         {"action": "attention.tray", "mode": "add", "reference": "receipt_...", "label": "Help result to recover", "hours": 24, "after": "continue"},
     ),
+    "context.control": (
+        {"action": "context.control", "mode": "inspect", "after": "continue"},
+        {"action": "context.control", "mode": "configure", "prompt_budget_tokens": 20000, "verbatim_turns": 12, "compression_source_turns": 60, "compressed_token_budget": 3500, "after": "continue"},
+    ),
+    "source.visibility": (
+        {"action": "source.visibility", "mode": "allowlisted_only", "after": "continue"},
+        {"action": "source.visibility", "mode": "all_channel", "after": "continue"},
+    ),
+    "discord.react": (
+        {"action": "discord.react", "mode": "add", "message_id": "1234567890", "emoji": "💋", "after": "finish"},
+        {"action": "discord.react", "mode": "remove", "message_id": "1234567890", "emoji": "💋", "after": "finish"},
+    ),
     "bookmark.add": ({"action": "bookmark.add", "reference": "doc_...", "label": "Return here", "after": "continue"},),
     "bookmark.open": ({"action": "bookmark.open", "bookmark_id": "bookmark_...", "after": "continue"},),
     "bookmark.remove": ({"action": "bookmark.remove", "bookmark_id": "bookmark_...", "after": "continue"},),
@@ -191,6 +222,9 @@ RELATED: dict[str, tuple[str, ...]] = {
     "help": ("capabilities", "next_step"),
     "receipt.inspect": ("receipt.pin", "next_step", "attention.tray"),
     "attention.tray": ("search.session", "receipt.inspect"),
+    "context.control": ("source.visibility", "retrieval.inspect"),
+    "source.visibility": ("context.control",),
+    "discord.react": ("image.drawer",),
     "bookmark.add": ("bookmark.open", "bookmark.remove"),
     "jobs.create": ("jobs.step", "jobs.inspect", "jobs.cancel"),
     "image.drawer": ("image.inspect", "image.share"),

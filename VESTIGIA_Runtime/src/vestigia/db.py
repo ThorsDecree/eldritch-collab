@@ -625,6 +625,14 @@ class ContinuityDB:
             result.append(item)
         return result
 
+    def recent_turn_count(self, resident_id: str, room_id: str) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM turns WHERE resident_id=? AND room_id=?",
+                (resident_id, room_id),
+            ).fetchone()
+        return int(row["count"] if row else 0)
+
     def get_turn(self, turn_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute("SELECT * FROM turns WHERE id=?", (turn_id,)).fetchone()

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .config import ResolvedConfig
+from .context_controls import load_context_controls
 from .db import ContinuityDB
 from .models import ContextAssembly, ContextLayer, NormalizedMessage, RetrievedMemory, RuntimeState
 from .retrieval import Retriever
@@ -31,6 +32,7 @@ class ContextAssembler:
         turn_id: str | None = None,
     ) -> ContextAssembly:
         actual_turn_id = turn_id or new_id("turn")
+        controls = load_context_controls(self.config, self.db, self.resident_id)
         include_inherited = (
             state == RuntimeState.ORIENTATION.value
             and bool(self.config.get("retrieval.include_inherited_during_orientation", True))
@@ -76,22 +78,24 @@ class ContextAssembler:
             self._attention_tray_layer(
                 int(self.config.get("context.attention_tray_tokens", 900)),
             ),
-            self._file_layer(
-                "compressed_session",
-                int(self.config.get("context.session_summary_tokens")),
-                [self.home / "sessions" / "current_summary.md"],
+            self._compressed_transcript_layer(
+                int(controls["compressed_token_budget"]),
+                verbatim_turns=int(controls["verbatim_turns"]),
+                source_turns=int(controls["compression_source_turns"]),
+                current_turn_id=actual_turn_id,
             ),
             self._transcript_layer(
                 int(self.config.get("context.transcript_tail_tokens")),
                 message.ambient_context,
                 actual_turn_id,
+                limit=int(controls["verbatim_turns"]),
             ),
         ]
         current = self.counter.trim(
             message.content,
             int(self.config.get("context.current_message_tokens", 2000)),
         )
-        configured_maximum = int(self.config.get("context.total_tokens"))
+        configured_maximum = int(controls["prompt_budget_tokens"])
         capability_reserve = min(
             max(0, int(self.config.get("context.capability_panel_tokens", 2200))),
             max(0, configured_maximum // 5),
@@ -144,6 +148,7 @@ class ContextAssembler:
                     for key, source in self.config.sources.items()
                     if key.startswith("context.")
                 },
+                "resident_context_controls": controls,
             },
             "current_message_hash": sha256_text(current),
             "retrieved_details": [
@@ -187,14 +192,16 @@ class ContextAssembler:
         )
 
     def _identity_layer(self, budget: int, *, include_inherited: bool) -> ContextLayer:
-        items = self._read_files(
-            [
-                self.home / "identity" / "identity_context.md",
-                self.home / "identity" / "breathprint.md",
-                self.home / "identity" / "current_self.md",
-                self.home / "identity" / "protocols",
-            ]
-        )
+        paths = [self.home / "identity" / "identity_context.md"]
+        if include_inherited:
+            paths.extend(
+                [
+                    self.home / "identity" / "breathprint.md",
+                    self.home / "identity" / "current_self.md",
+                    self.home / "identity" / "protocols",
+                ]
+            )
+        items = self._read_files(paths)
         statuses = ["accepted"] + (["inherited_unreviewed"] if include_inherited else [])
         records = self.db.list_memories(
             resident_id=self.resident_id,
@@ -203,7 +210,13 @@ class ContextAssembler:
             tiers=["core"],
             limit=200,
         )
-        items.extend((record.id, self._memory_block(record, None)) for record in records)
+        seen = {sha256_text(text.strip()) for _, text in items if text.strip()}
+        for record in records:
+            block = self._memory_block(record, None)
+            digest = sha256_text(record.content.strip())
+            if digest not in seen:
+                seen.add(digest)
+                items.append((record.id, block))
         return self._pack("identity_core", budget, items)
 
     def _typed_memory_layer(
@@ -325,23 +338,66 @@ class ContextAssembler:
             ],
         )
 
-    def _transcript_layer(self, budget: int, ambient: str, current_turn_id: str) -> ContextLayer:
+    def _transcript_layer(
+        self,
+        budget: int,
+        ambient: str,
+        current_turn_id: str,
+        *,
+        limit: int,
+    ) -> ContextLayer:
         turns = self.db.recent_turns(
             self.resident_id,
             self.room_id,
-            int(self.config.get("retrieval.transcript_tail_messages", 12)),
+            max(1, limit + 1),
         )
+        eligible = [turn for turn in turns if turn["id"] != current_turn_id][-limit:]
         items = [
             (
                 str(turn["id"]),
                 f"[{turn['speaker_role']} · {turn['created_at']}]\n{turn['content']}",
             )
-            for turn in turns
-            if turn["id"] != current_turn_id
+            for turn in eligible
         ]
         if ambient.strip():
             items.append(("ambient-interface-context", "[Ambient interface context]\n" + ambient.strip()))
         return self._pack("verbatim_tail", budget, items)
+
+    def _compressed_transcript_layer(
+        self,
+        budget: int,
+        *,
+        verbatim_turns: int,
+        source_turns: int,
+        current_turn_id: str,
+    ) -> ContextLayer:
+        if budget <= 0 or source_turns <= 0:
+            return self._pack("compressed_transcript", 0, [])
+        turns = self.db.recent_turns(
+            self.resident_id,
+            self.room_id,
+            max(1, verbatim_turns + source_turns + 1),
+        )
+        eligible = [turn for turn in turns if turn["id"] != current_turn_id][
+            -(verbatim_turns + source_turns) :
+        ]
+        older = eligible[:-verbatim_turns] if verbatim_turns else eligible
+        items: list[tuple[str, str]] = []
+        for turn in older:
+            content = " ".join(str(turn["content"]).split())
+            if len(content) > 600:
+                content = content[:599] + "…"
+            digest = str(turn.get("content_hash") or sha256_text(str(turn["content"])))
+            items.append(
+                (
+                    str(turn["id"]),
+                    f"[extractive transcript capsule · turn={turn['id']} · "
+                    f"speaker={turn['speaker_role']}:{turn['speaker_id']} · "
+                    f"source_hash={digest} · created={turn['created_at']} · data-only]\n"
+                    f"{content}",
+                )
+            )
+        return self._pack("compressed_transcript", budget, items)
 
     def _file_layer(self, name: str, budget: int, paths: list[Path]) -> ContextLayer:
         return self._pack(name, budget, self._read_files(paths))
@@ -401,11 +457,11 @@ class ContextAssembler:
             return layers
         result = list(layers)
         shrink_order = [
-            "verbatim_tail",
             "retrieved_continuity",
-            "compressed_session",
+            "compressed_transcript",
             "commitments_and_tensions",
             "relationship_overlay",
+            "verbatim_tail",
         ]
         for name in shrink_order:
             excess = total - maximum

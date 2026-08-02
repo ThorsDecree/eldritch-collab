@@ -1,0 +1,44 @@
+name: Runtime CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: VESTIGIA_Runtime
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m compileall -q src
+      - run: python -m pytest -q
+
+  package:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: VESTIGIA_Runtime
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip build
+      - run: python -m build
+      - run: python -m pip install --target /tmp/vestigia-wheel dist/*.whl
+      - run: PYTHONPATH=/tmp/vestigia-wheel python -c "import vestigia; assert vestigia.__version__ == '0.7.0'"

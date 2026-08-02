@@ -1137,7 +1137,6 @@ class ImageService:
                         "Confirming a private image share requires a valid challenge_id. "
                         "Call image.share first without confirm:true to obtain a challenge."
                     )
-                p_id = participant_id or "local-user"
                 dest_kind = "unknown"
                 dest_id = "unknown"
                 if delivery_target:
@@ -1174,11 +1173,7 @@ class ImageService:
                     if row["requested_turn_id"] == turn_id:
                         raise PermissionError(
                             "A private image cannot be confirmed within the same turn/invocation it was requested. "
-                            "The confirmation must occur in a subsequent participant-originated later turn."
-                        )
-                    if row["participant_id"] != p_id:
-                        raise PermissionError(
-                            f"Confirmation challenger participant ID mismatch: expected {row['participant_id']}, got {p_id}."
+                            "The resident must confirm it in a subsequent turn."
                         )
                     if row["destination_id"] != dest_id or row["destination_kind"] != dest_kind:
                         raise PermissionError(
@@ -1187,7 +1182,7 @@ class ImageService:
                         )
                     if interface != "discord":
                         raise PermissionError(
-                            "A private image confirmation must be initiated by a participant-originated later turn on Discord."
+                            "A private image confirmation must be initiated by the resident in a later authenticated Discord turn."
                         )
                     if row["content_hash"] != str(asset.get("content_hash") or ""):
                         raise PermissionError(
@@ -1299,7 +1294,7 @@ class ImageService:
                         "outward_action": False,
                         "invariant": "No outward action occurred.",
                         "friendly_summary": (
-                            f"This picture is private. Participant confirmation is required (challenge_id: {challenge_id}) "
+                            f"This picture is private. Resident confirmation is required (challenge_id: {challenge_id}) "
                             "before a one-time handoff."
                         ),
                     }

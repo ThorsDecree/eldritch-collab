@@ -47,9 +47,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "auto_route_thinking": False,
     },
     "context": {
-        "total_tokens": 15000,
+        "total_tokens": 20000,
         "runtime_contract_tokens": 1000,
-        "identity_core_tokens": 2000,
+        "identity_core_tokens": 800,
         "relationship_tokens": 1200,
         "tension_tokens": 1200,
         "retrieval_tokens": 3800,
@@ -57,6 +57,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "breadcrumb_tokens": 500,
         "session_summary_tokens": 2000,
         "transcript_tail_tokens": 3800,
+        "verbatim_turns": 12,
+        "compression_source_turns": 60,
+        "compressed_transcript_tokens": 3500,
         "current_message_tokens": 2000,
         "image_context_tokens": 3000,
         "capability_panel_tokens": 2200,
@@ -140,6 +143,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "log_rejections": False,
         "recent_messages": 10,
         "recent_max_chars": 2200,
+        "ambient_visibility": "allowlisted_only",
         "max_message_chars": 1900,
         "rate_limit_user_calls": 6,
         "rate_limit_user_window": 60,
@@ -187,6 +191,9 @@ ENV_MAP: dict[str, tuple[str, Callable[[str], Any]]] = {
     "VESTIGIA_ATTENTION_TRAY_TOKENS": ("context.attention_tray_tokens", _as_int),
     "VESTIGIA_SESSION_SUMMARY_TOKENS": ("context.session_summary_tokens", _as_int),
     "VESTIGIA_TRANSCRIPT_TAIL_TOKENS": ("context.transcript_tail_tokens", _as_int),
+    "VESTIGIA_VERBATIM_TURNS": ("context.verbatim_turns", _as_int),
+    "VESTIGIA_COMPRESSION_SOURCE_TURNS": ("context.compression_source_turns", _as_int),
+    "VESTIGIA_COMPRESSED_TRANSCRIPT_TOKENS": ("context.compressed_transcript_tokens", _as_int),
     "VESTIGIA_CURRENT_MESSAGE_TOKENS": ("context.current_message_tokens", _as_int),
     "VESTIGIA_IMAGE_CONTEXT_TOKENS": ("context.image_context_tokens", _as_int),
     "VESTIGIA_CAPABILITY_PANEL_TOKENS": ("context.capability_panel_tokens", _as_int),
@@ -244,6 +251,7 @@ ENV_MAP: dict[str, tuple[str, Callable[[str], Any]]] = {
     "VESTIGIA_DISCORD_LOG_REJECTIONS": ("discord.log_rejections", _as_bool),
     "VESTIGIA_DISCORD_RECENT_MESSAGES": ("discord.recent_messages", _as_int),
     "VESTIGIA_DISCORD_RECENT_MAX_CHARS": ("discord.recent_max_chars", _as_int),
+    "VESTIGIA_DISCORD_AMBIENT_VISIBILITY": ("discord.ambient_visibility", str),
     "VESTIGIA_DISCORD_MAX_MESSAGE_CHARS": ("discord.max_message_chars", _as_int),
     "VESTIGIA_RATE_LIMIT_USER_CALLS": ("discord.rate_limit_user_calls", _as_int),
     "VESTIGIA_RATE_LIMIT_USER_WINDOW": ("discord.rate_limit_user_window", _as_int),
@@ -365,6 +373,13 @@ def load_config(home_path: str | Path, env_file: str | Path | None = None) -> Re
 
     if int(data["context"]["total_tokens"]) < 1000:
         raise ValueError("context.total_tokens must be at least 1000")
+    if str(data["discord"].get("ambient_visibility", "allowlisted_only")) not in {
+        "allowlisted_only",
+        "all_channel",
+        "mentions_only",
+        "hidden",
+    }:
+        raise ValueError("discord.ambient_visibility is invalid")
     secrets = {
         name: str(env_values.get(name, "")).strip()
         for name in ("OPENAI_API_KEY", "DISCORD_BOT_TOKEN")
