@@ -2895,7 +2895,11 @@ class CapabilityRegistryAndConcurrencyTests(HomeCase):
         with self.assertRaises(ValueError):
             registry.register(spec_bad_policy, lambda p, c: {})
             
-        # 3. Successful registration of valid outward capability
+        called = []
+        def test_authorizer(spec, payload, context):
+            called.append(True)
+
+        # 3. Reject registering valid outward capability without authorizer
         spec_ok = CapabilitySpec(
             name="test.ok",
             description="Ok outward",
@@ -2911,7 +2915,11 @@ class CapabilityRegistryAndConcurrencyTests(HomeCase):
                 "additionalProperties": False,
             }
         )
-        registry.register(spec_ok, lambda p, c: {"status": "ok"})
+        with self.assertRaises(ValueError):
+            registry.register(spec_ok, lambda p, c: {"status": "ok"})
+
+        # Register correctly with authorizer
+        registry.register(spec_ok, lambda p, c: {"status": "ok"}, authorizer=test_authorizer)
         
         # 4. Dispatch with wrong interface context is rejected
         with self.assertRaises(PermissionError):
@@ -2921,13 +2929,14 @@ class CapabilityRegistryAndConcurrencyTests(HomeCase):
                 context={"interface": "cli"}
             )
             
-        # 5. Dispatch with valid interface context is successful
+        # 5. Dispatch with valid interface context is successful and invokes authorizer
         res, spec, after = registry.dispatch(
             {"action": "test.ok"},
             turn_id="turn-1",
             context={"interface": "discord"}
         )
         self.assertEqual("ok", res["status"])
+        self.assertTrue(called)
         
     def test_per_home_concurrency_locks_are_shared_per_path(self) -> None:
         from vestigia.runtime import home_lock
@@ -2951,6 +2960,80 @@ class CapabilityRegistryAndConcurrencyTests(HomeCase):
         self.assertTrue(lock1.acquire(blocking=False))
         lock1.release()
         lock1.release()
+
+    def test_fts_scoping_and_limit_regression(self) -> None:
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        db = runtime.db
+        
+        # 1. Insert target memory for test-resident / hearth
+        target_id = db.add_memory(
+            resident_id="test-resident",
+            room_id="hearth",
+            content="The secret cipher of Cabalism is forty-two.",
+            memory_type="event",
+            tier="warm",
+            authorship="verified",
+            authority_state="accepted",
+            status="accepted",
+            actor="resident:test-resident",
+            reason="test",
+        )
+        
+        # 2. Insert target memory with same word for different room/resident
+        foreign_id = db.add_memory(
+            resident_id="foreign-resident",
+            room_id="attic",
+            content="Do not leak the Cabalism secret in the attic.",
+            memory_type="event",
+            tier="warm",
+            authorship="verified",
+            authority_state="accepted",
+            status="accepted",
+            actor="resident:foreign-resident",
+            reason="test",
+        )
+        
+        # 3. Refresh index to index FTS
+        runtime.house.refresh_index()
+        
+        # 4. Confirm FTS search directly
+        results = db.search_fts("cipher Cabalism", resident_id="test-resident", room_id="hearth")
+        self.assertIn(str(target_id), results)
+        self.assertNotIn(str(foreign_id), results)
+        
+        # 5. Insert 220 newer unrelated memories to push target out of recent window
+        for i in range(220):
+            db.add_memory(
+                resident_id="test-resident",
+                room_id="hearth",
+                content=f"Unrelated memory log event index-{i}.",
+                memory_type="event",
+                tier="warm",
+                authorship="verified",
+                authority_state="accepted",
+                status="accepted",
+                actor="resident:test-resident",
+                reason="test",
+            )
+            
+        runtime.house.refresh_index()
+        
+        # 6. Retrieve memories via retriever and confirm target is retrieved via FTS
+        from vestigia.retrieval import Retriever
+        candidates = Retriever(db).retrieve(
+            "cipher Cabalism",
+            resident_id="test-resident",
+            room_id="hearth",
+            include_cold=False,
+        )
+        # Verify target is in candidates
+        target_candidate = next((c for c in candidates if c.record.id == str(target_id)), None)
+        self.assertIsNotNone(target_candidate)
+        self.assertTrue(any("fts=" in r for r in target_candidate.reasons))
+        
+        # Verify foreign target is NOT in candidates
+        foreign_candidate = next((c for c in candidates if c.record.id == str(foreign_id)), None)
+        self.assertIsNone(foreign_candidate)
 
 
 if __name__ == "__main__":

@@ -549,23 +549,20 @@ class ContinuityDB:
         clean = query.strip()
         if not clean:
             return {}
-        try:
-            with self.connect() as connection:
-                rows = connection.execute(
-                    """
-                    SELECT f.record_id, bm25(f.memory_fts) AS rank
-                    FROM memory_fts f
-                    JOIN memories m ON m.id = f.record_id
-                    WHERE f.memory_fts MATCH ?
-                      AND m.resident_id = ?
-                      AND m.room_id = ?
-                    ORDER BY rank
-                    LIMIT ?
-                    """,
-                    (clean, resident_id, room_id, max(1, int(limit))),
-                ).fetchall()
-        except sqlite3.OperationalError:
-            return {}
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT f.record_id, bm25(f.memory_fts) AS rank
+                FROM memory_fts f
+                JOIN memory_records m ON m.id = f.record_id
+                WHERE f.memory_fts MATCH ?
+                  AND m.resident_id = ?
+                  AND m.room_id = ?
+                ORDER BY rank
+                LIMIT ?
+                """,
+                (clean, resident_id, room_id, max(1, int(limit))),
+            ).fetchall()
         return {str(row["record_id"]): float(row["rank"]) for row in rows}
 
     def add_turn(
