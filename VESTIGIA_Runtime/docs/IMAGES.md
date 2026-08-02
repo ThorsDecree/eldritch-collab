@@ -156,7 +156,7 @@ states that nothing was sent. The resident may then share it once in a subsequen
 [[TOOL_ACTION {"action":"image.share","schema_version":"v2","mode":"send","image_id":"img_...","confirm":true,"challenge_id":"ch_...","after":"finish"}]]
 ```
 
-A participant permission turn is required (the confirmation challenge must be submitted in a later turn and must originate from an authenticated Discord participant). The resident is the actor choosing whether to speak through the doorway. JSON still cannot select an arbitrary person or channel.
+A participant-originated later turn is required. The challenge must be submitted from the same authenticated Discord participant and destination. The resident is the actor choosing whether to speak through the doorway. JSON still cannot select an arbitrary person or channel.
 
 The v1 `prepare → preview → later hash-bound claim` route remains available as optional high
 assurance:

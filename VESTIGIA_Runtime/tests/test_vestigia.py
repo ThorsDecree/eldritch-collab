@@ -1136,6 +1136,14 @@ class ImageTests(HomeCase):
             "required only for private send or legacy claim",
             focused["capability"]["input_schema"]["confirm"],
         )
+        examples = focused["capability"]["copyable_examples"]
+        self.assertTrue(
+            any(
+                '"confirm":true' in example
+                and '"challenge_id":"ch_..."' in example
+                for example in examples
+            )
+        )
         self.assertEqual(1, len(focused["capabilities"]))
         plaque = runtime._live_capability_plaque()
         self.assertIn("PICTURE DRAWER AND QUICK-DRAW", plaque)

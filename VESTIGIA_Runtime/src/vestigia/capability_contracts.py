@@ -157,6 +157,32 @@ EXAMPLES: dict[str, tuple[dict[str, Any], ...]] = {
     "curation.inspect": ({"action": "curation.inspect", "batch_id": "batch_...", "after": "continue"},),
     "identity.history": ({"action": "identity.history", "limit": 20, "after": "continue"},),
     "next_step": ({"action": "next_step", "receipt_id": "receipt_...", "after": "continue"},),
+    "image.share": (
+        {
+            "action": "image.share",
+            "schema_version": "v2",
+            "mode": "send",
+            "image_id": "img_...",
+            "after": "finish",
+        },
+        {
+            "action": "image.share",
+            "schema_version": "v2",
+            "mode": "send",
+            "image_id": "img_private_...",
+            "confirm": True,
+            "challenge_id": "ch_...",
+            "after": "finish",
+        },
+        {
+            "action": "image.share",
+            "schema_version": "v1",
+            "mode": "prepare",
+            "image_id": "img_...",
+            "reason": "high-assurance handoff",
+            "after": "continue",
+        },
+    ),
 }
 
 
