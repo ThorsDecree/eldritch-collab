@@ -159,6 +159,7 @@ class RuntimeResult:
     model: str | None = None
     suppressed: bool = False
     outbound_attachments: tuple[Path, ...] = ()
+    outbound_reactions: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
