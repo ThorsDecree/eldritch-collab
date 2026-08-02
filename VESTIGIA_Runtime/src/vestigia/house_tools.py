@@ -3510,6 +3510,8 @@ class HousePort:
             interface=str(context.get("interface") or "") or None,
             invocation=str(context.get("invocation") or "") or None,
             actor=f"resident:{self.resident_id}",
+            participant_id=str(context.get("participant_id") or "") or None,
+            delivery_target=context.get("delivery_target"),
         )
 
     def _jobs_create(self, payload: dict[str, Any]) -> dict[str, Any]:

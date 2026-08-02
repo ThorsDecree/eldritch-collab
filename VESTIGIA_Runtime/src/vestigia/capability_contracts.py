@@ -129,7 +129,7 @@ FIELDS: dict[str, tuple[dict[str, Any], tuple[str, ...]]] = {
     "image.history": ({"image_id": ID, "limit": LIMIT_200, "job_limit": LIMIT_200}, ()),
     "image.drawer": ({"mode": S(enum=["browse", "search", "get", "update", "summarize", "pocket", "timeline"]), "image_id": ID, "artifact_id": ID, "query": S(), "changes": O(additionalProperties=True), "pocket": S(), "present": B(), "inspect_if_missing": B(), "include_private": B(), "limit": LIMIT_100, "alias": S(), "summary": S(), "alt_text": S(), "visible_text": A(S()), "people": A(S()), "places": A(S()), "motifs": A(S()), "moods": A(S()), "uses": A(S()), "avoid_when": A(S()), "resident_note": S(), "inherited_framing": S(), "present_resonance": S(), "adoption_state": S(), "privacy": S()}, ()),
     "image.review": ({"image_id": ID, "artifact_id": ID, "review": S(minLength=1), "decision": S(minLength=1), "reason": S()}, ("image_id", "review")),
-    "image.share": ({"schema_version": S(enum=["v1", "v2"]), "mode": S(enum=["send", "preview", "prepare", "claim", "reject"]), "decision": S(enum=["claim", "reject"]), "image_id": ID, "artifact_id": ID, "confirm": B(), "reason": S(), "draft_id": ID, "expected_hash": S()}, ()),
+    "image.share": ({"schema_version": S(enum=["v1", "v2"]), "mode": S(enum=["send", "preview", "prepare", "claim", "reject"]), "decision": S(enum=["claim", "reject"]), "image_id": ID, "artifact_id": ID, "confirm": B(), "reason": S(), "draft_id": ID, "expected_hash": S(), "challenge_id": ID}, ()),
 }
 
 

@@ -75,7 +75,7 @@ class Retriever:
             tiers.append("cold")
 
         fts_query = self._fts_query(query)
-        ranks = self.db.search_fts(fts_query, limit=max(200, limit * 10)) if fts_query else {}
+        ranks = self.db.search_fts(fts_query, resident_id, room_id, limit=max(200, limit * 10)) if fts_query else {}
 
         fts_records = []
         if ranks:
@@ -101,6 +101,7 @@ class Retriever:
             resident_id=resident_id,
             room_id=room_id,
             statuses=statuses,
+            tiers=tiers,
             memory_types=["relationship", "commitment", "boundary", "tension"],
             limit=500,
         )
