@@ -7,4 +7,4 @@ The runtime lives in [`VESTIGIA_Runtime/`](VESTIGIA_Runtime/). Start with its
 [`README.md`](VESTIGIA_Runtime/README.md) and [`ELI5_SETUP.md`](VESTIGIA_Runtime/ELI5_SETUP.md).
 
 Development canon is `main`. Work enters through a branch and pull request; release tags and
-artifacts identify shipped versions. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+artifacts identify shipped versions. See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the project [`ROADMAP.md`](ROADMAP.md).
