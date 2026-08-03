@@ -83,4 +83,4 @@ jobs:
 
           & $smokePython -m pip install "${wheel}[discord,tokens]"
           & $smokePython -m pip check
-          & $smokePython -c "import vestigia, discord, tiktoken; assert vestigia.__version__ == '0.7.0.dev0'"
+          & $smokePython -c "import vestigia, discord, tiktoken; assert vestigia.__version__ == '0.7.0'"
