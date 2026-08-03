@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vestigia.local/schemas/resident-ritual.schema.json",
+  "title": "VESTIGIA resident ritual definition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "version",
+    "status",
+    "authorship",
+    "inputs",
+    "requested_capabilities",
+    "limits",
+    "steps",
+    "outputs"
+  ],
+  "properties": {
+    "schema_version": {"const": "vestigia.resident-ritual.v0.1"},
+    "id": {"$ref": "#/$defs/stableId"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 120},
+    "version": {"type": "integer", "minimum": 1},
+    "status": {
+      "enum": [
+        "received",
+        "draft",
+        "validated",
+        "previewed",
+        "active",
+        "disabled",
+        "superseded",
+        "rejected",
+        "deferred",
+        "invalid"
+      ]
+    },
+    "description": {"type": "string", "maxLength": 2000},
+    "authorship": {"$ref": "#/$defs/authorship"},
+    "inputs": {"$ref": "#/$defs/objectSchema"},
+    "requested_capabilities": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/capabilityRequest"}
+    },
+    "limits": {"$ref": "#/$defs/limits"},
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/step"}
+    },
+    "failure_policy": {"$ref": "#/$defs/failurePolicy"},
+    "outputs": {"$ref": "#/$defs/objectSchema"},
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 32,
+      "items": {"type": "string", "minLength": 1, "maxLength": 64}
+    }
+  },
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$"
+    },
+    "stepId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "authorship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lane", "actor_id", "source_object_ids"],
+      "properties": {
+        "lane": {
+          "enum": ["resident", "operator", "participant", "model", "imported", "mixed"]
+        },
+        "actor_id": {"type": "string", "minLength": 1, "maxLength": 160},
+        "source_object_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 64,
+          "items": {"type": "string", "minLength": 1, "maxLength": 200}
+        },
+        "note": {"type": "string", "maxLength": 1000}
+      }
+    },
+    "schemaFragment": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": {"enum": ["string", "integer", "number", "boolean", "null"]},
+            "description": {"type": "string", "maxLength": 500},
+            "minLength": {"type": "integer", "minimum": 0, "maximum": 1000000},
+            "maxLength": {"type": "integer", "minimum": 0, "maximum": 1000000},
+            "minimum": {"type": "number"},
+            "maximum": {"type": "number"},
+            "enum": {"type": "array", "minItems": 1, "maxItems": 256},
+            "default": {}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "items", "maxItems"],
+          "properties": {
+            "type": {"const": "array"},
+            "description": {"type": "string", "maxLength": 500},
+            "items": {"$ref": "#/$defs/schemaFragment"},
+            "minItems": {"type": "integer", "minimum": 0, "maximum": 10000},
+            "maxItems": {"type": "integer", "minimum": 0, "maximum": 10000},
+            "uniqueItems": {"type": "boolean"}
+          }
+        },
+        {"$ref": "#/$defs/objectSchema"}
+      ]
+    },
+    "objectSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "additionalProperties", "properties"],
+      "properties": {
+        "type": {"const": "object"},
+        "description": {"type": "string", "maxLength": 500},
+        "additionalProperties": {"const": false},
+        "properties": {
+          "type": "object",
+          "maxProperties": 128,
+          "additionalProperties": {"$ref": "#/$defs/schemaFragment"}
+        },
+        "required": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
+        }
+      }
+    },
+    "capabilityRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability"],
+      "properties": {
+        "capability": {"$ref": "#/$defs/stableId"},
+        "scope": {"type": "object", "maxProperties": 64},
+        "required": {"type": "boolean", "default": true},
+        "reason": {"type": "string", "maxLength": 500}
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maximum_steps",
+        "maximum_nested_depth",
+        "maximum_tool_calls",
+        "maximum_provider_calls",
+        "maximum_outward_actions",
+        "wall_seconds"
+      ],
+      "properties": {
+        "maximum_steps": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "maximum_nested_depth": {"type": "integer", "minimum": 0, "maximum": 16},
+        "maximum_tool_calls": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "maximum_provider_calls": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "maximum_outward_actions": {"type": "integer", "minimum": 0, "maximum": 100},
+        "maximum_artifacts": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "maximum_output_bytes": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+        "wall_seconds": {"type": "integer", "minimum": 1, "maximum": 86400}
+      }
+    },
+    "commonStep": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "properties": {
+        "id": {"$ref": "#/$defs/stepId"},
+        "kind": {"type": "string"},
+        "when": {"type": "string", "maxLength": 1000},
+        "next": {"$ref": "#/$defs/stepId"},
+        "description": {"type": "string", "maxLength": 500}
+      }
+    },
+    "actionStep": {
+      "allOf": [
+        {"$ref": "#/$defs/commonStep"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "capability", "arguments"],
+          "properties": {
+            "id": {"$ref": "#/$defs/stepId"},
+            "kind": {"const": "action"},
+            "when": {"type": "string", "maxLength": 1000},
+            "next": {"$ref": "#/$defs/stepId"},
+            "description": {"type": "string", "maxLength": 500},
+            "capability": {"$ref": "#/$defs/stableId"},
+            "arguments": {"type": "object", "maxProperties": 128},
+            "save_as": {"type": "string", "minLength": 1, "maxLength": 80}
+          }
+        }
+      ]
+    },
+    "scriptStep": {
+      "allOf": [
+        {"$ref": "#/$defs/commonStep"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "script", "arguments"],
+          "properties": {
+            "id": {"$ref": "#/$defs/stepId"},
+            "kind": {"const": "script"},
+            "when": {"type": "string", "maxLength": 1000},
+            "next": {"$ref": "#/$defs/stepId"},
+            "description": {"type": "string", "maxLength": 500},
+            "script": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "version"],
+              "properties": {
+                "id": {"$ref": "#/$defs/stableId"},
+                "version": {"type": "integer", "minimum": 1}
+              }
+            },
+            "arguments": {"type": "object", "maxProperties": 128},
+            "save_as": {"type": "string", "minLength": 1, "maxLength": 80},
+            "limits": {"type": "object", "maxProperties": 32}
+          }
+        }
+      ]
+    },
+    "checkpointStep": {
+      "allOf": [
+        {"$ref": "#/$defs/commonStep"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "prompt", "choices"],
+          "properties": {
+            "id": {"$ref": "#/$defs/stepId"},
+            "kind": {"const": "checkpoint"},
+            "when": {"type": "string", "maxLength": 1000},
+            "next": {"$ref": "#/$defs/stepId"},
+            "description": {"type": "string", "maxLength": 500},
+            "prompt": {"type": "string", "minLength": 1, "maxLength": 2000},
+            "choices": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1, "maxLength": 80}
+            },
+            "expires_seconds": {"type": "integer", "minimum": 60, "maximum": 2592000}
+          }
+        }
+      ]
+    },
+    "branchStep": {
+      "allOf": [
+        {"$ref": "#/$defs/commonStep"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "cases"],
+          "properties": {
+            "id": {"$ref": "#/$defs/stepId"},
+            "kind": {"const": "branch"},
+            "when": {"type": "string", "maxLength": 1000},
+            "description": {"type": "string", "maxLength": 500},
+            "cases": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["when", "next_step"],
+                "properties": {
+                  "when": {"type": "string", "minLength": 1, "maxLength": 1000},
+                  "next_step": {"$ref": "#/$defs/stepId"}
+                }
+              }
+            },
+            "default_next": {"$ref": "#/$defs/stepId"}
+          }
+        }
+      ]
+    },
+    "ritualStep": {
+      "allOf": [
+        {"$ref": "#/$defs/commonStep"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "ritual", "arguments"],
+          "properties": {
+            "id": {"$ref": "#/$defs/stepId"},
+            "kind": {"const": "ritual"},
+            "when": {"type": "string", "maxLength": 1000},
+            "next": {"$ref": "#/$defs/stepId"},
+            "description": {"type": "string", "maxLength": 500},
+            "ritual": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "version"],
+              "properties": {
+                "id": {"$ref": "#/$defs/stableId"},
+                "version": {"type": "integer", "minimum": 1}
+              }
+            },
+            "arguments": {"type": "object", "maxProperties": 128},
+            "save_as": {"type": "string", "minLength": 1, "maxLength": 80}
+          }
+        }
+      ]
+    },
+    "emitStep": {
+      "allOf": [
+        {"$ref": "#/$defs/commonStep"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "value"],
+          "properties": {
+            "id": {"$ref": "#/$defs/stepId"},
+            "kind": {"const": "emit"},
+            "when": {"type": "string", "maxLength": 1000},
+            "next": {"$ref": "#/$defs/stepId"},
+            "description": {"type": "string", "maxLength": 500},
+            "value": {},
+            "artifact": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["media_type", "privacy"],
+              "properties": {
+                "media_type": {"type": "string", "minLength": 1, "maxLength": 160},
+                "privacy": {"enum": ["private", "room_local", "shareable"]},
+                "suggested_name": {"type": "string", "maxLength": 200}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "step": {
+      "oneOf": [
+        {"$ref": "#/$defs/actionStep"},
+        {"$ref": "#/$defs/scriptStep"},
+        {"$ref": "#/$defs/checkpointStep"},
+        {"$ref": "#/$defs/branchStep"},
+        {"$ref": "#/$defs/ritualStep"},
+        {"$ref": "#/$defs/emitStep"}
+      ]
+    },
+    "failurePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": ["stop_on_failure", "continue_on_failure", "checkpoint_on_failure", "retry"]
+        },
+        "maximum_retries": {"type": "integer", "minimum": 0, "maximum": 3},
+        "retry_backoff_seconds": {"type": "integer", "minimum": 0, "maximum": 3600}
+      }
+    }
+  }
+}
