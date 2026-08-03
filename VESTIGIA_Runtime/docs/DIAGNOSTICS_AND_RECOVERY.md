@@ -26,7 +26,7 @@ Doctor v0.2 reports:
   pack fragments;
 - image jobs by state, stale-running recovery policy, and terminal jobs still awaiting
   notification;
-- pending/observed/expired interface events;
+- pending/observed/expired interface events when that optional ledger is installed;
 - due bells and durable delivery-failure counts;
 - failed action-receipt count;
 - effective Discord policy counts, house budgets, image diagnostics, and capability count.
@@ -112,7 +112,8 @@ resume, or revise the bell.
 
 Reaction and other interface events remain pending until included in a successful resident turn.
 A failed or suppressed turn does not mark them observed. Expiry is explicit and historical
-records remain inspectable.
+records remain inspectable. The ledger is capability-detected so `doctor` remains usable on homes
+or builds where inbound interface-event persistence is not installed.
 
 ## Non-goals
 
