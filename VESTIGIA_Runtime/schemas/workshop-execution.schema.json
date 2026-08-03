@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vestigia.local/schemas/workshop-execution.schema.json",
+  "title": "VESTIGIA workshop execution plan and state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "execution_id",
+    "subject",
+    "plan_hash",
+    "resident_id_hash",
+    "room_id_hash",
+    "status",
+    "grant",
+    "budgets",
+    "trace",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "vestigia.workshop-execution.v0.1"},
+    "execution_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "version", "content_hash"],
+      "properties": {
+        "kind": {"enum": ["ritual", "script"]},
+        "id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "version": {"type": "integer", "minimum": 1},
+        "content_hash": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "parent": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["execution_id", "step_id"],
+      "properties": {
+        "execution_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "step_id": {"type": "string", "minLength": 1, "maxLength": 80}
+      }
+    },
+    "plan_hash": {"$ref": "#/$defs/sha256"},
+    "resident_id_hash": {"type": "string", "minLength": 1, "maxLength": 100},
+    "room_id_hash": {"type": "string", "minLength": 1, "maxLength": 100},
+    "status": {
+      "enum": [
+        "planned",
+        "starting",
+        "running",
+        "collecting",
+        "paused",
+        "interrupted",
+        "succeeded",
+        "partial",
+        "failed",
+        "cancelled",
+        "not_run",
+        "expired",
+        "quarantined"
+      ]
+    },
+    "sandbox": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["backend_id", "backend_version", "profile", "guarantees_hash"],
+      "properties": {
+        "backend_id": {"type": "string", "minLength": 1, "maxLength": 160},
+        "backend_version": {"type": "string", "minLength": 1, "maxLength": 80},
+        "profile": {"enum": ["expression", "local_process", "hardened"]},
+        "guarantees_hash": {"$ref": "#/$defs/sha256"},
+        "interpreter_environment_id": {"type": "string", "maxLength": 160}
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "arguments": {"type": "object", "maxProperties": 128},
+        "objects": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {"$ref": "#/$defs/objectRef"}
+        },
+        "mounts": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "object_id", "content_hash", "read_only"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+              },
+              "object_id": {"type": "string", "minLength": 1, "maxLength": 200},
+              "content_hash": {"$ref": "#/$defs/sha256"},
+              "read_only": {"const": true},
+              "privacy": {"enum": ["private", "room_local", "shareable"]}
+            }
+          }
+        }
+      }
+    },
+    "grant": {"$ref": "workshop-grant.schema.json"},
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["initial", "remaining"],
+      "properties": {
+        "initial": {"$ref": "#/$defs/budget"},
+        "remaining": {"$ref": "#/$defs/budget"}
+      }
+    },
+    "trace": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {"$ref": "#/$defs/traceEvent"}
+    },
+    "checkpoint": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["checkpoint_id", "step_id", "status", "choices", "state_hash", "expires_at"],
+      "properties": {
+        "checkpoint_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "step_id": {"type": "string", "minLength": 1, "maxLength": 80},
+        "status": {"enum": ["pending", "answered", "cancelled", "expired", "stale"]},
+        "prompt": {"type": "string", "maxLength": 2000},
+        "choices": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 80}
+        },
+        "choice": {"type": ["string", "null"], "maxLength": 80},
+        "state_hash": {"$ref": "#/$defs/sha256"},
+        "expires_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "outward_effect": {"enum": ["none", "possible", "confirmed"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "started_at": {"type": ["string", "null"], "format": "date-time"},
+    "completed_at": {"type": ["string", "null"], "format": "date-time"},
+    "expires_at": {"type": ["string", "null"], "format": "date-time"},
+    "warnings": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"type": "string", "maxLength": 1000}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "objectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object_id", "content_hash", "privacy"],
+      "properties": {
+        "object_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "content_hash": {"$ref": "#/$defs/sha256"},
+        "privacy": {"enum": ["private", "room_local", "shareable"]},
+        "media_type": {"type": "string", "maxLength": 160}
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["steps", "tool_calls", "provider_calls", "outward_actions", "wall_seconds"],
+      "properties": {
+        "steps": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "tool_calls": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "provider_calls": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "outward_actions": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "image_generations": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "artifact_bytes": {"type": "integer", "minimum": 0, "maximum": 10000000000},
+        "wall_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
+        "nested_depth": {"type": "integer", "minimum": 0, "maximum": 32}
+      }
+    },
+    "traceEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "event_type",
+        "status",
+        "created_at",
+        "outward_effect",
+        "receipt_ids"
+      ],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1},
+        "event_type": {
+          "enum": [
+            "plan_created",
+            "execution_started",
+            "step_started",
+            "step_completed",
+            "checkpoint_opened",
+            "checkpoint_answered",
+            "execution_paused",
+            "execution_resumed",
+            "execution_cancelled",
+            "execution_interrupted",
+            "execution_completed",
+            "artifact_collected",
+            "warning"
+          ]
+        },
+        "step_id": {"type": ["string", "null"], "maxLength": 80},
+        "status": {
+          "enum": ["succeeded", "partial", "failed", "cancelled", "not_run", "paused", "running"]
+        },
+        "created_at": {"type": "string", "format": "date-time"},
+        "input_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": {"type": "string", "minLength": 1, "maxLength": 200}
+        },
+        "output_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": {"type": "string", "minLength": 1, "maxLength": 200}
+        },
+        "receipt_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": {"type": "string", "minLength": 1, "maxLength": 200}
+        },
+        "outward_effect": {"enum": ["none", "possible", "confirmed"]},
+        "message": {"type": "string", "maxLength": 1000},
+        "budget_used": {"$ref": "#/$defs/budget"}
+      }
+    }
+  }
+}
