@@ -210,13 +210,23 @@ def operation_health(
             """,
             (resident_id,),
         ).fetchone()
-        interface_rows = connection.execute(
+        interface_table = connection.execute(
             """
-            SELECT status, COUNT(*) AS n FROM interface_events
-            WHERE resident_id=? AND room_id=? GROUP BY status
-            """,
-            (resident_id, room_id),
-        ).fetchall()
+            SELECT 1 FROM sqlite_master
+            WHERE type='table' AND name='interface_events'
+            """
+        ).fetchone()
+        interface_rows = (
+            connection.execute(
+                """
+                SELECT status, COUNT(*) AS n FROM interface_events
+                WHERE resident_id=? AND room_id=? GROUP BY status
+                """,
+                (resident_id, room_id),
+            ).fetchall()
+            if interface_table
+            else []
+        )
         failed_receipts = connection.execute(
             """
             SELECT COUNT(*) AS n FROM house_receipts
@@ -251,6 +261,7 @@ def operation_health(
             "execution_semantics": "at-least-once after stale-job recovery",
         },
         "interface_events": {
+            "available": bool(interface_table),
             "by_status": {str(row["status"]): int(row["n"]) for row in interface_rows},
         },
         "bells": {
