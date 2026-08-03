@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vestigia.local/schemas/workshop-grant.schema.json",
+  "title": "VESTIGIA workshop authority grant",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "subject",
+    "requested",
+    "granted",
+    "denied",
+    "limits",
+    "approval"
+  ],
+  "properties": {
+    "schema_version": {"const": "vestigia.workshop-grant.v0.1"},
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "version", "content_hash"],
+      "properties": {
+        "kind": {"enum": ["ritual", "script", "execution"]},
+        "id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "version": {"type": "integer", "minimum": 1},
+        "content_hash": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "requested": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {"$ref": "#/$defs/capabilityGrant"}
+    },
+    "granted": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {"$ref": "#/$defs/capabilityGrant"}
+    },
+    "denied": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["capability", "reason"],
+        "properties": {
+          "capability": {"type": "string", "minLength": 1, "maxLength": 160},
+          "requested_scope": {"type": "object", "maxProperties": 64},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "policy_source": {"type": "string", "maxLength": 200}
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wall_seconds", "tool_calls", "provider_calls", "outward_actions"],
+      "properties": {
+        "wall_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "tool_calls": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "provider_calls": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "outward_actions": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "image_generations": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "artifact_bytes": {"type": "integer", "minimum": 0, "maximum": 10000000000},
+        "nested_depth": {"type": "integer", "minimum": 0, "maximum": 32}
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resident_required", "operator_required", "status"],
+      "properties": {
+        "resident_required": {"type": "boolean"},
+        "operator_required": {"type": "boolean"},
+        "status": {"enum": ["pending", "approved", "denied", "expired", "revoked"]},
+        "resident_actor_id": {"type": "string", "maxLength": 160},
+        "operator_actor_id": {"type": "string", "maxLength": 160},
+        "approved_at": {"type": "string", "format": "date-time"},
+        "expires_at": {"type": ["string", "null"], "format": "date-time"},
+        "plan_hash": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "scope_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resident_id_hash": {"type": "string", "maxLength": 100},
+        "room_id_hash": {"type": "string", "maxLength": 100},
+        "interface": {"type": "string", "maxLength": 80},
+        "destination_hash": {"type": "string", "maxLength": 100}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "capabilityGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "scope", "effects", "outward_effect"],
+      "properties": {
+        "capability": {"type": "string", "minLength": 1, "maxLength": 160},
+        "scope": {"type": "object", "maxProperties": 64},
+        "effects": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 32,
+          "items": {
+            "enum": [
+              "read",
+              "compute",
+              "artifact_write",
+              "database_write",
+              "memory_proposal",
+              "identity_proposal",
+              "scheduler_change",
+              "provider_call",
+              "network_call",
+              "outward_message",
+              "outward_file",
+              "public_state_change"
+            ]
+          }
+        },
+        "outward_effect": {"enum": ["none", "possible", "confirmed"]},
+        "cost_class": {
+          "enum": [
+            "local_trivial",
+            "local_low",
+            "local_high",
+            "provider_low",
+            "provider_high",
+            "outward_low",
+            "outward_consequential"
+          ]
+        },
+        "confirmation": {"enum": ["none", "resident", "operator", "participant", "two_breath"]},
+        "expires_at": {"type": ["string", "null"], "format": "date-time"}
+      }
+    }
+  }
+}
