@@ -152,16 +152,16 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $canaryRoot = Join-Path $env:RUNNER_TEMP "v061-upgrade-canary"
-          $home = Join-Path $canaryRoot "synthetic-v061-home"
+          $canaryHome = Join-Path $canaryRoot "synthetic-v061-home"
           $baseline = Join-Path $canaryRoot "baseline-v061.json"
           New-Item -ItemType Directory -Force $canaryRoot | Out-Null
 
           $env:PYTHONPATH = Join-Path $env:LEGACY_ROOT "src"
           python -c "import pathlib, vestigia; root=pathlib.Path(r'$env:LEGACY_ROOT').resolve(); loaded=pathlib.Path(vestigia.__file__).resolve(); assert root in loaded.parents; assert vestigia.__version__ == '0.6.1'"
-          python ".github\scripts\v061_upgrade_canary.py" seed --home $home --evidence $baseline
+          python ".github\scripts\v061_upgrade_canary.py" seed --home $canaryHome --evidence $baseline
 
           "CANARY_ROOT=$canaryRoot" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "CANARY_HOME=$home" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "CANARY_HOME=$canaryHome" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "CANARY_BASELINE=$baseline" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Upgrade, turn, pack, restore, and verify under v0.7.0
