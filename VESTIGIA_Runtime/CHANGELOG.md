@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0 — Unreleased
+## 0.7.0 — 2026-08-03
 
 - Raised the default assembled prompt budget from 15,000 to 20,000 tokens while retaining
   per-home and environment overrides
@@ -18,8 +18,11 @@
   idempotent platform behavior, and distinct delivery receipts
 - Returned private-picture confirmation to the resident while preserving single use, expiry,
   image/content hash, resident, destination, interface, later-turn, and replay protections
-- Added root collaboration guidance, pull-request templates, and cross-platform CI
-- Expanded deterministic regression coverage from 109 to 112 tests
+- Added root collaboration guidance, pull-request templates, and Windows-focused CI
+- Expanded deterministic regression coverage from 109 to 118 tests
+- Validated a disposable fresh-home onboarding, receipted fake-provider turn, and hash-verified
+  pack/restore round trip; the live Windows canary covered reactions, image jobs, bells, file
+  management, and other basic harness operations
 
 ## 0.6.1 — 2026-07-30
 
