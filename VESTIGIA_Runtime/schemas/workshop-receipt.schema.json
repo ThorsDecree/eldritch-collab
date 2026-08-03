@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vestigia.local/schemas/workshop-receipt.schema.json",
+  "title": "VESTIGIA workshop receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_id",
+    "action",
+    "status",
+    "execution_id",
+    "subject",
+    "plan_hash",
+    "grant_hash",
+    "outward_effect",
+    "result_complete",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "vestigia.workshop-receipt.v0.1"},
+    "receipt_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    "action": {
+      "enum": [
+        "ritual.validate",
+        "ritual.preview",
+        "ritual.activate",
+        "ritual.disable",
+        "workshop.plan",
+        "workshop.execute",
+        "workshop.pause",
+        "workshop.resume",
+        "workshop.cancel",
+        "script.import",
+        "script.inspect",
+        "script.test",
+        "script.approve",
+        "script.activate",
+        "script.disable",
+        "sandbox.run",
+        "sandbox.collect"
+      ]
+    },
+    "status": {
+      "enum": [
+        "succeeded",
+        "partial",
+        "failed",
+        "cancelled",
+        "not_run",
+        "paused",
+        "expired",
+        "quarantined"
+      ]
+    },
+    "execution_id": {"type": ["string", "null"], "maxLength": 200},
+    "step_id": {"type": ["string", "null"], "maxLength": 80},
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "version", "content_hash"],
+      "properties": {
+        "kind": {"enum": ["ritual", "script", "execution", "sandbox_backend"]},
+        "id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "version": {"type": ["integer", "string"], "minLength": 1},
+        "content_hash": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "plan_hash": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "grant_hash": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "resident_id_hash": {"type": "string", "maxLength": 100},
+    "room_id_hash": {"type": "string", "maxLength": 100},
+    "input_refs": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/objectRef"}
+    },
+    "output_refs": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/objectRef"}
+    },
+    "child_receipt_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 512,
+      "items": {"type": "string", "minLength": 1, "maxLength": 200}
+    },
+    "outward_effect": {"enum": ["none", "possible", "confirmed"]},
+    "result_complete": {"type": "boolean"},
+    "retry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["safe", "requires_reconciliation"],
+      "properties": {
+        "safe": {"type": "boolean"},
+        "requires_reconciliation": {"type": "boolean"},
+        "reason": {"type": ["string", "null"], "maxLength": 1000},
+        "maximum_additional_attempts": {"type": "integer", "minimum": 0, "maximum": 3}
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "wall_ms": {"type": "integer", "minimum": 0},
+        "cpu_ms": {"type": ["integer", "null"], "minimum": 0},
+        "peak_memory_bytes": {"type": ["integer", "null"], "minimum": 0},
+        "tool_calls": {"type": "integer", "minimum": 0},
+        "provider_calls": {"type": "integer", "minimum": 0},
+        "outward_actions": {"type": "integer", "minimum": 0},
+        "input_bytes": {"type": "integer", "minimum": 0},
+        "output_bytes": {"type": "integer", "minimum": 0},
+        "artifacts": {"type": "integer", "minimum": 0}
+      }
+    },
+    "backend": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["id", "version", "profile", "guarantees_hash"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 160},
+        "version": {"type": "string", "minLength": 1, "maxLength": 80},
+        "profile": {"enum": ["expression", "local_process", "hardened"]},
+        "guarantees_hash": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "error": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["category", "safe_message", "private_details_omitted"],
+      "properties": {
+        "category": {
+          "enum": [
+            "validation",
+            "authorization",
+            "stale_plan",
+            "unavailable_capability",
+            "sandbox_start",
+            "sandbox_violation",
+            "resource_limit",
+            "timeout",
+            "cancelled",
+            "malformed_result",
+            "artifact_rejected",
+            "interrupted",
+            "unknown"
+          ]
+        },
+        "safe_message": {"type": "string", "maxLength": 2000},
+        "diagnostic_code": {"type": ["string", "null"], "maxLength": 200},
+        "private_details_omitted": {"type": "boolean"}
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"type": "string", "maxLength": 1000}
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": ["string", "null"], "format": "date-time"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "objectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object_id", "content_hash", "privacy"],
+      "properties": {
+        "object_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "content_hash": {"$ref": "#/$defs/sha256"},
+        "privacy": {"enum": ["private", "room_local", "shareable"]},
+        "media_type": {"type": "string", "maxLength": 160}
+      }
+    }
+  }
+}
