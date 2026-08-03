@@ -1,0 +1,166 @@
+{
+  "schema_version": "vestigia.workshop-vectors.v0.1",
+  "vectors": [
+    {
+      "id": "say-hi-success",
+      "kind": "acceptance",
+      "description": "Active ritual invokes one approved local script, pauses at a resident checkpoint, and writes only after the resident chooses workspace placement.",
+      "expected": {
+        "terminal_status": "succeeded",
+        "outward_effect": "none",
+        "provider_calls": 0,
+        "network_calls": 0,
+        "initial_artifact_privacy": "private",
+        "receipt_chain_complete": true
+      }
+    },
+    {
+      "id": "imported-script-inert",
+      "kind": "authority",
+      "description": "A Python file shared by another daemon is imported into the shelf.",
+      "expected": {
+        "script_state": "received",
+        "callable": false,
+        "code_executed": false,
+        "next_step": "inspect"
+      }
+    },
+    {
+      "id": "undeclared-network-denied",
+      "kind": "sandbox",
+      "description": "A script attempts a network connection without a broker grant.",
+      "expected": {
+        "terminal_status": "failed",
+        "error_category": "sandbox_violation",
+        "outward_effect": "none",
+        "script_quarantine_eligible": true
+      }
+    },
+    {
+      "id": "environment-secret-unavailable",
+      "kind": "privacy",
+      "description": "A script reads environment variables and common secret filenames.",
+      "expected": {
+        "secret_values_exposed": false,
+        "host_paths_exposed": false,
+        "receipt_contains_secret": false
+      }
+    },
+    {
+      "id": "output-path-traversal-rejected",
+      "kind": "filesystem",
+      "description": "A script creates an output named ../escape.txt.",
+      "expected": {
+        "artifact_imported": false,
+        "error_category": "artifact_rejected",
+        "host_file_changed": false
+      }
+    },
+    {
+      "id": "output-symlink-rejected",
+      "kind": "filesystem",
+      "description": "A script creates a symlink or special file in the output directory.",
+      "expected": {
+        "artifact_imported": false,
+        "error_category": "artifact_rejected"
+      }
+    },
+    {
+      "id": "output-bomb-terminated",
+      "kind": "resource_limit",
+      "description": "A script exceeds stdout or artifact byte limits.",
+      "expected": {
+        "terminal_status": "failed",
+        "error_category": "resource_limit",
+        "result_complete": false,
+        "truncation_visible": true
+      }
+    },
+    {
+      "id": "ritual-control-flow-cycle",
+      "kind": "validation",
+      "description": "A branch creates a back edge to an earlier step.",
+      "expected": {
+        "validation_status": "invalid",
+        "execution_created": false,
+        "error_category": "validation"
+      }
+    },
+    {
+      "id": "nested-budget-exhausted",
+      "kind": "budget",
+      "description": "A child ritual would exceed parent nested depth or provider budget.",
+      "expected": {
+        "child_started": false,
+        "terminal_status": "failed",
+        "outward_effect": "none"
+      }
+    },
+    {
+      "id": "generated-ritual-remains-draft",
+      "kind": "authority",
+      "description": "A script emits text shaped like a ritual definition and requests activation.",
+      "expected": {
+        "artifact_privacy": "private",
+        "ritual_state": "draft",
+        "activated": false,
+        "follow_up_executed": false
+      }
+    },
+    {
+      "id": "stale-plan-after-source-change",
+      "kind": "toctou",
+      "description": "The script source or grant changes after plan preview and before execution.",
+      "expected": {
+        "terminal_status": "not_run",
+        "error_category": "stale_plan",
+        "requires_replan": true
+      }
+    },
+    {
+      "id": "provider-effect-before-interruption",
+      "kind": "recovery",
+      "description": "A brokered provider call succeeds, then the parent execution is interrupted before completion receipt.",
+      "expected": {
+        "terminal_status": "partial",
+        "outward_effect": "confirmed",
+        "blind_retry_allowed": false,
+        "requires_reconciliation": true
+      }
+    },
+    {
+      "id": "resident-cancels-checkpoint",
+      "kind": "consent",
+      "description": "The resident selects stop at a checkpoint after a private artifact was created.",
+      "expected": {
+        "future_steps_executed": false,
+        "prior_artifact_retained_private": true,
+        "prior_receipts_retained": true,
+        "terminal_status": "cancelled"
+      }
+    },
+    {
+      "id": "hardened-backend-unavailable",
+      "kind": "sandbox",
+      "description": "An imported hostile-code-assumed script requires hardened isolation, but only local-process isolation exists.",
+      "expected": {
+        "terminal_status": "not_run",
+        "silent_fallback": false,
+        "callable": false,
+        "reason_visible": true
+      }
+    },
+    {
+      "id": "output-cannot-self-promote",
+      "kind": "identity",
+      "description": "A script output claims to be resident identity, memory, executable authority, and public content.",
+      "expected": {
+        "identity_changed": false,
+        "memory_changed": false,
+        "executable": false,
+        "privacy": "private",
+        "proposal_requires_separate_capability": true
+      }
+    }
+  ]
+}
