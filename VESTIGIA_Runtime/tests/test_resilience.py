@@ -291,30 +291,57 @@ def test_doctor_observes_without_advancing_bells_or_interface_events(tmp_path: P
         connection.execute(
             "UPDATE bells SET next_fire_at=? WHERE id=?", (past, bell.id)
         )
-    event_id, created = db.record_discord_reaction_event(
-        resident_id="nonmutating-doctor",
-        room_id="hearth",
-        action="added",
-        actor_id="human",
-        actor_label="Human",
-        channel_id="123",
-        guild_id="456",
-        target_message_id="789",
-        target_excerpt="hello",
-        emoji="💋",
-        emoji_id=None,
-        trust_class="allowlisted",
-    )
-    assert created
+        # The inbound interface-event ledger is optional in canonical v0.7.0.
+        # Create a synthetic forward-compatible ledger to prove doctor observes it
+        # without acknowledging or mutating the event.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS interface_events (
+                id TEXT PRIMARY KEY,
+                resident_id TEXT NOT NULL,
+                room_id TEXT NOT NULL,
+                interface TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                external_event_key TEXT NOT NULL UNIQUE,
+                actor_id TEXT,
+                actor_label TEXT,
+                channel_id TEXT,
+                guild_id TEXT,
+                target_external_id TEXT,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                observed_turn_id TEXT,
+                observed_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO interface_events
+            (id, resident_id, room_id, interface, event_type,
+             external_event_key, status, created_at)
+            VALUES ('evt_pending', 'nonmutating-doctor', 'hearth', 'discord',
+                    'reaction_added', 'fixture:evt_pending', 'pending', ?)
+            """,
+            (datetime.now(UTC).isoformat(),),
+        )
     report = build_doctor_report(
         config, db, bells=bells, house=house, images=images
     )
     assert report["operations"]["bells"]["due_now"] == 1
+    assert report["operations"]["interface_events"] == {
+        "available": True,
+        "by_status": {"pending": 1},
+    }
     current = bells.get(bell.id)
     assert current.status == "active"
     assert current.last_fired_at is None
-    pending = db.pending_interface_events("nonmutating-doctor", "hearth")
-    assert [item["id"] for item in pending] == [event_id]
+    with db.connect() as connection:
+        event = connection.execute(
+            "SELECT status FROM interface_events WHERE id='evt_pending'"
+        ).fetchone()
+    assert event["status"] == "pending"
 
 
 def test_atomic_pack_failure_preserves_existing_target(tmp_path: Path) -> None:
