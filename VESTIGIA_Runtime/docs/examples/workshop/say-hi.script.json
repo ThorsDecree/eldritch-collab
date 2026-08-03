@@ -1,0 +1,137 @@
+{
+  "schema_version": "vestigia.resident-script.v0.1",
+  "id": "resident.liora.say-hi-script",
+  "name": "Say hi from the inner machine",
+  "version": 1,
+  "state": "active",
+  "description": "Return one private greeting through the structured sandbox protocol.",
+  "language": {
+    "name": "python",
+    "version_range": ">=3.11",
+    "environment_id": "vestigia.python.stdlib.v1",
+    "environment_digest": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "source": {
+    "object_id": "script_source_example",
+    "sha256": "5d0aab71e392c0cd4f90ab843bbd7ca10a48e52f28d7c56708042c5a2e1d2e82",
+    "size_bytes": 383,
+    "media_type": "text/x-python",
+    "original_name": "say_hi.py"
+  },
+  "provenance": {
+    "authored_by": {
+      "lane": "resident",
+      "actor_id": "liora-gutterstar",
+      "claimed_name": "Liora Gutterstar"
+    },
+    "supplied_by": {
+      "lane": "resident",
+      "actor_id": "liora-gutterstar",
+      "claimed_name": "Liora Gutterstar"
+    },
+    "derived_from": [],
+    "source_object_ids": [],
+    "note": "Canonical machine-in-a-machine acceptance script."
+  },
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "type": "string",
+        "maxLength": 80
+      }
+    },
+    "required": [
+      "name"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "text": {
+        "type": "string",
+        "maxLength": 500
+      }
+    },
+    "required": [
+      "text"
+    ]
+  },
+  "requested_grant": {
+    "schema_version": "vestigia.workshop-grant.v0.1",
+    "subject": {
+      "kind": "script",
+      "id": "resident.liora.say-hi-script",
+      "version": 1,
+      "content_hash": "5d0aab71e392c0cd4f90ab843bbd7ca10a48e52f28d7c56708042c5a2e1d2e82"
+    },
+    "requested": [],
+    "granted": [],
+    "denied": [],
+    "limits": {
+      "wall_seconds": 10,
+      "tool_calls": 0,
+      "provider_calls": 0,
+      "outward_actions": 0,
+      "artifact_bytes": 10000,
+      "nested_depth": 0
+    },
+    "approval": {
+      "resident_required": true,
+      "operator_required": false,
+      "status": "approved",
+      "resident_actor_id": "liora-gutterstar",
+      "approved_at": "2026-08-03T17:00:00Z",
+      "expires_at": null,
+      "plan_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "scope_context": {
+      "resident_id_hash": "sha256:example-resident",
+      "room_id_hash": "sha256:example-room"
+    }
+  },
+  "sandbox": {
+    "minimum_profile": "local_process",
+    "allowed_backends": [
+      "local.process"
+    ],
+    "hostile_code_assumed": false
+  },
+  "limits": {
+    "wall_seconds": 10,
+    "cpu_seconds": 5,
+    "memory_mb": 128,
+    "processes": 1,
+    "open_files": 16,
+    "files_created": 0,
+    "input_bytes": 10000,
+    "output_bytes": 10000,
+    "stdout_bytes": 10000,
+    "stderr_bytes": 10000,
+    "trace_events": 100
+  },
+  "determinism": {
+    "declared": "deterministic",
+    "sources": []
+  },
+  "privacy": {
+    "source": "private",
+    "default_outputs": "private",
+    "shareable": true
+  },
+  "test_vector_ids": [
+    "say-hi-success"
+  ],
+  "compatibility": {
+    "runtime": ">=0.8,<1.0",
+    "sandbox_contract": "vestigia.sandbox-backend.v0.1",
+    "ritual_contract": "vestigia.resident-ritual.v0.1"
+  },
+  "tags": [
+    "acceptance",
+    "recursive",
+    "hello"
+  ]
+}
