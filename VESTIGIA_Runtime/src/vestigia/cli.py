@@ -13,6 +13,12 @@ from .bells import BellService
 from .config import load_config
 from .curation import Curator
 from .db import ContinuityDB
+from .diagnostics import (
+    build_doctor_report,
+    format_doctor_text,
+    support_bundle_receipt,
+    write_support_bundle,
+)
 from .home import initialize_home, validate_home
 from .house_tools import HousePort
 from .images import ImageService
@@ -223,7 +229,7 @@ def command_doctor(args: argparse.Namespace) -> int:
     config, db = _config_db(args.home, args.env_file)
     bells = BellService(
         db, str(config.get("resident.id")), str(config.get("room.id"))
-    ).list()
+    )
     curator = Curator(config, db)
     images = ImageService(config, db, fake=True)
     house = HousePort(
@@ -233,58 +239,29 @@ def command_doctor(args: argparse.Namespace) -> int:
         open_curation=curator.create_batch,
         image_service=images,
     )
-    index = house.refresh_index()
-    checks = {
-        "home": "ok",
-        "sqlite": sqlite_version(),
-        "fts5": "ok",
-        "openai_key": "present" if config.secret("OPENAI_API_KEY") else "absent",
-        "discord_token": "present" if config.secret("DISCORD_BOT_TOKEN") else "absent",
-        "discord_enabled": bool(config.get("interface.discord.enabled")),
-        "discord_policy": {
-            "allowed_users": len(config.get("discord.allowed_user_ids", [])),
-            "allowed_guild_channels": len(config.get("discord.allowed_channel_ids", [])),
-            "dms_allowed": bool(config.get("discord.allow_dms", True)),
-            "rejection_logging": bool(config.get("discord.log_rejections", False)),
-            "activity_window": bool(config.get("discord.activity_window", False)),
-        },
-        "active_residents": config.get("room.active_resident_ids"),
-        "bells": {
-            "enabled": bool(config.get("bells.enabled", True)),
-            "timezone": config.get("bells.timezone"),
-            "quiet_hours": [
-                config.get("bells.quiet_start"),
-                config.get("bells.quiet_end"),
-            ],
-            "visible": len(bells),
-            "active": sum(item.status == "active" for item in bells),
-        },
-        "curation": {
-            "enabled": bool(config.get("curation.enabled", True)),
-            "cadence_exchanges": int(config.get("curation.cadence_exchanges", 3)),
-            "automatic_promotion": False,
-            "silence_escalation": False,
-        },
-        "house": {
-            "enabled": bool(config.get("house.enabled", True)),
-            "index": index,
-            **house.private_turn_budget(),
-            "writable_roots": config.get("house.writable_roots", ["workspace"]),
-            "bookmarks": len(house.legible.list_bookmarks(limit=200)),
-            "pinned_receipts": len(
-                house.legible.list_receipts(limit=200, pinned_only=True)
-            ),
-        },
-        "images": images.diagnostics(),
-        "capability_count": len(house.registry.describe()),
-        "forge": {
-            "enabled": bool(config.get("forge.enabled", True)),
-            "max_steps": int(config.get("forge.max_steps", 6)),
-            "authority_expansion": False,
-        },
-    }
-    db.check_fts5()
-    _json(checks)
+    report = build_doctor_report(
+        config,
+        db,
+        bells=bells,
+        house=house,
+        images=images,
+        refresh_index=not bool(args.no_refresh_index),
+    )
+    if args.support_bundle:
+        bundle = write_support_bundle(
+            config, db, report, args.support_bundle
+        )
+        report["support_bundle"] = support_bundle_receipt(bundle)
+    if args.text:
+        print(format_doctor_text(report))
+        if report.get("support_bundle"):
+            item = report["support_bundle"]
+            print(
+                f"Support bundle: {item['path']} · sha256={item['sha256']} · "
+                f"bytes={item['size_bytes']}"
+            )
+    else:
+        _json(report)
     return 0
 
 
@@ -645,6 +622,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = sub.add_parser("doctor")
     _add_home_env(doctor)
+    doctor.add_argument(
+        "--text", action="store_true",
+        help="Print a compact human-readable report instead of JSON",
+    )
+    doctor.add_argument(
+        "--support-bundle",
+        help="Write a privacy-redacted support ZIP to this path",
+    )
+    doctor.add_argument(
+        "--no-refresh-index", action="store_true",
+        help="Inspect without refreshing the resident-readable house index",
+    )
     doctor.set_defaults(func=command_doctor)
 
     remember = sub.add_parser("remember", help="Create a reviewable memory proposal")
