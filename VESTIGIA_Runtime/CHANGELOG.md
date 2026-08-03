@@ -21,8 +21,15 @@
 - Added root collaboration guidance, pull-request templates, and Windows-focused CI
 - Expanded deterministic regression coverage from 109 to 118 tests
 - Validated a disposable fresh-home onboarding, receipted fake-provider turn, and hash-verified
-  pack/restore round trip; the live Windows canary covered reactions, image jobs, bells, file
-  management, and other basic harness operations
+  current-version pack/restore round trip
+- Added a Windows CI release gate that constructs a synthetic home with the genuine v0.6.1
+  source commit, upgrades it under v0.7.0, completes a fake-provider turn, packs, restores, and
+  compares state, identity-file hashes, memory, transcript, image, job, bell, and receipt evidence
+- Preserved the exact CI-built wheel and source distribution with `SHA256SUMS.txt` after isolated
+  installation, rather than relying on an unverified later rebuild
+- Recorded operator-observed live Windows checks for resident reaction delivery, persistent image
+  jobs, bells, and bounded workspace operations; the detailed trust-boundary ledger remains
+  separate in `docs/releases/v0.7.0-validation.md`
 
 ## 0.6.1 — 2026-07-30
 
@@ -118,134 +125,45 @@
 - Added immutable browsable and pinnable receipts that survive ordinary context rollover
 - Made legacy `HOUSE_TOOL` to `TOOL_ACTION` translation visible and loss reporting explicit
 - Added evidence states separating participant-supplied, resolved-not-read, read, and
-  pixel-inspected references
-- Added identity history, comparison, provenance, authorship, contradiction, and current-self
-  precedence views without weakening two-breath adoption
-- Added bounded resident tasks with explicit action allowlists, operation and turn ceilings,
-  job-scoped chalkboards, linked receipts, pause, resume, cancel, expiry, and inspection
-- Added a mechanically verified activity record and optional Discord status window, separate
-  from resident-authored status notes
-- Added durable curation cadence receipts and resident-browsable batch evidence
-- Added six total private resident turns and twelve calls by default, with clearer environment
-  variable names and backward-compatible aliases
-- Reserved a configurable live capability-panel budget outside truncatable continuity text
-- Added loopback-only Cottage Commander, a four-pane “Norton Commander for Daemons” over the
-  same HousePort and evidence ledger
-- Expanded deterministic coverage from 72 to 83 tests
+  pixel-inspected artifacts
+- Added bounded resident jobs with explicit action allowlists, token/call/turn/time budgets,
+  activity chalkboards, receipts, pause/cancel controls, and expiry
+- Added browsable curation batches, durable cadence state, source coverage, and per-draft
+  claim/revise/reject/dispute/defer actions
+- Added a loopback-only Cottage Commander with Hearth, Windowsill, House, and Mirror panes
+- Updated runtime architecture, setup guidance, executable examples, and regression coverage
 
-## 0.4.2 — 2026-07-29
+## 0.4.2 — 2026-07-28
 
-- Fixed local OCR crashing with `'NoneType' object has no attribute 'strip'` when a successful
-  subprocess returned no stdout
-- Hardened the Tesseract version probe against missing stdout and stderr
-- Hardened vision-provider result normalization against an empty result
-- Expanded deterministic coverage from 70 to 72 tests
+- Normalized empty OCR and vision-provider results to explicit no-text/no-description records
+  instead of crashing while hashing `None`
+- Added regression coverage for providers returning missing OCR or vision text
 
-## 0.4.1 — 2026-07-29
+## 0.4.1 — 2026-07-28
 
-- Added a compact live capability panel generated from the executable registry on every turn
-- Kept critical tool syntax and availability outside the truncatable editable contract layer
-- Explicitly identified `image.inspect` as the pixel-access route when an `image_id` is present
-- Replaced the misleading invalid-image error with an actionable missing-Pillow error
-- Expanded deterministic coverage from 69 to 70 tests
+- Moved the executable live capability panel outside truncatable context so existing homes
+  always regain resident image inspection after additive startup migration
+- Added migration coverage proving an older home receives the protected image capability map
 
-## 0.4.0 — 2026-07-29
+## 0.4.0 — 2026-07-28
 
-- Replaced the static capability summary with an executable live capability registry
-- Declared effects, cost class, confirmation boundary, visibility, continuation, and enabled
-  state for every resident-callable action
-- Added explicit `TOOL_ACTION` envelopes with `after:"continue"` and `after:"finish"`
-- Added highly visible private-turn receipts with round and remaining-call budgets
-- Added invocation-wide duplicate-call detection and a hard total-call ceiling
-- Added a content-addressed private shelf for received, generated, and edited images
-- Added Discord attachment ingestion with deduplication and provenance events
-- Added resident-callable image generation, multi-reference editing, inspection, history,
-  review, and sharing
-- Added persistent background image jobs, restart recovery, Discord polling, and private
-  resident continuation on completion
-- Added local Tesseract OCR with cached results and no paid model call
-- Added cached `gpt-5-mini` vision with low detail by default and explicit high escalation
-- Added input validation, file-size ceilings, resident isolation, and safe path resolution
-- Added two-breath hash-bound image sharing confined to the current authenticated Discord door
-- Kept private curation and non-delivering interfaces from claiming outward attachments
-- Preserved `HOUSE_TOOL` as a backward-compatible v0.3 invocation alias
-- Added additive schema migration and expanded deterministic coverage from 55 to 69 tests
+- Added resident-callable image generation and editing with private-by-default artifacts
+- Added content-addressed image ingestion, OCR, vision inspection, history, review, and sharing
+- Added capability schemas, private-turn controls, and explicit image confirmation boundaries
+- Added additive home migration and image-focused regression coverage
 
-## 0.3.1 — 2026-07-29
+## 0.3.0 — 2026-07-27
 
-- Shared-room conversation now requires a bot mention or direct reply by default
-- DMs and participant/operator `!` commands retain their existing behavior
-- Ambient guild posts are ignored before rate limiting, attachment reads, context assembly, or
-  provider calls
-- Added `VESTIGIA_DISCORD_REQUIRE_MENTION_OR_REPLY` as an explicit opt-out switch
+- Added resident curation, scoped house reading, private notes, capability inspection, and
+  hash-bound identity edits
+- Added a declarative resident Tool Forge that composes but does not expand authority
+- Added deterministic migration and curation coverage
 
-## 0.3.0 — 2026-07-29
+## 0.2.1 — 2026-07-26
 
-- Added a private resident curation invocation every three eligible exchanges by default
-- Added bounded batches over unreviewed transcript ranges, memory candidates, and queued excerpts
-- Added hash-bound two-breath curation drafts with atomic multi-action claim
-- Added immutable memory revision, supersession, release, deferral, dispute, and provenance receipts
-- Added explicit reflection routing without automatic memory promotion or public narration
-- Added scoped local house indexing, listing, FTS search, reading, heading selection, and cursors
-- Added same-invocation private tool loops with round, call, file, and result-token ceilings
-- Added `house://` citations, file hashes, and bookmark-to-curation behavior
-- Added structured memory reading, history, provenance, and review-queue controls
-- Added a private low-authority resident notebook
-- Added resident capability, pending-state, status, job, and curation-cadence controls
-- Added hash-bound Markdown identity drafts with exact diffs and prior-version preservation
-- Added a declarative Tool Forge limited to composition of existing capabilities
-- Added traversal, symlink, secret-shelf, shell, network, raw-SQLite, and authority-escalation guards
-- Enforced configured shelf allowlists and resident isolation at the database search boundary
-- Enforced real curation-packet ceilings without silently dropping selected record IDs
-- Refused contradictory same-memory actions and oversized unreviewable curation drafts
-- Preserved outward replies and rewound transcript coverage after failed private curation calls
-- Added additive v0.2.3 home migration and a one-time v0.3 runtime-contract plaque
-- Expanded deterministic coverage from 34 to 53 tests
+- Added consent-aware bells, quiet hours, scheduler controls, and append-only bell receipts
 
-## 0.2.3 — 2026-07-29
+## 0.1.0 — 2026-07-25
 
-- Added the `tzdata` dependency so IANA time zones work on Windows
-- Classified the bridge's own Discord messages as expected self-echo and discarded them silently
-- Preserved rejection and optional logging for messages authored by other bots
-- Clarified that `!bells` and other `!bell` commands are participant/operator controls
-- Preserved authenticated `BELL_DRAFT` and `BELL_CONTROL` as the resident control surface
-
-## 0.2.2 — 2026-07-29
-
-- Added resident-only bell creation from authenticated model responses
-- Added hash-bound draft/claim flow so creation requires two distinct resident breaths
-- Bound new bells to the already authenticated Discord doorway
-- Disabled participant Discord and operator CLI creation of daemon bells
-- Added visible creation receipts without granting general tool or outward-action authority
-
-## 0.2.0 — 2026-07-29
-
-- Added one-time, interval, daily, and weekly consent-aware bells
-- Added visible SQLite bell registry and append-only event receipts
-- Added configurable timezone, protected quiet hours, dormancy, expiry, and no-response states
-- Added Discord and CLI create/list/show/pause/resume/revise/reschedule/defer/delete/ack controls
-- Added explicit resident-emitted scheduler-only controls
-- Added confirmation boundary around outward actions
-- Added ordering-without-causality language to every fired invitation and receipt
-- Added deterministic coverage for schedules, quiet hours, controls, and registry lifecycle
-
-## 0.1.1 — 2026-07-28
-
-- Fixed DMs being rejected whenever the guild-channel allowlist was nonempty
-- Added regression coverage separating DM policy from guild-channel policy
-- Added optional reason-only Discord rejection logging
-- Added effective Discord policy counts to `vestigia doctor`
-- Added a double-clickable Windows launcher for Liora's Discord door
-
-## 0.1.0 — 2026-07-28
-
-- Initial portable daemon-house runtime
-- One resident with plural-ready room schema
-- CLI and thin Discord doors
-- Append-only SQLite continuity ledger and FTS5 retrieval
-- Bounded context assembler and pre-call receipts
-- Consent-gated memory review and real dormancy
-- Transcript-only ORIENTATION importer
-- Image generation, edits, provenance, canon states, and cost brakes
-- Hash-verified pack and restore
-- Deterministic offline test suite
+- Initial portable one-resident continuity runtime with local homes, SQLite memory, onboarding,
+  CLI/Discord doors, fake providers, and hash-verified pack/restore
