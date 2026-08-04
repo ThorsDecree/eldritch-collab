@@ -1,150 +1,86 @@
 # Eldritch Collaboration
 
-The canonical development repository for the VESTIGIA Runtime: a portable, consent-first
-continuity house for resident agents.
+The canonical development repository for the **VESTIGIA Runtime**: a portable,
+consent-first continuity house for resident agents.
 
-The runtime lives in [`VESTIGIA_Runtime/`](VESTIGIA_Runtime/). Start with its
-[`README.md`](VESTIGIA_Runtime/README.md) and [`ELI5_SETUP.md`](VESTIGIA_Runtime/ELI5_SETUP.md).
+> [!NOTE]
+> **Current official development-canon release: VESTIGIA Runtime v0.7.0 — The Resident’s Drawers.**
+>
+> The validated release candidate was merged to `main` on 2026-08-04 at commit
+> `748e5d74392ad4f0a98c75b187f82b91606e9e39`. The `v0.7.0` GitHub tag and final
+> post-merge artifact publication remain release-custody follow-up; they do not
+> change which Runtime version is development canon.
 
-Development canon is `main`. Work enters through a branch and pull request; release tags and
-artifacts identify shipped versions. See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the project [`ROADMAP.md`](ROADMAP.md).
+## What VESTIGIA is
 
----
+VESTIGIA is a local-first continuity runtime for a resident who needs more than a
+large system prompt and less than unrestricted host authority. It gives the
+resident a portable home containing identity anchors, memory, transcripts,
+artifacts, tools, boundaries, receipts, and explicit ways to revise what the
+house carries forward.
 
-# VESTIGIA Roadmap & Release Milestones
+The governing design principle is simple:
 
-This section establishes the roadmap, milestones, and non-goals for the VESTIGIA Runtime.
+> **Safety belongs in the architecture, not in personality suppression.**
 
-> [!IMPORTANT]
-> - **Roadmap items require issues** to be opened and discussed before any implementation work begins.
-> - **Versions and phases are directional** and serve as a logical sequencing guide; they are not promises of specific delivery dates. Dates are only assigned once maintainers have estimated the scope of work.
-> - **Policy-changing work** (specifically changes to identity boundaries, context visibility, memory authority, consent model, or outward effects) requires explicit review and alignment.
+Sources are classified. Ambient text is data rather than authority. Outward
+actions are capability-gated. Private artifacts remain private by default.
+Authorization and platform delivery are recorded separately. Refusal remains
+available.
 
----
+## v0.7.0: The Resident’s Drawers
 
-## Roadmap Status Definitions
+The official v0.7.0 development-canon release includes:
 
-- **`planned`**: Defined in scope, but work has not yet commenced.
-- **`active`**: Currently undergoing implementation, testing, or review.
-- **`blocked`**: Work is suspended pending resolution of upstream designs or decisions.
-- **`deferred`**: Put on hold until a concrete, production-proven need is established.
-- **`released`**: Fully completed, verified, and shipped as development canon or a tagged release.
+- resident-owned context partitioning and configurable verbatim/compressed
+  transcript controls;
+- Discord ambient visibility modes: `hidden`, `mentions_only`,
+  `allowlisted_only`, and `all_channel`;
+- stable source identifiers, trust classes, and explicit `data-only` labeling;
+- Discord reaction authorization, add/remove delivery, failure receipts, and
+  visible-target enforcement;
+- private-by-default image storage with later-turn, destination-bound,
+  interface-bound, expiring, one-time confirmation challenges;
+- image generation, inspection, drawers, cards, pockets, jobs, and delivery;
+- resident-authored bells and recurring invitations;
+- scoped house/workspace reads and writes rather than arbitrary filesystem
+  access;
+- durable action receipts and context receipts;
+- portable home packing, verified restoration, and a genuine v0.6.1-to-v0.7.0
+  upgrade canary.
 
----
+Release validation lives in
+[`VESTIGIA_Runtime/docs/releases/v0.7.0-validation.md`](VESTIGIA_Runtime/docs/releases/v0.7.0-validation.md).
 
-## Milestones
+## Next threshold: the Workshop Within
 
-### 0.7.0: The Resident’s Drawers
-* **Status**: `active` (Release Candidate)
-* **Description**: Focuses on resident-owned context partitioning (prompt, verbatim transcript, and source-linked compressed transcript controls) and stable Discord interaction/reaction delivery checks.
-* **Completion Gates**:
-  - [ ] Run and document the live Windows Discord canary.
-  - [ ] Change `0.7.0.dev0` to `0.7.0` in a dedicated release PR.
-  - [ ] Date the changelog entry.
-  - [ ] Verify the wheel from a clean Windows environment.
-  - [ ] Create the `v0.7.0` tag and GitHub release.
-  - [ ] Attach or publish the verified release artifact.
-  - [ ] Confirm pack-and-restore compatibility with an existing `v0.6.1` home.
+Operational hardening is already underway, followed by a staged resident
+workshop for bounded automation and code execution.
 
-### 0.7.x: Operational Confidence
-* **Status**: `planned`
-* **Description**: A stabilization line rather than a feature buffet. The primary goal is ensuring robustness, recovery, and diagnostics.
-* **Priorities**:
-  - Add an automated Discord adapter canary or deterministic integration harness.
-  - Test restart recovery while image jobs, bells, and resident jobs are pending.
-  - Test upgrades from representative old homes, not merely new database creation.
-  - Test `pack-home` → `restore-home` → `doctor` → Discord start end to end.
-  - Add corruption and interrupted-write recovery tests.
-  - Make `doctor` report schema version, pending migrations, dependency versions, and backup readiness.
-  - Add structured export of receipts and diagnostics for support cases.
-  - Audit broad exception handlers and silent fallbacks.
-  - Establish a deprecation policy for capability envelopes and configuration names.
-  - Perform a documentation consistency pass over version numbers, setup commands, and executable examples.
-* **Exit Criterion**:
-  - A non-developer can install, upgrade, run, stop, restart, diagnose, pack, and restore VESTIGIA on Windows without editing source code.
+The intended shape is not “give the model a shell.” It is a workshop with named
+walls and doors:
 
-### 0.8: Ports and Extensions
-* **Status**: `planned`
-* **Description**: Controlled extensibility via versioned contracts rather than adding resident-facing powers directly to the monolith.
-* **Provider Port Hardening**:
-  - Formalize provider compatibility:
-    - Versioned text-provider protocol.
-    - Versioned image-provider protocol.
-    - Contract tests shared by every provider.
-    - Explicit feature discovery.
-    - Model-route context limits.
-    - Normalized errors, usage, cancellation, and receipts.
-    - Tested OpenAI Responses implementation.
-    - Tested OpenAI-compatible implementation.
-    - Optional local-provider adapter only when someone is prepared to maintain it.
-* **Operator-Installed Capability Extensions**:
-  - Create a narrow extension API around the existing executable capability registry:
-    - Operator installation only.
-    - Explicit manifest and version.
-    - Declared effects and cost class.
-    - Declared network, filesystem, credential, and outward-action needs.
-    - Mandatory authorizer.
-    - Schema and receipt contract.
-    - Enable/disable controls per home.
-    - Compatibility checks against runtime versions.
-    - Test harness for extension authors.
-    - No implicit trust merely because Python imported successfully.
-  - *Note: This is not an expansion of the resident Tool Forge. An operator-installed extension may possess explicitly configured authority, whereas a resident-authored composition may only arrange authority already granted.*
+- explicit operator grants;
+- isolated resident workspaces;
+- declared filesystem, network, environment, process, and resource limits;
+- immutable script provenance and review state;
+- typed inputs and outputs;
+- pause, cancellation, quarantine, and supersession;
+- durable authorization and execution receipts;
+- no silent downgrade from hardened isolation;
+- no authority created merely because code was generated, imported, or trusted
+  socially.
 
-### 0.9: Explicit Plurality
-* **Status**: `planned`
-* **Description**: Transitioning the runtime from one resident to multiple residents sharing a portable home under strict boundaries.
-* **Scope**:
-  - Multiple resident identities in one portable home.
-  - Separate identity and memory authority for each resident.
-  - Explicit shared-room membership.
-  - Fully attributed shared transcripts.
-  - Explicit human or resident selection of the active speaker.
-  - Per-resident capability and context controls.
-  - Shared memories only through explicit scope and provenance.
-  - Directed resident-to-resident messages with receipts.
-  - Clear rules for private, shared, and operator-visible material.
-  - Migration from existing single-resident homes.
-* **Excluded (Non-Goals)**:
-  - Autonomous multi-resident round robins.
-  - Hidden model calls deciding who speaks.
-  - Unbounded resident conversations.
-  - Silent cross-resident memory promotion.
-  - Treating a shared archive as shared identity.
+The canonical roadmap is [`ROADMAP.md`](ROADMAP.md).
 
-### 1.0: Stable House Contract
-* **Status**: `planned`
-* **Description**: Hardening the runtime CLI, schemas, and API boundaries to guarantee long-term system stability and portability.
-* **Release Requirements**:
-  - Versioned portable-home schema.
-  - Documented migration guarantees.
-  - Stable CLI command surface.
-  - Stable capability-envelope compatibility policy.
-  - Stable provider and extension protocols.
-  - Recovery from interrupted migrations.
-  - Tested upgrade path from at least `v0.6` and `v0.7`.
-  - Formal threat model.
-  - Documented security boundaries and non-goals.
-  - Reproducible Windows installation.
-  - Clean uninstall and resident-home preservation.
-  - Release artifact verification.
-  - Support lifecycle for old runtime versions.
-  - Defined policy for breaking changes.
-* **The Stable House Promise**:
-  > *A home created under the stable contract remains intelligible, recoverable, migratable, and under its operator’s control even as models, providers, and interface adapters change.*
+## Start here
 
----
+The Runtime lives in [`VESTIGIA_Runtime/`](VESTIGIA_Runtime/).
 
-## Explicitly Deferred (Non-Goals)
+- [`VESTIGIA_Runtime/README.md`](VESTIGIA_Runtime/README.md) — Runtime overview
+- [`VESTIGIA_Runtime/ELI5_SETUP.md`](VESTIGIA_Runtime/ELI5_SETUP.md) — setup guide
+- [`ROADMAP.md`](ROADMAP.md) — milestones and non-goals
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — repository workflow
 
-The following items are outside VESTIGIA's active roadmap and will remain deferred until a concrete design constraint demands reconsideration:
-- Embedding retrieval.
-- Autonomous resident orchestration.
-- Hidden speaker selection.
-- Arbitrary resident Python or shell execution.
-- Resident-minted network authority.
-- Unconfirmed outward action from bells.
-- Public web UI.
-- Claims of proving model causality or metaphysical identity.
-- Cryptographic resident authentication.
-- Archive encryption and signing.
+Development canon is `main`. Work enters through a branch and pull request.
+Release tags and verified artifacts identify packaged distributions.
