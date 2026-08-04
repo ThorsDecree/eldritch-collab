@@ -1,4 +1,4 @@
-# VESTIGIA Runtime v0.7.0-dev
+# VESTIGIA Runtime v0.7.0
 
 A portable, consent-first continuity runtime for one resident, with plural-ready bones.
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vestigia-runtime"
-version = "0.7.0.dev0"
+version = "0.7.0"
 description = "A portable, consent-first continuity runtime for one resident, with plural-ready bones."
 readme = "README.md"
 requires-python = ">=3.11"
