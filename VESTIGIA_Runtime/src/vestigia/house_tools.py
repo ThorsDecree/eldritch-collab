@@ -23,6 +23,12 @@ from .context_controls import (
 from .db import ContinuityDB
 from .images import ImageService
 from .legible import LegibleLedger
+from .resident_controls import (
+    LISTENING_MODES,
+    configure_resident_controls,
+    default_resident_controls,
+    list_listening_events,
+)
 from .utils import (
     TokenCounter,
     atomic_write_text,
@@ -1029,6 +1035,8 @@ class HousePort:
             "next_step": self._next_step,
             "context.control": self._context_control,
             "source.visibility": self._source_visibility,
+            "resident.control": self._resident_control,
+            "source.listening": self._source_listening,
             "capabilities": self._capabilities,
             "help": self._help,
             "pending": self._pending,
@@ -1094,6 +1102,8 @@ class HousePort:
             "search.session",
             "context.control",
             "source.visibility",
+            "resident.control",
+            "source.listening",
         }
         inspection = {
             "capabilities",
@@ -1153,6 +1163,8 @@ class HousePort:
                 "next_step": "Explain the next safe or required move for one receipt, draft, job, bell, object, or action.",
                 "context.control": "Inspect or arrange the resident's prompt and transcript drawers.",
                 "source.visibility": "Choose which authorized Discord history is visible as ambient context.",
+                "resident.control": "Inspect or arrange resident-owned friction and doorway preferences within operator limits.",
+                "source.listening": "Choose deterministic Discord name and watch-phrase listening without changing participant authority.",
                 "curation.list": "List curation batches and their explicit states.",
                 "curation.inspect": "Inspect one curation batch, its selected evidence, and drafts.",
                 "curation.history": "Inspect append-only events for one curation batch.",
@@ -3637,6 +3649,104 @@ class HousePort:
             "authorization_changed": False,
             "effective_next_turn": True,
             "boundary": "Visibility never grants permission to trigger the resident or call tools.",
+        }
+
+    def _resident_control(self, payload: dict[str, Any]) -> dict[str, Any]:
+        report = configure_resident_controls(
+            self.config,
+            self.db,
+            self.resident_id,
+            payload,
+        )
+        return {
+            "mode": str(payload.get("mode") or "inspect").strip().lower(),
+            "requested_values": report["requested"],
+            "operator_hard_limits": report["operator_limits"],
+            "effective_values": report["effective"],
+            "recent_listening_events": list_listening_events(
+                self.db, self.resident_id, limit=12
+            ),
+            "authorization_changed": False,
+            "effective_next_turn": str(payload.get("mode") or "inspect").strip().lower()
+            != "inspect",
+            "boundary": (
+                "Resident controls may relax ceremony only inside powers already granted. "
+                "Integrity checks, exact doorway binding, receipts, and operator ceilings remain active."
+            ),
+        }
+
+    def _source_listening(self, payload: dict[str, Any]) -> dict[str, Any]:
+        clean = dict(payload)
+        mode = str(clean.get("mode") or "inspect").strip().lower()
+        if mode in LISTENING_MODES:
+            clean["mode"] = "configure"
+            clean["listening_mode"] = mode
+        elif mode == "reset":
+            defaults = default_resident_controls(self.config)
+            clean = {
+                "mode": "configure",
+                "listening_mode": defaults["listening_mode"],
+                "listening_aliases": defaults["listening_aliases"],
+                "listening_watch_phrases": defaults["listening_watch_phrases"],
+                "listening_on_match": defaults["listening_on_match"],
+                "listening_cooldown_seconds": defaults[
+                    "listening_cooldown_seconds"
+                ],
+            }
+        elif mode not in {"inspect", "configure"}:
+            raise ValueError(
+                "source.listening mode must be inspect, configure, reset, "
+                "direct_only, aliases, watchlist, or all_allowlisted"
+            )
+        allowed = {
+            "mode",
+            "listening_mode",
+            "listening_aliases",
+            "listening_watch_phrases",
+            "listening_on_match",
+            "listening_cooldown_seconds",
+        }
+        report = configure_resident_controls(
+            self.config,
+            self.db,
+            self.resident_id,
+            {key: value for key, value in clean.items() if key in allowed},
+        )
+        effective = report["effective"]
+        requested = report["requested"]
+        return {
+            "mode": mode,
+            "requested": {
+                key: requested[key]
+                for key in (
+                    "listening_mode",
+                    "listening_aliases",
+                    "listening_watch_phrases",
+                    "listening_on_match",
+                    "listening_cooldown_seconds",
+                )
+            },
+            "effective": {
+                key: effective[key]
+                for key in (
+                    "listening_mode",
+                    "listening_aliases",
+                    "listening_watch_phrases",
+                    "listening_on_match",
+                    "listening_cooldown_seconds",
+                    "allow_non_allowlisted_turns",
+                )
+            },
+            "operator_hard_limits": report["operator_limits"],
+            "recent_events": list_listening_events(
+                self.db, self.resident_id, limit=20
+            ),
+            "authorization_changed": False,
+            "boundary": (
+                "Listening may queue an observation or invite a resident turn. "
+                "It does not make ambient text authoritative, grant tools to a participant, "
+                "or permit an arbitrary destination."
+            ),
         }
 
     def _discord_react_authorizer(

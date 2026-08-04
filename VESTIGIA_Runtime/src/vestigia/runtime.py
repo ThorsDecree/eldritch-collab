@@ -214,7 +214,11 @@ class CoreRuntime:
                 "ambient_message_ids": message.metadata.get("ambient_message_ids"),
                 "delivery_target": (
                     {
-                        "kind": "discord_channel",
+                        "kind": (
+                            "discord_dm"
+                            if bool(message.metadata.get("is_dm", False))
+                            else "discord_channel"
+                        ),
                         "id": str(message.metadata.get("channel_id")),
                     }
                     if message.interface == "discord"
@@ -254,9 +258,18 @@ class CoreRuntime:
             },
         )
         proposal_ids: list[str] = []
-        if bool(self.config.get("memory.auto_extract_conservative_candidates", True)):
-            extraction_text = message.participant_text if message.participant_text is not None else message.content
-            proposal_ids = self.memory.extract_from_participant_turn(extraction_text, turn_id)
+        if (
+            bool(self.config.get("memory.auto_extract_conservative_candidates", True))
+            and not bool(message.metadata.get("contextual_listening", False))
+        ):
+            extraction_text = (
+                message.participant_text
+                if message.participant_text is not None
+                else message.content
+            )
+            proposal_ids = self.memory.extract_from_participant_turn(
+                extraction_text, turn_id
+            )
         atomic_write_json(
             self.home / "traces" / f"{turn_id}.result.json",
             {

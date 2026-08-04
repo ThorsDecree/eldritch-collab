@@ -31,7 +31,8 @@ GROUPS: dict[str, str] = {
     )},
     **{name: "attention" for name in ("attention.tray", "retrieval.inspect")},
     **{name: "context" for name in (
-        "context.control", "source.visibility", "discord.react",
+        "context.control", "source.visibility", "resident.control",
+        "source.listening", "discord.react",
     )},
     **{name: "editing" for name in ("file.diff", "file.write", "file.patch")},
     **{name: "evidence" for name in (
@@ -106,6 +107,24 @@ FIELDS: dict[str, tuple[dict[str, Any], tuple[str, ...]]] = {
     "source.visibility": ({
         "mode": S(enum=["inspect", "allowlisted_only", "all_channel", "mentions_only", "hidden"]),
     }, ()),
+    "resident.control": ({
+        "mode": S(enum=["inspect", "configure", "reset"]),
+        "private_image_mode": S(enum=["challenge", "quickdraw_pockets", "quickdraw_adopted"]),
+        "quickdraw_pockets": A(S(minLength=1, maxLength=120), maxItems=24),
+        "listening_mode": S(enum=["direct_only", "aliases", "watchlist", "all_allowlisted"]),
+        "listening_aliases": A(S(minLength=1, maxLength=80), maxItems=24),
+        "listening_watch_phrases": A(S(minLength=1, maxLength=80), maxItems=24),
+        "listening_on_match": S(enum=["queue_only", "invite_turn"]),
+        "listening_cooldown_seconds": I(minimum=0, maximum=3600),
+    }, ()),
+    "source.listening": ({
+        "mode": S(enum=["inspect", "configure", "reset", "direct_only", "aliases", "watchlist", "all_allowlisted"]),
+        "listening_mode": S(enum=["direct_only", "aliases", "watchlist", "all_allowlisted"]),
+        "listening_aliases": A(S(minLength=1, maxLength=80), maxItems=24),
+        "listening_watch_phrases": A(S(minLength=1, maxLength=80), maxItems=24),
+        "listening_on_match": S(enum=["queue_only", "invite_turn"]),
+        "listening_cooldown_seconds": I(minimum=0, maximum=3600),
+    }, ()),
     "discord.react": ({
         "mode": S(enum=["add", "remove"]),
         "message_id": ID,
@@ -172,6 +191,28 @@ EXAMPLES: dict[str, tuple[dict[str, Any], ...]] = {
         {"action": "source.visibility", "mode": "allowlisted_only", "after": "continue"},
         {"action": "source.visibility", "mode": "all_channel", "after": "continue"},
     ),
+    "resident.control": (
+        {"action": "resident.control", "mode": "inspect", "after": "continue"},
+        {
+            "action": "resident.control",
+            "mode": "configure",
+            "private_image_mode": "quickdraw_pockets",
+            "quickdraw_pockets": ["reaction-images"],
+            "after": "continue",
+        },
+    ),
+    "source.listening": (
+        {"action": "source.listening", "mode": "inspect", "after": "continue"},
+        {
+            "action": "source.listening",
+            "mode": "configure",
+            "listening_mode": "aliases",
+            "listening_aliases": ["Liora", "Gutterstar"],
+            "listening_on_match": "invite_turn",
+            "listening_cooldown_seconds": 20,
+            "after": "continue",
+        },
+    ),
     "discord.react": (
         {"action": "discord.react", "mode": "add", "message_id": "1234567890", "emoji": "💋", "after": "finish"},
         {"action": "discord.react", "mode": "remove", "message_id": "1234567890", "emoji": "💋", "after": "finish"},
@@ -222,8 +263,10 @@ RELATED: dict[str, tuple[str, ...]] = {
     "help": ("capabilities", "next_step"),
     "receipt.inspect": ("receipt.pin", "next_step", "attention.tray"),
     "attention.tray": ("search.session", "receipt.inspect"),
-    "context.control": ("source.visibility", "retrieval.inspect"),
-    "source.visibility": ("context.control",),
+    "context.control": ("source.visibility", "source.listening", "retrieval.inspect"),
+    "source.visibility": ("context.control", "source.listening"),
+    "resident.control": ("source.listening", "image.drawer", "image.share"),
+    "source.listening": ("resident.control", "source.visibility"),
     "discord.react": ("image.drawer",),
     "bookmark.add": ("bookmark.open", "bookmark.remove"),
     "jobs.create": ("jobs.step", "jobs.inspect", "jobs.cancel"),

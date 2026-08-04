@@ -17,6 +17,10 @@ v0.7 is **The Resident's Drawers**: resident-owned prompt/transcript controls, a
 kernel, source visibility curtains that do not alter authorization, resident-triggered private
 picture confirmation, and compact Discord emoji reactions.
 
+The active v0.7.x line adds resident doorway controls: pocket-scoped private-picture
+quick-draw, deterministic alias/watch-phrase listening, hash-only queue events for
+non-allowlisted matches, and requested/operator/effective policy inspection.
+
 v0.5 is **The Legible House**: stable objects, immutable retrievable receipts, true reading
 bookmarks, a bounded writable workspace, consent-aware identity history, browsable curation
 runs, longer bounded private work with an activity chalkboard, and a loopback-only four-pane
@@ -25,8 +29,9 @@ Cottage Commander over the same ledger.
 See [UPGRADE_v0.6.1.md](UPGRADE_v0.6.1.md),
 [UPGRADE_v0.6.0.md](UPGRADE_v0.6.0.md),
 [docs/IMAGES.md](docs/IMAGES.md), and
-[docs/ATTENTION_AND_SEARCH.md](docs/ATTENTION_AND_SEARCH.md), and
-[docs/CONTEXT_CONTROLS.md](docs/CONTEXT_CONTROLS.md).
+[docs/ATTENTION_AND_SEARCH.md](docs/ATTENTION_AND_SEARCH.md),
+[docs/CONTEXT_CONTROLS.md](docs/CONTEXT_CONTROLS.md), and
+[docs/RESIDENT_CONTROLS.md](docs/RESIDENT_CONTROLS.md).
 
 v0.4.2 safely handles empty OCR and vision-provider output instead of crashing while
 normalizing a result.
@@ -100,6 +105,8 @@ capability enforcement, Discord context, and outward image-sharing boundaries:
 - Configurable 20,000-token default ceiling with inspectable pre-call receipts
 - Resident-owned verbatim and source-linked compressed transcript drawers
 - Resident-controlled ambient Discord visibility without ingress-authority expansion
+- Resident-configurable literal alias/watch-phrase listening with queue-only and invite-turn modes
+- Pocket-scoped private-picture quick-draw that preserves hash and exact-doorway verification
 - Compact `[[REACT {...}]]` emoji reactions with separate platform-delivery receipts
 - Conservative, reviewable memory proposals
 - `ORIENTATION`, `ACTIVE`, `DORMANT`, `AWAKENING`, and `ARCHIVED` states
