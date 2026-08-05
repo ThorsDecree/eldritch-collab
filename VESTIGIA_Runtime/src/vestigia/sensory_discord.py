@@ -91,7 +91,11 @@ def patch(module: Any) -> None:
         mode = str(controls.get("attention_mode") or "present")
         retention = str(controls.get("listening_retention") or "live_context")
         allowed_signals = {
-            str(item) for item in controls.get("listening_ingress_signals", [])
+            str(item)
+            for item in controls.get(
+                "listening_ingress_signals",
+                ["mention", "reply", "dm", "command", "ambient_text"],
+            )
         }
         included = {str(item) for item in controls.get("listening_channel_ids", [])}
         excluded = {
