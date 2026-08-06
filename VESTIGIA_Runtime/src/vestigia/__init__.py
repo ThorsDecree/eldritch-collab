@@ -11,3 +11,8 @@ from .attention_apparatus import install_core as _install_attention_router
 
 _install_attention_router()
 del _install_attention_router
+
+from .attention_keyring import install_core as _install_attention_keyring
+
+_install_attention_keyring()
+del _install_attention_keyring
