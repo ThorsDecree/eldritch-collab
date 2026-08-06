@@ -25,6 +25,9 @@ The capability does not accept inline or imported source. General script import 
 the resident script shelf can represent immutable provenance, inspection, testing, approval,
 activation, quarantine, disablement, and supersession.
 
+Installing or upgrading this slice does not scan, import, inspect, or execute existing `.py` files.
+Workshop tables and private directories are created lazily when the capability is first used.
+
 ## Honest backend descriptor
 
 The backend advertises profile `local_process` and reports only guarantees enforced by this slice:
