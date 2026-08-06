@@ -1,0 +1,64 @@
+{
+  "schema_version": "vestigia.test-home-matrix.v0.1",
+  "fixtures": [
+    {
+      "release": "0.1.x",
+      "schema_meta": "1",
+      "contract_marker": null,
+      "drop_tables": [
+        "bells", "bell_events", "bell_drafts",
+        "curation_state", "curation_batches", "curation_queue", "curation_drafts",
+        "curation_events", "curation_reflections",
+        "house_documents", "house_chunks", "house_cursors", "house_events",
+        "resident_notes", "identity_drafts", "resident_tool_drafts", "resident_tools",
+        "resident_jobs", "attention_tray_items", "search_sessions", "search_session_events",
+        "house_objects", "house_object_events", "house_receipts",
+        "house_attention_breadcrumbs", "house_bookmarks", "house_activities",
+        "image_cards", "image_pockets", "interface_events"
+      ]
+    },
+    {
+      "release": "0.3.x",
+      "schema_meta": "2",
+      "contract_marker": "## Resident house and curation controls (v0.3)",
+      "drop_tables": [
+        "house_objects", "house_object_events", "house_receipts",
+        "house_attention_breadcrumbs", "house_bookmarks", "house_activities",
+        "attention_tray_items", "search_sessions", "search_session_events",
+        "image_cards", "image_pockets", "interface_events"
+      ]
+    },
+    {
+      "release": "0.4.x",
+      "schema_meta": "2",
+      "contract_marker": "## Executable resident capabilities and image tools (v0.4)",
+      "drop_tables": [
+        "house_objects", "house_object_events", "house_receipts",
+        "house_attention_breadcrumbs", "house_bookmarks", "house_activities",
+        "attention_tray_items", "search_sessions", "search_session_events",
+        "image_cards", "image_pockets", "interface_events"
+      ]
+    },
+    {
+      "release": "0.5.x",
+      "schema_meta": "3",
+      "contract_marker": "## Legible House and resident workspace (v0.5)",
+      "drop_tables": [
+        "attention_tray_items", "search_sessions", "search_session_events",
+        "image_cards", "image_pockets", "interface_events"
+      ]
+    },
+    {
+      "release": "0.6.x",
+      "schema_meta": "3",
+      "contract_marker": "## Picture Drawer and resident attention (v0.6)",
+      "drop_tables": ["interface_events"]
+    },
+    {
+      "release": "0.7.x",
+      "schema_meta": "4",
+      "contract_marker": "## Legible capability contracts and recovery (v0.6.1)",
+      "drop_tables": []
+    }
+  ]
+}

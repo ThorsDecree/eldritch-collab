@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 import zipfile
@@ -18,6 +19,46 @@ EXCLUDED_NAMES = {".env", ".env.local"}
 EXCLUDED_SUFFIXES = {".db-wal", ".db-shm", ".pyc"}
 
 
+def _collect_pack_files(home: Path) -> tuple[list[tuple[Path, str]], list[str]]:
+    files: list[tuple[Path, str]] = []
+    issues: list[str] = []
+    for path in sorted(home.rglob("*")):
+        if path.is_symlink():
+            issues.append(f"symbolic link: {path.relative_to(home).as_posix()}")
+            continue
+        if not path.is_file():
+            continue
+        relative = path.relative_to(home)
+        if path.name in EXCLUDED_NAMES or any(
+            path.name.endswith(suffix) for suffix in EXCLUDED_SUFFIXES
+        ):
+            continue
+        if "__pycache__" in relative.parts:
+            continue
+        files.append((path, relative.as_posix()))
+    return files, issues
+
+
+def inspect_home_pack(home_path: str | Path) -> dict[str, Any]:
+    home = validate_home(home_path)
+    files, issues = _collect_pack_files(home)
+    manifest = {
+        "schema_version": "vestigia.pack-inspection.v0.1",
+        "home_name": home.name,
+        "file_count": len(files),
+        "total_size_bytes": sum(path.stat().st_size for path, _ in files),
+        "exclusions": sorted(EXCLUDED_NAMES | EXCLUDED_SUFFIXES),
+        "files": [
+            {
+                "path": relative,
+                "size_bytes": path.stat().st_size,
+            }
+            for path, relative in files
+        ],
+    }
+    return {"packable": not issues, "issues": issues, "manifest": manifest}
+
+
 def pack_home(home_path: str | Path, output: str | Path | None = None) -> Path:
     home = validate_home(home_path)
     db = ContinuityDB(home / "memory" / "continuity.db")
@@ -28,18 +69,9 @@ def pack_home(home_path: str | Path, output: str | Path | None = None) -> Path:
         else home.parent / f"{home.name}.vestigia.zip"
     )
     target.parent.mkdir(parents=True, exist_ok=True)
-    files: list[tuple[Path, str]] = []
-    for path in sorted(home.rglob("*")):
-        if not path.is_file():
-            continue
-        if path.is_symlink():
-            raise ValueError(f"Refusing to pack symbolic link: {path}")
-        relative = path.relative_to(home)
-        if path.name in EXCLUDED_NAMES or any(path.name.endswith(suffix) for suffix in EXCLUDED_SUFFIXES):
-            continue
-        if "__pycache__" in relative.parts:
-            continue
-        files.append((path, relative.as_posix()))
+    files, issues = _collect_pack_files(home)
+    if issues:
+        raise ValueError("Refusing to pack unsafe home entries: " + "; ".join(issues))
     manifest: dict[str, Any] = {
         "schema_version": "vestigia.pack.v0.1",
         "created_at": utc_now_iso(),
@@ -54,10 +86,30 @@ def pack_home(home_path: str | Path, output: str | Path | None = None) -> Path:
             for path, relative in files
         ],
     }
-    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("PACK_MANIFEST.json", json.dumps(manifest, indent=2, sort_keys=True))
-        for path, relative in files:
-            archive.write(path, relative)
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{target.name}.tmp-",
+            suffix=".zip",
+            dir=target.parent,
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+        with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(
+                "PACK_MANIFEST.json",
+                json.dumps(manifest, indent=2, sort_keys=True),
+            )
+            for path, relative in files:
+                archive.write(path, relative)
+        with zipfile.ZipFile(temp_path, "r") as archive:
+            if archive.testzip() is not None:
+                raise ValueError("Pack integrity verification failed")
+        os.replace(temp_path, target)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
     return target
 
 
