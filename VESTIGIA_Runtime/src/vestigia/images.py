@@ -16,6 +16,7 @@ from typing import Any, Protocol, Sequence
 from .config import ResolvedConfig
 from .db import ContinuityDB
 from .models import ImageResult
+from .resident_controls import load_resident_controls
 from .utils import TokenCounter, new_id, sha256_file, sha256_text
 
 
@@ -1093,6 +1094,93 @@ class ImageService:
             "results": outputs,
         }
 
+    @staticmethod
+    def _delivery_target_parts(
+        delivery_target: dict[str, Any] | None,
+    ) -> tuple[str, str]:
+        if not isinstance(delivery_target, dict):
+            return "", ""
+        return (
+            str(delivery_target.get("kind") or "").strip(),
+            str(delivery_target.get("id") or "").strip(),
+        )
+
+    def _require_private_discord_destination(
+        self,
+        interface: str | None,
+        delivery_target: dict[str, Any] | None,
+    ) -> tuple[str, str]:
+        kind, destination_id = self._delivery_target_parts(delivery_target)
+        if interface != "discord":
+            raise PermissionError(
+                "private image delivery requires the current authenticated Discord doorway; "
+                "No outward action occurred."
+            )
+        if not kind.startswith("discord_") or not destination_id:
+            raise PermissionError(
+                "private image delivery requires an exact current Discord destination; "
+                "No outward action occurred."
+            )
+        return kind, destination_id
+
+    def _verified_delivery_path(self, asset: dict[str, Any]) -> Path:
+        path = self.resolve_path(str(asset["id"]))
+        expected = str(asset.get("content_hash") or "").strip()
+        actual = sha256_file(path)
+        if not expected or actual != expected:
+            raise PermissionError(
+                "image bytes changed after cataloging; delivery refused until the asset is re-ingested"
+            )
+        return path
+
+    def _private_quickdraw_policy(
+        self,
+        asset: dict[str, Any],
+        *,
+        interface: str | None,
+        delivery_target: dict[str, Any] | None,
+    ) -> tuple[bool, str]:
+        controls = load_resident_controls(self.config, self.db, self.resident_id)
+        mode = str(controls.get("private_image_mode") or "challenge")
+        if mode == "challenge":
+            return False, "challenge"
+        self._require_private_discord_destination(interface, delivery_target)
+        image_id = str(asset["id"])
+        if mode == "quickdraw_pockets":
+            pockets = {
+                self._normalize_pocket(str(item))
+                for item in controls.get("quickdraw_pockets", [])
+                if str(item).strip()
+            }
+            if not pockets:
+                return False, "challenge"
+            placeholders = ",".join("?" for _ in pockets)
+            with self.db.connect() as connection:
+                row = connection.execute(
+                    f"""
+                    SELECT pocket FROM image_pockets
+                    WHERE resident_id=? AND image_id=? AND pocket IN ({placeholders})
+                    LIMIT 1
+                    """,
+                    (self.resident_id, image_id, *sorted(pockets)),
+                ).fetchone()
+            if row:
+                return True, "resident_policy_quickdraw_pockets"
+            return False, "challenge"
+        if mode == "quickdraw_adopted":
+            with self.db.connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT adoption_state FROM image_cards
+                    WHERE resident_id=? AND image_id=?
+                    """,
+                    (self.resident_id, image_id),
+                ).fetchone()
+            if row and str(row["adoption_state"]) == "adopted":
+                return True, "resident_policy_quickdraw_adopted"
+            return False, "challenge"
+        return False, "challenge"
+
     def _mark_challenge_expired(self, challenge_id: str) -> None:
         with self.db.connect() as connection:
             connection.execute(
@@ -1130,7 +1218,9 @@ class ImageService:
             if not asset:
                 raise KeyError(f"unknown image: {image_id}")
             privacy = str(asset.get("privacy") or "private").strip().lower()
+            self._verified_delivery_path(asset)
             if privacy == "private" and payload.get("confirm") is True:
+                self._require_private_discord_destination(interface, delivery_target)
                 ch_id = str(payload.get("challenge_id") or "").strip()
                 if not ch_id:
                     raise ValueError(
@@ -1255,56 +1345,13 @@ class ImageService:
             if not asset:
                 raise KeyError(f"unknown image: {image_id}")
             privacy = str(asset.get("privacy") or "private").strip().lower()
+            path = self._verified_delivery_path(asset)
+            authorization_path = "shareable"
             if privacy == "private":
-                if payload.get("confirm") is not True:
-                    challenge_id = new_id("ch")
-                    now = datetime.now(UTC)
-                    expires = now + timedelta(minutes=5)
-                    p_id = participant_id or "local-user"
-                    dest_kind = "unknown"
-                    dest_id = "unknown"
-                    if delivery_target:
-                        dest_kind = delivery_target.get("kind") or "unknown"
-                        dest_id = delivery_target.get("id") or "unknown"
-                    with self.db.connect() as connection:
-                        connection.execute(
-                            """
-                            INSERT INTO image_share_challenges (
-                                id, resident_id, image_id, content_hash, participant_id,
-                                destination_kind, destination_id, requested_turn_id, requested_interface, status, expires_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-                            """,
-                            (
-                                challenge_id,
-                                self.resident_id,
-                                str(asset["id"]),
-                                asset.get("content_hash") or "",
-                                p_id,
-                                dest_kind,
-                                dest_id,
-                                turn_id or "unknown",
-                                interface or "unknown",
-                                expires.isoformat(),
-                            ),
-                        )
-                    return {
-                        "schema_version": "vestigia.image-share.v2",
-                        "mode": "send",
-                        "image_id": str(asset["id"]),
-                        "status": "resident_confirmation_required",
-                        "privacy": "private",
-                        "recipient": "current_authenticated_doorway",
-                        "content_hash": asset.get("content_hash"),
-                        "challenge_id": challenge_id,
-                        "next_action": f"repeat image.share mode:send with confirm:true and challenge_id:{challenge_id}",
-                        "outward_action": False,
-                        "invariant": "No outward action occurred.",
-                        "friendly_summary": (
-                            f"This picture is private. Resident confirmation is required (challenge_id: {challenge_id}) "
-                            "before a one-time handoff."
-                        ),
-                    }
-                else:
+                dest_kind, dest_id = self._require_private_discord_destination(
+                    interface, delivery_target
+                )
+                if payload.get("confirm") is True:
                     self.authorize_share(
                         payload,
                         turn_id=turn_id,
@@ -1313,7 +1360,56 @@ class ImageService:
                         delivery_target=delivery_target,
                         consume=True,
                     )
-            path = self.resolve_path(str(asset["id"]))
+                    authorization_path = "resident_confirmation_challenge"
+                else:
+                    quickdraw_allowed, authorization_path = self._private_quickdraw_policy(
+                        asset,
+                        interface=interface,
+                        delivery_target=delivery_target,
+                    )
+                    if not quickdraw_allowed:
+                        challenge_id = new_id("ch")
+                        now = datetime.now(UTC)
+                        expires = now + timedelta(minutes=5)
+                        p_id = participant_id or "local-user"
+                        with self.db.connect() as connection:
+                            connection.execute(
+                                """
+                                INSERT INTO image_share_challenges (
+                                    id, resident_id, image_id, content_hash, participant_id,
+                                    destination_kind, destination_id, requested_turn_id, requested_interface, status, expires_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                                """,
+                                (
+                                    challenge_id,
+                                    self.resident_id,
+                                    str(asset["id"]),
+                                    asset.get("content_hash") or "",
+                                    p_id,
+                                    dest_kind,
+                                    dest_id,
+                                    turn_id or "unknown",
+                                    interface or "unknown",
+                                    expires.isoformat(),
+                                ),
+                            )
+                        return {
+                            "schema_version": "vestigia.image-share.v2",
+                            "mode": "send",
+                            "image_id": str(asset["id"]),
+                            "status": "resident_confirmation_required",
+                            "privacy": "private",
+                            "recipient": "current_authenticated_doorway",
+                            "content_hash": asset.get("content_hash"),
+                            "challenge_id": challenge_id,
+                            "next_action": f"repeat image.share mode:send with confirm:true and challenge_id:{challenge_id}",
+                            "outward_action": False,
+                            "invariant": "No outward action occurred.",
+                            "friendly_summary": (
+                                f"This picture is private. Resident confirmation is required (challenge_id: {challenge_id}) "
+                                "before a one-time handoff."
+                            ),
+                        }
             now = datetime.now(UTC).isoformat()
             reason = str(payload.get("reason", "")).strip() or "resident quick-draw"
             with self.db.connect() as connection:
@@ -1334,6 +1430,12 @@ class ImageService:
                                 "delivery": "current_authenticated_doorway",
                                 "privacy": privacy,
                                 "private_share_once": privacy == "private",
+                                "authorization_path": authorization_path,
+                                "content_hash": asset.get("content_hash"),
+                                "destination": {
+                                    "kind": self._delivery_target_parts(delivery_target)[0],
+                                    "id": self._delivery_target_parts(delivery_target)[1],
+                                },
                             },
                             ensure_ascii=False,
                             sort_keys=True,
@@ -1348,6 +1450,8 @@ class ImageService:
                 "status": "handoff_prepared",
                 "privacy": privacy,
                 "private_share_once": privacy == "private",
+                "authorization_path": authorization_path,
+                "content_hash": asset.get("content_hash"),
                 "outward_action": True,
                 "delivery": "current_authenticated_doorway",
                 "delivery_status": "pending_platform_delivery",
@@ -1508,7 +1612,10 @@ class ImageService:
                 "friendly_summary": "Draft rejected. Nothing was shared.",
             }
         image_id = str(row["image_id"])
-        path = self.resolve_path(image_id)
+        asset = self.get_asset(image_id)
+        if not asset:
+            raise KeyError(f"unknown image: {image_id}")
+        path = self._verified_delivery_path(asset)
         with self.db.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(

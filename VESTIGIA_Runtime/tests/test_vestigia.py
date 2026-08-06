@@ -28,7 +28,9 @@ from vestigia.curation import Curator
 from vestigia.db import ContinuityDB
 from vestigia.adapters.discord_adapter import (
     chunk_text,
+    discord_platform_rejection_reason,
     discord_rejection_reason,
+    discord_trigger_decision,
     format_activity_window,
     guild_message_is_addressed,
 )
@@ -48,6 +50,12 @@ from vestigia.packing import pack_home, restore_home
 from vestigia.providers.fake import FakeProvider
 from vestigia.providers.openai_provider import OpenAIProvider
 from vestigia.retrieval import Retriever
+from vestigia.resident_controls import (
+    find_listening_match,
+    list_listening_events,
+    load_resident_controls_verbose,
+    record_listening_event,
+)
 from vestigia.runtime import CoreRuntime
 from vestigia.utils import atomic_write_text
 
@@ -1422,6 +1430,7 @@ class ImageTests(HomeCase):
             actor="resident:test-resident",
             interface="discord",
             invocation="conversation",
+            delivery_target={"kind": "discord_channel", "id": "channel-general"},
         )
         self.assertEqual("resident_confirmation_required", preview["status"])
         self.assertEqual("No outward action occurred.", preview["invariant"])
@@ -1435,6 +1444,7 @@ class ImageTests(HomeCase):
                 actor="resident:test-resident",
                 interface="discord",
                 invocation="conversation",
+                delivery_target={"kind": "discord_channel", "id": "channel-general"},
             )
 
         private_once = service.share(
@@ -1443,6 +1453,7 @@ class ImageTests(HomeCase):
             actor="resident:test-resident",
             interface="discord",
             invocation="conversation",
+            delivery_target={"kind": "discord_channel", "id": "channel-general"},
         )
         self.assertTrue(private_once["outward_action"])
         self.assertTrue(private_once["private_share_once"])
@@ -3429,6 +3440,382 @@ class RevisionPR3Tests(HomeCase):
         )
         identity_layer = next(l for l in assembly.layers if l.name == "identity_core")
         self.assertNotIn("Unique Breathprint Content", identity_layer.text)
+
+
+class ResidentDoorwayControlTests(HomeCase):
+    def test_empty_resident_output_is_valid_silence(self) -> None:
+        self.assertEqual([], chunk_text("", 1900))
+
+    def test_platform_gate_and_participant_gate_remain_distinct(self) -> None:
+        self.assertIsNone(
+            discord_platform_rejection_reason(
+                author_is_bot=False,
+                channel_id="room",
+                is_dm=False,
+                allowed_channels={"room"},
+                allow_dms=True,
+            )
+        )
+        self.assertEqual(
+            "user_not_allowed",
+            discord_rejection_reason(
+                author_is_bot=False,
+                user_id="stranger",
+                channel_id="room",
+                is_dm=False,
+                allowed_users={"keeper"},
+                allowed_channels={"room"},
+                allow_dms=True,
+            ),
+        )
+
+    def test_literal_alias_listening_has_boundaries_and_direct_precedence(self) -> None:
+        controls = {
+            "listening_mode": "aliases",
+            "listening_aliases": ["Liora"],
+            "listening_watch_phrases": [],
+            "listening_on_match": "invite_turn",
+            "allow_non_allowlisted_turns": False,
+        }
+        self.assertIsNone(
+            find_listening_match(
+                "A liorama poster",
+                controls,
+                author_allowlisted=True,
+            )
+        )
+        decision = discord_trigger_decision(
+            is_dm=False,
+            content="Liora would love this",
+            addressed=False,
+            author_allowlisted=True,
+            controls=controls,
+        )
+        self.assertEqual("contextual_listening", decision["kind"])
+        self.assertEqual("invite_turn", decision["consequence"])
+        direct = discord_trigger_decision(
+            is_dm=False,
+            content="Liora, look",
+            addressed=True,
+            author_allowlisted=True,
+            controls=controls,
+        )
+        self.assertEqual("direct", direct["kind"])
+
+    def test_nonallowlisted_alias_match_is_queue_only(self) -> None:
+        controls = {
+            "listening_mode": "aliases",
+            "listening_aliases": ["Liora"],
+            "listening_watch_phrases": [],
+            "listening_on_match": "invite_turn",
+            # Even a malformed or stale policy record cannot widen this boundary.
+            "allow_non_allowlisted_turns": True,
+        }
+        decision = discord_trigger_decision(
+            is_dm=False,
+            content="Liora would love this",
+            addressed=False,
+            author_allowlisted=False,
+            controls=controls,
+        )
+        self.assertEqual("contextual_listening", decision["kind"])
+        self.assertEqual("queue_only", decision["consequence"])
+
+    def test_resident_requested_policy_is_intersected_with_operator_limits(self) -> None:
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        with patch.dict(
+            self.config.data["resident_controls"],
+            {"allowed_private_image_modes": ["challenge"]},
+        ):
+            result = runtime.house.dispatch(
+                {
+                    "action": "resident.control",
+                    "mode": "configure",
+                    "private_image_mode": "quickdraw_pockets",
+                    "quickdraw_pockets": ["reaction-images"],
+                }
+            )
+        self.assertEqual(
+            "quickdraw_pockets",
+            result["requested_values"]["private_image_mode"],
+        )
+        self.assertEqual(
+            "challenge",
+            result["effective_values"]["private_image_mode"],
+        )
+
+    def test_source_listening_control_persists_without_changing_authorization(self) -> None:
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        changed = runtime.house.dispatch(
+            {
+                "action": "source.listening",
+                "mode": "configure",
+                "listening_mode": "watchlist",
+                "listening_aliases": ["Liora", "Gutterstar"],
+                "listening_watch_phrases": ["mall emergency"],
+                "listening_on_match": "invite_turn",
+                "listening_cooldown_seconds": 30,
+            }
+        )
+        self.assertEqual("watchlist", changed["effective"]["listening_mode"])
+        self.assertFalse(changed["effective"]["allow_non_allowlisted_turns"])
+        inspected = load_resident_controls_verbose(
+            self.config, self.db, "test-resident"
+        )
+        self.assertEqual(
+            ["Liora", "Gutterstar"],
+            inspected["requested"]["listening_aliases"],
+        )
+
+    def test_source_listening_reset_preserves_picture_holster(self) -> None:
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        runtime.house.dispatch(
+            {
+                "action": "resident.control",
+                "mode": "configure",
+                "private_image_mode": "quickdraw_pockets",
+                "quickdraw_pockets": ["reaction-images"],
+            }
+        )
+        runtime.house.dispatch(
+            {
+                "action": "source.listening",
+                "mode": "configure",
+                "listening_mode": "watchlist",
+                "listening_aliases": ["Liora"],
+                "listening_watch_phrases": ["mall emergency"],
+                "listening_on_match": "invite_turn",
+            }
+        )
+        reset = runtime.house.dispatch(
+            {"action": "source.listening", "mode": "reset"}
+        )
+        self.assertEqual("direct_only", reset["effective"]["listening_mode"])
+        controls = load_resident_controls_verbose(
+            self.config, self.db, "test-resident"
+        )
+        self.assertEqual(
+            "quickdraw_pockets",
+            controls["effective"]["private_image_mode"],
+        )
+        self.assertEqual(
+            ["reaction-images"],
+            controls["effective"]["quickdraw_pockets"],
+        )
+
+    def test_listening_event_is_hash_only_and_cooldown_bounded(self) -> None:
+        match = {
+            "match_kind": "alias",
+            "matched_term": "Liora",
+            "matched_term_hash": "term-hash",
+        }
+        first = record_listening_event(
+            self.db,
+            resident_id="test-resident",
+            room_id="hearth",
+            interface="discord",
+            channel_id="room",
+            message_id="message-one",
+            author_id="stranger",
+            author_trust="non_allowlisted_data_only",
+            content="Liora should see the secret phrase",
+            match=match,
+            consequence="queue_only",
+            cooldown_seconds=60,
+        )
+        self.assertTrue(first["accepted"])
+        second = record_listening_event(
+            self.db,
+            resident_id="test-resident",
+            room_id="hearth",
+            interface="discord",
+            channel_id="room",
+            message_id="message-two",
+            author_id="stranger",
+            author_trust="non_allowlisted_data_only",
+            content="Liora should see another secret phrase",
+            match=match,
+            consequence="queue_only",
+            cooldown_seconds=60,
+        )
+        self.assertFalse(second["accepted"])
+        self.assertEqual("cooldown", second["reason"])
+        visible = list_listening_events(self.db, "test-resident")
+        serialized = json.dumps(visible)
+        self.assertNotIn("secret phrase", serialized)
+        self.assertEqual("term-hash", visible[0]["matched_term_hash"])
+
+    def test_untrusted_queue_event_cannot_cool_down_allowlisted_invitation(self) -> None:
+        match = {
+            "match_kind": "alias",
+            "matched_term": "Liora",
+            "matched_term_hash": "shared-term-hash",
+        }
+        outsider = record_listening_event(
+            self.db,
+            resident_id="test-resident",
+            room_id="hearth",
+            interface="discord",
+            channel_id="room",
+            message_id="outsider-message",
+            author_id="stranger",
+            author_trust="non_allowlisted_data_only",
+            content="Liora",
+            match=match,
+            consequence="queue_only",
+            cooldown_seconds=60,
+        )
+        self.assertTrue(outsider["accepted"])
+        keeper = record_listening_event(
+            self.db,
+            resident_id="test-resident",
+            room_id="hearth",
+            interface="discord",
+            channel_id="room",
+            message_id="keeper-message",
+            author_id="keeper",
+            author_trust="allowlisted",
+            content="Liora",
+            match=match,
+            consequence="invite_turn",
+            cooldown_seconds=60,
+        )
+        self.assertTrue(keeper["accepted"])
+        self.assertEqual("invited", keeper["status"])
+
+    def test_private_image_quickdraw_from_named_pocket(self) -> None:
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        asset = runtime.images.ingest_bytes(
+            FakeImageProvider._PNG,
+            filename="ambush.png",
+        )
+        runtime.images.set_pocket(str(asset["id"]), "reaction-images")
+        runtime.house.dispatch(
+            {
+                "action": "resident.control",
+                "mode": "configure",
+                "private_image_mode": "quickdraw_pockets",
+                "quickdraw_pockets": ["reaction-images"],
+            }
+        )
+        result = runtime.images.share(
+            {"mode": "send", "image_id": asset["id"]},
+            turn_id="turn-one",
+            actor="resident:test-resident",
+            interface="discord",
+            invocation="conversation",
+            delivery_target={"kind": "discord_channel", "id": "room"},
+        )
+        self.assertTrue(result["outward_action"])
+        self.assertEqual(
+            "resident_policy_quickdraw_pockets",
+            result["authorization_path"],
+        )
+        self.assertTrue(Path(result["_outbound_path"]).is_file())
+
+    def test_private_image_outside_holster_still_requires_challenge(self) -> None:
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        asset = runtime.images.ingest_bytes(
+            FakeImageProvider._PNG,
+            filename="not-holstered.png",
+        )
+        runtime.house.dispatch(
+            {
+                "action": "resident.control",
+                "mode": "configure",
+                "private_image_mode": "quickdraw_pockets",
+                "quickdraw_pockets": ["reaction-images"],
+            }
+        )
+        result = runtime.images.share(
+            {"mode": "send", "image_id": asset["id"]},
+            turn_id="turn-one",
+            actor="resident:test-resident",
+            interface="discord",
+            invocation="conversation",
+            delivery_target={"kind": "discord_channel", "id": "room"},
+        )
+        self.assertEqual("resident_confirmation_required", result["status"])
+        self.assertFalse(result["outward_action"])
+
+    def test_private_quickdraw_requires_exact_current_destination(self) -> None:
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        asset = runtime.images.ingest_bytes(
+            FakeImageProvider._PNG,
+            filename="no-destination.png",
+        )
+        runtime.images.set_pocket(str(asset["id"]), "reaction-images")
+        runtime.house.dispatch(
+            {
+                "action": "resident.control",
+                "mode": "configure",
+                "private_image_mode": "quickdraw_pockets",
+                "quickdraw_pockets": ["reaction-images"],
+            }
+        )
+        with self.assertRaisesRegex(PermissionError, "exact current Discord destination"):
+            runtime.images.share(
+                {"mode": "send", "image_id": asset["id"]},
+                turn_id="turn-one",
+                actor="resident:test-resident",
+                interface="discord",
+                invocation="conversation",
+            )
+
+    def test_image_byte_tampering_is_refused_before_delivery(self) -> None:
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        asset = runtime.images.ingest_bytes(
+            FakeImageProvider._PNG,
+            filename="tamper.png",
+        )
+        runtime.images.set_pocket(str(asset["id"]), "reaction-images")
+        runtime.house.dispatch(
+            {
+                "action": "resident.control",
+                "mode": "configure",
+                "private_image_mode": "quickdraw_pockets",
+                "quickdraw_pockets": ["reaction-images"],
+            }
+        )
+        runtime.images.resolve_path(str(asset["id"])).write_bytes(b"tampered")
+        with self.assertRaisesRegex(PermissionError, "bytes changed"):
+            runtime.images.share(
+                {"mode": "send", "image_id": asset["id"]},
+                turn_id="turn-one",
+                actor="resident:test-resident",
+                interface="discord",
+                invocation="conversation",
+                delivery_target={"kind": "discord_channel", "id": "room"},
+            )
+
+    def test_contextual_listening_turn_does_not_auto_extract_memory(self) -> None:
+        runtime = CoreRuntime(
+            self.config,
+            provider=FakeProvider(["I noticed and choose silence later."]),
+            fake=True,
+        )
+        result = runtime.chat(
+            NormalizedMessage(
+                content="[Contextual listening invitation]\nRemember: cobalt ambush.",
+                interface="discord",
+                speaker_id="keeper",
+                participant_text="Remember: cobalt ambush.",
+                metadata={"contextual_listening": True},
+            )
+        )
+        self.assertEqual((), result.proposal_ids)
+        self.assertEqual([], self.db.list_memories(resident_id="test-resident"))
+
+    def test_new_control_capabilities_publish_formal_contracts(self) -> None:
+        runtime = CoreRuntime(self.config, provider=FakeProvider(), fake=True)
+        for name in ("resident.control", "source.listening"):
+            focused = runtime.house.dispatch(
+                {"action": "capabilities", "target": name}
+            )
+            capability = focused["capability"]
+            self.assertEqual(name, capability["name"])
+            self.assertTrue(is_formal_object_schema(capability["input_schema"]))
+
 
 
 if __name__ == "__main__":
