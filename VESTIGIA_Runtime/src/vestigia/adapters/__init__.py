@@ -5,3 +5,9 @@ from . import discord_adapter as _discord_adapter
 
 _patch_sensory_discord(_discord_adapter)
 del _patch_sensory_discord, _discord_adapter
+
+from ..attention_discord import patch as _patch_attention_router
+from . import discord_adapter as _attention_discord_adapter
+
+_patch_attention_router(_attention_discord_adapter)
+del _patch_attention_router, _attention_discord_adapter
