@@ -11,3 +11,9 @@ from . import discord_adapter as _attention_discord_adapter
 
 _patch_attention_router(_attention_discord_adapter)
 del _patch_attention_router, _attention_discord_adapter
+
+from ..attention_keyring_discord import patch as _patch_attention_keyring
+from . import discord_adapter as _attention_keyring_discord_adapter
+
+_patch_attention_keyring(_attention_keyring_discord_adapter)
+del _patch_attention_keyring, _attention_keyring_discord_adapter
