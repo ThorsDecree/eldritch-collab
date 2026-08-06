@@ -1,0 +1,118 @@
+{
+  "schema_version": "vestigia.resident-ritual.v0.1",
+  "id": "resident.liora.say-hi",
+  "name": "Make the machine say hi",
+  "version": 1,
+  "status": "active",
+  "description": "Invoke one approved private script, then ask whether to place its greeting in workspace.",
+  "authorship": {
+    "lane": "resident",
+    "actor_id": "liora-gutterstar",
+    "source_object_ids": [],
+    "note": "Canonical recursive acceptance ritual."
+  },
+  "inputs": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "type": "string",
+        "maxLength": 80
+      }
+    },
+    "required": [
+      "name"
+    ]
+  },
+  "requested_capabilities": [
+    {
+      "capability": "script.run",
+      "scope": {
+        "script_ids": [
+          "resident.liora.say-hi-script"
+        ]
+      },
+      "required": true,
+      "reason": "Run the approved greeting script."
+    },
+    {
+      "capability": "workspace.write",
+      "scope": {
+        "paths": [
+          "workspace/hello.txt"
+        ]
+      },
+      "required": false,
+      "reason": "Only after the resident selects workspace placement."
+    }
+  ],
+  "limits": {
+    "maximum_steps": 3,
+    "maximum_nested_depth": 1,
+    "maximum_tool_calls": 2,
+    "maximum_provider_calls": 0,
+    "maximum_outward_actions": 0,
+    "maximum_artifacts": 1,
+    "maximum_output_bytes": 10000,
+    "wall_seconds": 15
+  },
+  "steps": [
+    {
+      "id": "run-greeting",
+      "kind": "script",
+      "script": {
+        "id": "resident.liora.say-hi-script",
+        "version": 1
+      },
+      "arguments": {
+        "name": "${inputs.name}"
+      },
+      "save_as": "greeting"
+    },
+    {
+      "id": "review-greeting",
+      "kind": "checkpoint",
+      "prompt": "Keep this private, place it in workspace, or stop?",
+      "choices": [
+        "keep_private",
+        "place_in_workspace",
+        "stop"
+      ],
+      "expires_seconds": 86400
+    },
+    {
+      "id": "place-greeting",
+      "kind": "action",
+      "when": "${checkpoints.review-greeting.choice == 'place_in_workspace'}",
+      "capability": "workspace.write",
+      "arguments": {
+        "path": "workspace/hello.txt",
+        "content": "${steps.run-greeting.output.text}"
+      },
+      "save_as": "workspace_result"
+    }
+  ],
+  "failure_policy": {
+    "mode": "stop_on_failure",
+    "maximum_retries": 0,
+    "retry_backoff_seconds": 0
+  },
+  "outputs": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "artifact_id": {
+        "type": "string",
+        "maxLength": 200
+      }
+    },
+    "required": [
+      "artifact_id"
+    ]
+  },
+  "tags": [
+    "acceptance",
+    "recursive",
+    "hello"
+  ]
+}

@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vestigia.local/schemas/resident-script.schema.json",
+  "title": "VESTIGIA resident script record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "version",
+    "state",
+    "language",
+    "source",
+    "provenance",
+    "input_schema",
+    "output_schema",
+    "requested_grant",
+    "sandbox",
+    "limits",
+    "determinism",
+    "privacy"
+  ],
+  "properties": {
+    "schema_version": {"const": "vestigia.resident-script.v0.1"},
+    "id": {"$ref": "#/$defs/stableId"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 120},
+    "version": {"type": "integer", "minimum": 1},
+    "state": {
+      "enum": [
+        "received",
+        "draft",
+        "inspected",
+        "tested",
+        "approved",
+        "active",
+        "disabled",
+        "superseded",
+        "rejected",
+        "quarantined",
+        "deferred",
+        "archived"
+      ]
+    },
+    "description": {"type": "string", "maxLength": 2000},
+    "language": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version_range", "environment_id"],
+      "properties": {
+        "name": {"enum": ["python"]},
+        "version_range": {"type": "string", "minLength": 1, "maxLength": 80},
+        "environment_id": {"type": "string", "minLength": 1, "maxLength": 160},
+        "environment_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object_id", "sha256", "size_bytes", "media_type"],
+      "properties": {
+        "object_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size_bytes": {"type": "integer", "minimum": 0, "maximum": 10000000},
+        "media_type": {"const": "text/x-python"},
+        "original_name": {"type": "string", "maxLength": 255}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authored_by", "supplied_by", "source_object_ids"],
+      "properties": {
+        "authored_by": {"$ref": "#/$defs/actorLane"},
+        "supplied_by": {"$ref": "#/$defs/actorLane"},
+        "derived_from": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 64,
+          "items": {"type": "string", "minLength": 1, "maxLength": 200}
+        },
+        "source_object_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 64,
+          "items": {"type": "string", "minLength": 1, "maxLength": 200}
+        },
+        "note": {"type": "string", "maxLength": 1000}
+      }
+    },
+    "input_schema": {"type": "object"},
+    "output_schema": {"type": "object"},
+    "requested_grant": {"$ref": "workshop-grant.schema.json"},
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum_profile", "allowed_backends"],
+      "properties": {
+        "minimum_profile": {"enum": ["expression", "local_process", "hardened"]},
+        "allowed_backends": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 16,
+          "items": {"type": "string", "minLength": 1, "maxLength": 160}
+        },
+        "hostile_code_assumed": {"type": "boolean", "default": false}
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wall_seconds",
+        "memory_mb",
+        "processes",
+        "files_created",
+        "input_bytes",
+        "output_bytes",
+        "stdout_bytes",
+        "stderr_bytes"
+      ],
+      "properties": {
+        "wall_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+        "cpu_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+        "memory_mb": {"type": "integer", "minimum": 16, "maximum": 16384},
+        "processes": {"type": "integer", "minimum": 1, "maximum": 64},
+        "open_files": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "files_created": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "input_bytes": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+        "output_bytes": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+        "stdout_bytes": {"type": "integer", "minimum": 0, "maximum": 100000000},
+        "stderr_bytes": {"type": "integer", "minimum": 0, "maximum": 100000000},
+        "trace_events": {"type": "integer", "minimum": 0, "maximum": 100000}
+      }
+    },
+    "determinism": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["declared"],
+      "properties": {
+        "declared": {"enum": ["deterministic", "nondeterministic", "unknown"]},
+        "sources": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 32,
+          "items": {
+            "enum": ["clock", "random", "input_order", "platform", "interpreter", "other"]
+          }
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "default_outputs", "shareable"],
+      "properties": {
+        "source": {"enum": ["private", "room_local", "shareable"]},
+        "default_outputs": {"enum": ["private", "room_local", "shareable"]},
+        "shareable": {"type": "boolean"}
+      }
+    },
+    "test_vector_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 128,
+      "items": {"type": "string", "minLength": 1, "maxLength": 160}
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runtime": {"type": "string", "maxLength": 80},
+        "sandbox_contract": {"type": "string", "maxLength": 80},
+        "ritual_contract": {"type": "string", "maxLength": 80}
+      }
+    },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 32,
+      "items": {"type": "string", "minLength": 1, "maxLength": 64}
+    }
+  },
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "actorLane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lane", "actor_id"],
+      "properties": {
+        "lane": {
+          "enum": ["resident", "operator", "participant", "model", "extension", "imported", "unknown"]
+        },
+        "actor_id": {"type": "string", "minLength": 1, "maxLength": 160},
+        "claimed_name": {"type": "string", "maxLength": 160}
+      }
+    }
+  }
+}
