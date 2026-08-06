@@ -16,3 +16,8 @@ from .attention_keyring import install_core as _install_attention_keyring
 
 _install_attention_keyring()
 del _install_attention_keyring
+
+from .image_drawer_continuation import install_core as _install_image_drawer_continuation
+
+_install_image_drawer_continuation()
+del _install_image_drawer_continuation
