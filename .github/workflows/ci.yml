@@ -13,8 +13,69 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  migrate-composition:
+    name: migrate explicit composition
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/runtime-composition-hardening'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    outputs:
+      pushed: ${{ steps.migrate.outputs.pushed }}
+
+    steps:
+      - name: Check out pull-request branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Apply and validate explicit composition migration
+        id: migrate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if (Test-Path "VESTIGIA_Runtime\src\vestigia\composition.py") {
+            "pushed=false" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+
+          python ".github\scripts\apply_composition_migration.py"
+          Remove-Item ".composition-migration-trigger" -ErrorAction SilentlyContinue
+          Remove-Item ".composition-migration-diagnostic.md" -ErrorAction SilentlyContinue
+
+          Push-Location "VESTIGIA_Runtime"
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,discord,tokens]"
+          python -m compileall -q src
+          python -m pytest -q
+          Pop-Location
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if (-not (git status --porcelain)) {
+            "pushed=false" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+
+          git commit -m "refactor: replace runtime monkey patches with explicit composition [composition-migrated]"
+          git push origin "HEAD:${{ github.head_ref }}"
+          "pushed=true" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
   test:
     name: test (Windows, Python ${{ matrix.python_version }})
+    needs: migrate-composition
+    if: >-
+      ${{ always() &&
+          needs.migrate-composition.result != 'failure' &&
+          needs.migrate-composition.outputs.pushed != 'true' }}
 
     strategy:
       fail-fast: false
@@ -103,7 +164,7 @@ jobs:
         if: matrix.package_smoke
         uses: actions/upload-artifact@v4
         with:
-          name: vestigia-runtime-0.8.0-dev0-${{ github.sha }}
+          name: vestigia-runtime-0.8.0.dev0-${{ github.sha }}
           path: |
             VESTIGIA_Runtime/dist/vestigia_runtime-0.8.0.dev0-py3-none-any.whl
             VESTIGIA_Runtime/dist/vestigia_runtime-0.8.0.dev0.tar.gz
@@ -113,6 +174,11 @@ jobs:
 
   upgrade-canary:
     name: upgrade canary (v0.6.1 to current)
+    needs: migrate-composition
+    if: >-
+      ${{ always() &&
+          needs.migrate-composition.result != 'failure' &&
+          needs.migrate-composition.outputs.pushed != 'true' }}
     runs-on: windows-latest
 
     steps:
@@ -164,7 +230,7 @@ jobs:
           "CANARY_HOME=$canaryHome" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "CANARY_BASELINE=$baseline" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Upgrade, turn, pack, restore, and verify under current development canon
+      - name: Upgrade, turn, pack, restore, and verify under current development
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
