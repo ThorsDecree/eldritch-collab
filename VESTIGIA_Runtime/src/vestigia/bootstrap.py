@@ -13,6 +13,7 @@ _INSTALLATION_PLAN: Final[tuple[tuple[str, str], ...]] = (
     ("attention_keyring", "register_composition"),
     ("image_drawer_continuation", "register_composition"),
     ("workshop_sandbox", "register_composition"),
+    ("workshop_script_shelf", "register_composition"),
 )
 
 _lock = RLock()
