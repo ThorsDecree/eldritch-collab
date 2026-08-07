@@ -53,6 +53,7 @@ jobs:
           $artifact = $artifactMatches[0]
           $artifactId = [long]$artifact.id
           $artifactApiDigest = [string]$artifact.digest
+          Write-Host "Resolved Runtime CI push run $runNumber ($runId), artifact $artifactId"
 
           curl.exe -fsSL -H "Authorization: Bearer $env:GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" -o artifact.zip "https://api.github.com/repos/$env:REPOSITORY/actions/artifacts/$artifactId/zip"
           $artifactZipHash = (Get-FileHash artifact.zip -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -79,25 +80,22 @@ jobs:
           with zipfile.ZipFile(wheel) as zf:
               names = [n for n in zf.namelist() if n.endswith('.dist-info/METADATA')]
               assert len(names) == 1, names
-              meta = Parser().parsestr(zf.read(names[0]).decode('utf-8'))
-              assert meta.get('Version') == '0.7.0', meta.get('Version')
+              assert Parser().parsestr(zf.read(names[0]).decode('utf-8')).get('Version') == '0.7.0'
           with tarfile.open(sdist, 'r:gz') as tf:
               names = [m for m in tf.getmembers() if m.name.endswith('/PKG-INFO')]
               assert names, 'PKG-INFO missing from sdist'
-              meta = Parser().parsestr(tf.extractfile(names[0]).read().decode('utf-8'))
-              assert meta.get('Version') == '0.7.0', meta.get('Version')
+              assert Parser().parsestr(tf.extractfile(names[0]).read().decode('utf-8')).get('Version') == '0.7.0'
           '@.Replace('__WHEEL__', $wheel.FullName.Replace('\','\\')).Replace('__SDIST__', $sdist.FullName.Replace('\','\\')) | Set-Content verify_metadata.py -Encoding utf8
           python verify_metadata.py
 
-          $tagExists = $false
-          try {
-            $tagRef = gh api "repos/$env:REPOSITORY/git/ref/tags/$env:RELEASE_TAG" | ConvertFrom-Json
-            $tagExists = $true
-            if ($tagRef.object.type -ne 'commit' -or $tagRef.object.sha -ne $env:RELEASE_SHA) { throw "Existing tag points somewhere else" }
-          } catch {
-            if ($_.Exception.Message -notmatch 'HTTP 404|Not Found') { throw }
+          $tagRefs = @(gh api "repos/$env:REPOSITORY/git/matching-refs/tags/$env:RELEASE_TAG" | ConvertFrom-Json)
+          $exactTag = @($tagRefs | Where-Object { $_.ref -eq "refs/tags/$env:RELEASE_TAG" })
+          if ($exactTag.Count -gt 1) { throw 'Multiple exact v0.7.0 tag refs returned' }
+          if ($exactTag.Count -eq 1) {
+            if ($exactTag[0].object.type -ne 'commit' -or $exactTag[0].object.sha -ne $env:RELEASE_SHA) { throw 'Existing v0.7.0 tag points somewhere else' }
+          } else {
+            gh api --method POST "repos/$env:REPOSITORY/git/refs" -f "ref=refs/tags/$env:RELEASE_TAG" -f "sha=$env:RELEASE_SHA" | Out-Null
           }
-          if (-not $tagExists) { gh api --method POST "repos/$env:REPOSITORY/git/refs" -f "ref=refs/tags/$env:RELEASE_TAG" -f "sha=$env:RELEASE_SHA" | Out-Null }
 
           $notes = @"
           # VESTIGIA Runtime v0.7.0 — The Resident's Drawers
@@ -117,14 +115,9 @@ jobs:
           "@
           Set-Content release-notes.md $notes -Encoding utf8
 
-          try {
-            gh release view $env:RELEASE_TAG --repo $env:REPOSITORY --json tagName,url | Out-Null
-            throw "Release $env:RELEASE_TAG already exists; refusing to overwrite it"
-          } catch {
-            if ($_.Exception.Message -notmatch 'release not found|HTTP 404|Not Found') {
-              if ($_.Exception.Message -match 'already exists') { throw }
-            }
-          }
+          $releases = @(gh api "repos/$env:REPOSITORY/releases?per_page=100" | ConvertFrom-Json)
+          $existingRelease = @($releases | Where-Object { $_.tag_name -eq $env:RELEASE_TAG })
+          if ($existingRelease.Count -ne 0) { throw "Release $env:RELEASE_TAG already exists; refusing to overwrite it" }
 
           gh release create $env:RELEASE_TAG $wheel.FullName $sdist.FullName $sums.FullName --repo $env:REPOSITORY --verify-tag --title "VESTIGIA Runtime v0.7.0 — The Resident's Drawers" --notes-file release-notes.md
 
