@@ -40,7 +40,9 @@ jobs:
 
       - name: Apply inert shelf and atomic lifecycle hardening
         shell: pwsh
-        run: python .github/scripts/harden_script_shelf.py
+        run: |
+          python .github/scripts/prepare_shelf_hardener.py
+          python .github/scripts/harden_script_shelf.py
 
       - name: Compile and test hardened stack
         working-directory: VESTIGIA_Runtime
