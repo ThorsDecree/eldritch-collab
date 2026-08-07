@@ -31,6 +31,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin agent/runtime-composition-hardening
           git merge -X theirs --no-edit origin/agent/runtime-composition-hardening
           git checkout origin/agent/runtime-composition-hardening -- .github/workflows/ci.yml VESTIGIA_Runtime/src/vestigia/__init__.py
@@ -51,8 +54,7 @@ jobs:
       - name: Publish hardened stack
         shell: pwsh
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          $PSNativeCommandUseErrorActionPreference = $true
           git add -A
           git commit -m "security: make script shelf inert and lifecycle-atomic"
           git push origin "HEAD:${{ github.head_ref }}"
