@@ -63,12 +63,7 @@ jobs:
           $artifactId = [long]$artifact.id
           $artifactApiDigest = [string]$artifact.digest
 
-          curl.exe -fsSL \
-            -H "Authorization: Bearer $env:GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            -o artifact.zip \
-            "https://api.github.com/repos/$env:REPOSITORY/actions/artifacts/$artifactId/zip"
+          curl.exe -fsSL -H "Authorization: Bearer $env:GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" -o artifact.zip "https://api.github.com/repos/$env:REPOSITORY/actions/artifacts/$artifactId/zip"
 
           $artifactZipHash = (Get-FileHash artifact.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($artifactApiDigest -and $artifactApiDigest.StartsWith('sha256:')) {
@@ -157,18 +152,10 @@ jobs:
             throw "Release $env:RELEASE_TAG already exists; refusing to overwrite an existing public release"
           }
 
-          gh release create $env:RELEASE_TAG \
-            $wheel.FullName $sdist.FullName $sums.FullName \
-            --repo $env:REPOSITORY \
-            --verify-tag \
-            --title "VESTIGIA Runtime v0.7.0 — The Resident's Drawers" \
-            --notes-file release-notes.md
+          gh release create $env:RELEASE_TAG $wheel.FullName $sdist.FullName $sums.FullName --repo $env:REPOSITORY --verify-tag --title "VESTIGIA Runtime v0.7.0 — The Resident's Drawers" --notes-file release-notes.md
 
           New-Item -ItemType Directory -Path public | Out-Null
-          gh release download $env:RELEASE_TAG --repo $env:REPOSITORY --dir public \
-            --pattern 'vestigia_runtime-0.7.0-py3-none-any.whl' \
-            --pattern 'vestigia_runtime-0.7.0.tar.gz' \
-            --pattern 'SHA256SUMS.txt'
+          gh release download $env:RELEASE_TAG --repo $env:REPOSITORY --dir public --pattern 'vestigia_runtime-0.7.0-py3-none-any.whl' --pattern 'vestigia_runtime-0.7.0.tar.gz' --pattern 'SHA256SUMS.txt'
 
           $publicWheelHash = (Get-FileHash 'public/vestigia_runtime-0.7.0-py3-none-any.whl' -Algorithm SHA256).Hash.ToLowerInvariant()
           $publicSdistHash = (Get-FileHash 'public/vestigia_runtime-0.7.0.tar.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
