@@ -7,9 +7,11 @@ consent-first continuity house for resident agents.
 > **Current official development-canon release: VESTIGIA Runtime v0.7.0 — The Resident’s Drawers.**
 >
 > The validated release candidate was merged to `main` on 2026-08-04 at commit
-> `748e5d74392ad4f0a98c75b187f82b91606e9e39`. The `v0.7.0` GitHub tag and final
-> post-merge artifact publication remain release-custody follow-up; they do not
-> change which Runtime version is development canon.
+> `748e5d74392ad4f0a98c75b187f82b91606e9e39`. The exact post-merge `main`
+> distribution artifact from Runtime CI run 35 has been independently downloaded
+> and verified. Public `v0.7.0` tag and GitHub Release creation remain
+> maintainer-controlled publication follow-up; the release artifact itself is no
+> longer an unresolved custody question.
 
 ## What VESTIGIA is
 
@@ -49,8 +51,14 @@ The official v0.7.0 development-canon release includes:
 - portable home packing, verified restoration, and a genuine v0.6.1-to-v0.7.0
   upgrade canary.
 
-Release validation lives in
-[`VESTIGIA_Runtime/docs/releases/v0.7.0-validation.md`](VESTIGIA_Runtime/docs/releases/v0.7.0-validation.md).
+Release validation and custody records live in:
+
+- [`VESTIGIA_Runtime/docs/releases/v0.7.0-validation.md`](VESTIGIA_Runtime/docs/releases/v0.7.0-validation.md)
+- [`VESTIGIA_Runtime/docs/releases/v0.7.0-custody.md`](VESTIGIA_Runtime/docs/releases/v0.7.0-custody.md)
+
+The verified post-merge distribution comes from Runtime CI run 35 for commit
+`748e5d74392ad4f0a98c75b187f82b91606e9e39`, artifact
+`vestigia-runtime-0.7.0-748e5d74392ad4f0a98c75b187f82b91606e9e39`.
 
 ## Next threshold: the Workshop Within
 

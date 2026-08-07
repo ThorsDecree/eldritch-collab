@@ -11,8 +11,10 @@ This document establishes the roadmap, milestones, and non-goals for the VESTIGI
 > **Current official development-canon release: v0.7.0 — The Resident’s Drawers.**
 >
 > The validated release candidate was merged to `main` on 2026-08-04 at commit
-> `748e5d74392ad4f0a98c75b187f82b91606e9e39`. GitHub tag creation and final
-> post-merge artifact publication remain release-custody follow-up.
+> `748e5d74392ad4f0a98c75b187f82b91606e9e39`. Runtime CI push run 35 and its
+> exact post-merge distribution artifact have been independently verified.
+> Public `v0.7.0` tag and GitHub Release creation remain maintainer-controlled
+> publication follow-up.
 
 ---
 
@@ -30,7 +32,7 @@ This document establishes the roadmap, milestones, and non-goals for the VESTIGI
 
 ### 0.7.0: The Resident’s Drawers
 
-* **Status**: `released` — official development canon as of 2026-08-04
+* **Status**: `released` — official development canon as of 2026-08-04; public GitHub Release publication pending
 * **Description**: Resident-owned context partitioning, explicit ambient-source trust boundaries, stable Discord interaction/reaction delivery, private-image confirmation challenges, durable receipts, and portable-home compatibility.
 * **Release evidence**:
   - [x] Run and document the live Windows Discord trust-boundary canary.
@@ -39,10 +41,23 @@ This document establishes the roadmap, milestones, and non-goals for the VESTIGI
   - [x] Verify the wheel through isolated Windows installation with declared extras.
   - [x] Confirm genuine v0.6.1 → v0.7.0 upgrade, turn, pack, restore, and durable-ledger preservation.
   - [x] Merge the exact validated release head into `main`.
-  - [ ] Create the `v0.7.0` GitHub tag and release.
-  - [ ] Attach or publish the exact verified post-merge release artifacts and checksums.
+  - [x] Locate and independently verify the exact post-merge `main` Runtime CI run and distribution artifact.
+  - [ ] Create the `v0.7.0` Git tag and GitHub Release at validated commit `748e5d74392ad4f0a98c75b187f82b91606e9e39`.
+  - [ ] Attach the exact verified post-merge wheel, source distribution, and checksum manifest to the public Release, then re-download and verify them.
 
-The two unchecked items are packaging and release-custody follow-up. They do not change the Runtime version currently carried by development canon.
+Verified post-merge custody:
+
+```text
+Runtime CI run: 35 (30924815255)
+Artifact: vestigia-runtime-0.7.0-748e5d74392ad4f0a98c75b187f82b91606e9e39
+Artifact ID: 8898739654
+Artifact ZIP SHA-256: 146cfba32884740f1b65f0859efb994a02375f6038f13cdc5ffbe8b0f26c64c3
+Wheel SHA-256: 00077218a28f373cdb8803b543f979400db0aeb804e0981139a9df1d4c03ea86
+Source distribution SHA-256: b600ed1b84235b3817f4a99c94a5bb1be9cf3d3378705e3fdf02a9ae51a38222
+SHA256SUMS.txt SHA-256: 98cadaa8173066d7067b13f30128f07e86e77efbcb3327ccd1623d2a8e12e6df
+```
+
+The remaining unchecked items are public publication actions, not unresolved validation or artifact custody.
 
 ### 0.7.x: Operational Confidence
 
@@ -140,6 +155,8 @@ Required boundaries include:
   - Silent cross-resident memory promotion.
   - Treating a shared archive as shared identity.
 
+Planning is maintained in PR #30 from branch `planning/v0.9-explicit-plurality`. Once accepted, the roadmap should spawn focused implementation issues rather than one umbrella runtime ticket.
+
 ### 1.0: Stable House Contract
 
 * **Status**: `planned`
@@ -161,6 +178,8 @@ Required boundaries include:
   - Defined policy for breaking changes.
 * **The Stable House Promise**:
   > *A home created under the stable contract remains intelligible, recoverable, migratable, and under its operator’s control even as models, providers, interface adapters, and execution backends change.*
+
+Planning is maintained in PR #31 from branch `planning/v1.0-stable-house`. Once accepted, the roadmap should spawn focused normative-contract and engineering issues rather than one umbrella stability ticket.
 
 ---
 
