@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
@@ -21,6 +22,14 @@ _ALLOWED_SCHEMA_KEYS = {
     "description",
 }
 _ALLOWED_TYPES = {"object", "array", "string", "integer", "number", "boolean", "null"}
+
+
+def supported_schema_keywords() -> tuple[str, ...]:
+    return tuple(sorted(_ALLOWED_SCHEMA_KEYS))
+
+
+def supported_json_types() -> tuple[str, ...]:
+    return tuple(sorted(_ALLOWED_TYPES))
 
 
 def default_input_schema() -> dict[str, Any]:
@@ -74,6 +83,8 @@ def validate_schema(schema: Any, *, label: str = "schema", depth: int = 0) -> di
     for key in ("minimum", "maximum"):
         if key in schema and (not isinstance(schema[key], (int, float)) or isinstance(schema[key], bool)):
             raise ValueError(f"{label}.{key} must be numeric")
+        if key in schema and isinstance(schema[key], float) and not math.isfinite(schema[key]):
+            raise ValueError(f"{label}.{key} must be a finite JSON number")
     if "enum" in schema and (not isinstance(schema["enum"], list) or len(schema["enum"]) > 128):
         raise ValueError(f"{label}.enum must be an array of at most 128 values")
     return schema
@@ -136,6 +147,8 @@ def validate_value(value: Any, schema: dict[str, Any], *, path: str = "$", depth
         if "maxLength" in schema and len(value) > schema["maxLength"]:
             raise ValueError(f"{path} exceeds maxLength")
     if isinstance(value, (int, float)) and not isinstance(value, bool) and ({"integer", "number"} & set(types)):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"{path} must be a finite JSON number")
         if "minimum" in schema and value < schema["minimum"]:
             raise ValueError(f"{path} is below minimum")
         if "maximum" in schema and value > schema["maximum"]:
