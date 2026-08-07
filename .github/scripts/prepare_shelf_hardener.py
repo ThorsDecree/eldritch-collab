@@ -36,7 +36,7 @@ replacement = '''    def test_version_allocation_is_immediate_and_unique(self) -
         self.assertEqual([1, 2, 3, 4], versions)
 
     def test_interrupted_inspection_rolls_back_evidence_and_state'''
-text, count = pattern.subn(replacement, text, count=1)
+text, count = pattern.subn(lambda _match: replacement, text, count=1)
 if count != 1:
     raise RuntimeError("concurrency fixture block not found")
 
