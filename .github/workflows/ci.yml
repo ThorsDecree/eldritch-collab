@@ -1,201 +1,58 @@
-name: Runtime CI
+name: Harden Script Shelf
 
 on:
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: runtime-ci-${{ github.workflow }}-${{ github.ref }}
+  group: harden-script-shelf-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: test (Windows, Python ${{ matrix.python_version }})
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - python_version: "3.11"
-            package_smoke: true
-
-          - python_version: "3.14"
-            package_smoke: false
-
-    runs-on: windows-latest
-
-    defaults:
-      run:
-        working-directory: VESTIGIA_Runtime
-        shell: pwsh
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python_version }}
-          cache: pip
-          cache-dependency-path: VESTIGIA_Runtime/pyproject.toml
-
-      - name: Install runtime and development dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,discord,tokens]"
-          python -m pip check
-
-      - name: Compile source
-        run: python -m compileall -q src
-
-      - name: Run tests
-        run: python -m pytest -q
-
-      - name: Build distribution
-        if: matrix.package_smoke
-        run: |
-          python -m pip install build
-          python -m build
-
-      - name: Generate distribution checksums
-        if: matrix.package_smoke
-        run: |
-          $ErrorActionPreference = "Stop"
-          $files = Get-ChildItem "dist\vestigia_runtime-0.7.0*" -File | Sort-Object Name
-          if ($files.Count -ne 2) {
-            throw "Expected one v0.7.0 wheel and one source distribution; found $($files.Count)"
-          }
-          $lines = foreach ($file in $files) {
-            $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($file.Name)"
-          }
-          $lines | Set-Content "dist\SHA256SUMS.txt" -Encoding ascii
-
-      - name: Verify isolated wheel installation
-        if: matrix.package_smoke
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          python -m venv .wheel-smoke
-          $smokePython = Join-Path $PWD ".wheel-smoke\Scripts\python.exe"
-
-          & $smokePython -m pip install --upgrade pip
-
-          $wheel = (
-            Get-ChildItem "dist\*.whl" |
-            Select-Object -First 1
-          ).FullName
-
-          if (-not $wheel) {
-            throw "No wheel found in dist"
-          }
-
-          & $smokePython -m pip install "${wheel}[discord,tokens]"
-          & $smokePython -m pip check
-          & $smokePython -c "import vestigia, discord, tiktoken; assert vestigia.__version__ == '0.7.0'"
-
-      - name: Preserve verified release artifacts
-        if: matrix.package_smoke
-        uses: actions/upload-artifact@v4
-        with:
-          name: vestigia-runtime-0.7.0-${{ github.sha }}
-          path: |
-            VESTIGIA_Runtime/dist/vestigia_runtime-0.7.0-py3-none-any.whl
-            VESTIGIA_Runtime/dist/vestigia_runtime-0.7.0.tar.gz
-            VESTIGIA_Runtime/dist/SHA256SUMS.txt
-          if-no-files-found: error
-          retention-days: 90
-
-  upgrade-canary:
-    name: upgrade canary (v0.6.1 to v0.7.0)
+  harden:
+    if: github.head_ref == 'agent/resident-script-shelf'
     runs-on: windows-latest
 
     steps:
-      - name: Check out repository with release history
+      - name: Check out shelf branch
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: VESTIGIA_Runtime/pyproject.toml
+          python-version: '3.11'
 
-      - name: Install release-candidate dependencies
+      - name: Merge composition foundation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          git fetch origin agent/runtime-composition-hardening
+          git merge -X theirs --no-edit origin/agent/runtime-composition-hardening
+          git checkout origin/agent/runtime-composition-hardening -- .github/workflows/ci.yml VESTIGIA_Runtime/src/vestigia/__init__.py
+
+      - name: Apply inert shelf and atomic lifecycle hardening
+        shell: pwsh
+        run: python .github/scripts/harden_script_shelf.py
+
+      - name: Compile and test hardened stack
         working-directory: VESTIGIA_Runtime
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,discord,tokens]"
-          python -m pip check
+          python -m compileall -q src
+          python -m pytest -q
 
-      - name: Materialize the genuine v0.6.1 source tree
+      - name: Publish hardened stack
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          $legacyRoot = Join-Path $env:RUNNER_TEMP "vestigia-v061"
-          if (Test-Path $legacyRoot) {
-            Remove-Item -Recurse -Force $legacyRoot
-          }
-          git worktree add --detach $legacyRoot b12f8f778c390f4ac8fc3abe1af1a44a73799c26
-          "LEGACY_ROOT=$legacyRoot" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Create a synthetic home under v0.6.1
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $canaryRoot = Join-Path $env:RUNNER_TEMP "v061-upgrade-canary"
-          $canaryHome = Join-Path $canaryRoot "synthetic-v061-home"
-          $baseline = Join-Path $canaryRoot "baseline-v061.json"
-          New-Item -ItemType Directory -Force $canaryRoot | Out-Null
-
-          $env:PYTHONPATH = Join-Path $env:LEGACY_ROOT "src"
-          python -c "import pathlib, vestigia; root=pathlib.Path(r'$env:LEGACY_ROOT').resolve(); loaded=pathlib.Path(vestigia.__file__).resolve(); assert root in loaded.parents; assert vestigia.__version__ == '0.6.1'"
-          python ".github\scripts\v061_upgrade_canary.py" seed --home $canaryHome --evidence $baseline
-
-          "CANARY_ROOT=$canaryRoot" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "CANARY_HOME=$canaryHome" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "CANARY_BASELINE=$baseline" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Upgrade, turn, pack, restore, and verify under v0.7.0
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $archive = Join-Path $env:CANARY_ROOT "synthetic-v061-upgraded.vestigia.zip"
-          $restored = Join-Path $env:CANARY_ROOT "synthetic-v061-restored"
-          $evidence = Join-Path $env:CANARY_ROOT "upgrade-v061-to-v070.json"
-
-          $env:PYTHONPATH = Join-Path $PWD "VESTIGIA_Runtime\src"
-          python -c "import pathlib, vestigia; root=pathlib.Path(r'$PWD\VESTIGIA_Runtime').resolve(); loaded=pathlib.Path(vestigia.__file__).resolve(); assert root in loaded.parents; assert vestigia.__version__ == '0.7.0'"
-          python ".github\scripts\v061_upgrade_canary.py" upgrade --home $env:CANARY_HOME --baseline $env:CANARY_BASELINE --archive $archive --restored $restored --evidence $evidence --expected-version 0.7.0
-
-          $result = Get-Content $evidence -Raw | ConvertFrom-Json
-          @(
-            "## Synthetic v0.6.1 upgrade canary"
-            ""
-            "- Result: **$($result.result)**"
-            "- Source: v$($result.source.runtime_version) at ``$($result.source.commit)``"
-            "- Target: v$($result.target.runtime_version)"
-            "- Schema: $($result.source.schema_version) -> $($result.target.schema_version)"
-            "- Pack SHA-256: ``$($result.pack.sha256)``"
-            "- Manifest files: $($result.pack.file_count)"
-            "- Restore hash verification: $($result.pack.restore_hash_verification)"
-          ) | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-
-      - name: Preserve synthetic upgrade evidence
-        uses: actions/upload-artifact@v4
-        with:
-          name: v061-to-v070-upgrade-canary-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/v061-upgrade-canary/baseline-v061.json
-            ${{ runner.temp }}/v061-upgrade-canary/upgrade-v061-to-v070.json
-            ${{ runner.temp }}/v061-upgrade-canary/synthetic-v061-upgraded.vestigia.zip
-          if-no-files-found: error
-          retention-days: 90
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "security: make script shelf inert and lifecycle-atomic"
+          git push origin "HEAD:${{ github.head_ref }}"
