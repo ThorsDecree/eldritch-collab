@@ -21,3 +21,8 @@ from .image_drawer_continuation import install_core as _install_image_drawer_con
 
 _install_image_drawer_continuation()
 del _install_image_drawer_continuation
+
+from .workshop_sandbox import install_core as _install_workshop_sandbox
+
+_install_workshop_sandbox()
+del _install_workshop_sandbox
