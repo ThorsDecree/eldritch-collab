@@ -412,3 +412,12 @@ The runtime records a declared reviewer role; it does not cryptographically auth
 speaker selecting `--actor-role resident` is the resident. Home archives are private by policy,
 not encrypted, signed, or access-controlled by the runtime. Use ordinary disk encryption and
 trusted backup storage for sensitive homes.
+
+## License
+
+The source code and package material within `VESTIGIA_Runtime/` are licensed under the
+Mozilla Public License 2.0 (`MPL-2.0`). See [LICENSE](LICENSE) for the full terms.
+
+This scoped license does not by itself license sibling projects or other material elsewhere in
+the `eldritch-collab` repository. Third-party dependencies remain governed by their own
+licenses.
