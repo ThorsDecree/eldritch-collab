@@ -358,6 +358,9 @@ def build_doctor_report(
             "room_id_hash": _hash_label(config.get("room.id")),
             "active_resident_count": len(config.get("room.active_resident_ids", [])),
         },
+        "composition": __import__(
+            "vestigia.composition", fromlist=["composition_plan"]
+        ).composition_plan(),
         "database": database,
         "dependencies": dependencies,
         "backup": backup,

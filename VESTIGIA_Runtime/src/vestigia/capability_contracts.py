@@ -278,7 +278,20 @@ RELATED: dict[str, tuple[str, ...]] = {
 
 
 def contract_for(name: str) -> dict[str, Any]:
+    from .bootstrap import bootstrap_runtime
+    from .composition import apply_contract_contributions
+
+    bootstrap_runtime()
     fields, required = FIELDS[name]
+    examples = EXAMPLES.get(name)
+    fields, required, examples, group, related = apply_contract_contributions(
+        name,
+        fields,
+        required,
+        examples,
+        GROUPS.get(name, "other"),
+        RELATED.get(name, ()),
+    )
     properties = {
         "action": {"type": "string", "const": name},
         "after": AFTER,
@@ -291,10 +304,7 @@ def contract_for(name: str) -> dict[str, Any]:
         description=f"Executable input contract for {name}.",
     )
     if name == "image.share":
-        # Retain the v0.6 prose-key compatibility while the authoritative
-        # machine contract lives under properties.confirm.
         schema["confirm"] = "required only for private send or legacy claim"
-    examples = EXAMPLES.get(name)
     if examples is None:
         payload: dict[str, Any] = {"action": name, "after": "continue"}
         for field in required:
@@ -303,8 +313,8 @@ def contract_for(name: str) -> dict[str, Any]:
     return {
         "input_schema": schema,
         "example_envelopes": examples,
-        "group": GROUPS.get(name, "other"),
-        "related_actions": RELATED.get(name, ()),
+        "group": group,
+        "related_actions": related,
     }
 
 

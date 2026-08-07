@@ -17,7 +17,6 @@ from .workshop_sandbox_store import (
 )
 
 
-_INSTALLED = False
 _SCRIPT_ID = "vestigia.canonical.say-hi"
 _SCRIPT_VERSION = 1
 
@@ -134,35 +133,19 @@ def _register(house: Any) -> None:
     )
 
 
-def install_core() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
+def _observatory_panel(
+    house: Any, payload: dict[str, Any], result: dict[str, Any]
+) -> dict[str, Any]:
+    panels = result.get("observatory")
+    if isinstance(panels, dict) and str(payload.get("section") or "all") == "all":
+        panels["workshop_sandbox"] = _observatory_summary(house)
+    return result
 
-    from .house_tools import HousePort
 
-    previous_install = HousePort._install_capabilities
+def register_composition() -> None:
+    from .composition import register_capability_installer, register_observatory_panel
 
-    def install_with_workshop_sandbox(self: Any) -> None:
-        previous_install(self)
-        _register(self)
-
-    HousePort._install_capabilities = install_with_workshop_sandbox
-
-    try:
-        from . import sensory_apparatus
-
-        previous_observatory = sensory_apparatus._observatory
-
-        def observatory_with_workshop(house: Any, payload: dict[str, Any]) -> dict[str, Any]:
-            result = previous_observatory(house, payload)
-            panels = result.get("observatory")
-            if isinstance(panels, dict) and str(payload.get("section") or "all") == "all":
-                panels["workshop_sandbox"] = _observatory_summary(house)
-            return result
-
-        sensory_apparatus._observatory = observatory_with_workshop
-    except (ImportError, AttributeError):
-        pass
-
-    _INSTALLED = True
+    register_capability_installer("workshop.sandbox", _register, order=50)
+    register_observatory_panel(
+        "workshop.sandbox", _observatory_panel, order=50
+    )

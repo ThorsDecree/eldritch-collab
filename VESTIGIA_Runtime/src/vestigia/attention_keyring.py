@@ -38,8 +38,6 @@ from .capabilities import CapabilitySpec, object_schema
 from .sensory_controls import report as sensory_report
 
 
-_INSTALLED = False
-
 
 def _controls(house: Any) -> dict[str, Any]:
     from .resident_controls import load_resident_controls
@@ -548,96 +546,92 @@ def _register(house: Any) -> None:
     )
 
 
-def install_core() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-
-    from .house_tools import HousePort
-
-    previous_install = HousePort._install_capabilities
-
-    def install_with_keyring(self: Any) -> None:
-        previous_install(self)
-        _register(self)
-
-    HousePort._install_capabilities = install_with_keyring
-
-    from .runtime import CoreRuntime
-
-    original_chat = CoreRuntime.chat
-
-    def chat_with_wake_receipt(
-        self: Any, message: Any, *, model_route: str = "default"
-    ) -> Any:
-        wake = consume_wake_context()
-        if message.interface != "discord" or not wake:
-            return original_chat(self, message, model_route=model_route)
-        listening_event_id = str(message.metadata.get("listening_event_id") or "").strip()
-        router_event = (
-            by_listening_event(self.db, self.resident_id, listening_event_id)
-            if listening_event_id
-            else None
-        )
-        context_ids = [
-            str(item)
-            for item in [
-                message.external_id,
-                *list(message.metadata.get("ambient_message_ids") or []),
-            ]
-            if item
+def _chat_middleware(
+    runtime: Any, message: Any, model_route: str, next_call: Any
+) -> Any:
+    wake = consume_wake_context()
+    if message.interface != "discord" or not wake:
+        return next_call(message, model_route)
+    listening_event_id = str(message.metadata.get("listening_event_id") or "").strip()
+    router_event = (
+        by_listening_event(runtime.db, runtime.resident_id, listening_event_id)
+        if listening_event_id
+        else None
+    )
+    context_ids = [
+        str(item)
+        for item in [
+            message.external_id,
+            *list(message.metadata.get("ambient_message_ids") or []),
         ]
-        opened = open_wake_receipt(
-            self.db,
-            resident_id=self.resident_id,
-            room_id=self.room_id,
-            interface="discord",
-            channel_id=str(message.metadata.get("channel_id") or wake.get("channel_id") or ""),
-            message_id=str(message.external_id or message.metadata.get("triggering_message_id") or ""),
-            listening_event_id=listening_event_id or None,
-            signal_kind=str(wake.get("signal_kind") or "unknown"),
-            reason_code=str(wake.get("reason_code") or "inherited_live_route"),
-            live_route=str(wake.get("live_route") or "invite"),
-            router_event=router_event,
-            included_context_ids=context_ids,
-        )
-        try:
-            result = original_chat(self, message, model_route=model_route)
-        except Exception:
-            complete_wake_receipt(
-                self.db,
-                self.resident_id,
-                str(opened["id"]),
-                turn_id=None,
-                status="runtime_error",
-                response_prepared=None,
-            )
-            raise
-        prepared = bool(
-            result.text or result.outbound_attachments or result.outbound_reactions
-        )
+        if item
+    ]
+    opened = open_wake_receipt(
+        runtime.db,
+        resident_id=runtime.resident_id,
+        room_id=runtime.room_id,
+        interface="discord",
+        channel_id=str(
+            message.metadata.get("channel_id") or wake.get("channel_id") or ""
+        ),
+        message_id=str(
+            message.external_id
+            or message.metadata.get("triggering_message_id")
+            or ""
+        ),
+        listening_event_id=listening_event_id or None,
+        signal_kind=str(wake.get("signal_kind") or "unknown"),
+        reason_code=str(wake.get("reason_code") or "inherited_live_route"),
+        live_route=str(wake.get("live_route") or "invite"),
+        router_event=router_event,
+        included_context_ids=context_ids,
+    )
+    try:
+        result = next_call(message, model_route)
+    except Exception:
         complete_wake_receipt(
-            self.db,
-            self.resident_id,
+            runtime.db,
+            runtime.resident_id,
             str(opened["id"]),
-            turn_id=str(result.turn_id),
-            status="runtime_suppressed" if result.suppressed else "completed",
-            response_prepared=prepared,
+            turn_id=None,
+            status="runtime_error",
+            response_prepared=None,
         )
-        return result
+        raise
+    prepared = bool(
+        result.text or result.outbound_attachments or result.outbound_reactions
+    )
+    complete_wake_receipt(
+        runtime.db,
+        runtime.resident_id,
+        str(opened["id"]),
+        turn_id=str(result.turn_id),
+        status="runtime_suppressed" if result.suppressed else "completed",
+        response_prepared=prepared,
+    )
+    return result
 
-    CoreRuntime.chat = chat_with_wake_receipt
 
-    from . import sensory_apparatus
+def _observatory_panel(
+    house: Any, payload: dict[str, Any], result: dict[str, Any]
+) -> dict[str, Any]:
+    panels = result.get("observatory")
+    if isinstance(panels, dict) and str(payload.get("section") or "all") == "all":
+        panels["attention_dashboard"] = _dashboard(house, {"limit": 10})
+    return result
 
-    original_observatory = sensory_apparatus._observatory
 
-    def observatory_with_keyring(house: Any, payload: dict[str, Any]) -> dict[str, Any]:
-        result = original_observatory(house, payload)
-        panels = result.get("observatory")
-        if isinstance(panels, dict) and str(payload.get("section") or "all") == "all":
-            panels["attention_dashboard"] = _dashboard(house, {"limit": 10})
-        return result
+def register_composition() -> None:
+    from .composition import (
+        register_capability_installer,
+        register_chat_middleware,
+        register_observatory_panel,
+    )
 
-    sensory_apparatus._observatory = observatory_with_keyring
-    _INSTALLED = True
+    register_capability_installer("attention.keyring", _register, order=30)
+    register_chat_middleware(
+        "attention.keyring.wake_receipt", _chat_middleware, order=30
+    )
+    register_observatory_panel(
+        "attention.keyring", _observatory_panel, order=30
+    )
