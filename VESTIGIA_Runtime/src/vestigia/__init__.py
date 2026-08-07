@@ -26,3 +26,8 @@ from .workshop_sandbox import install_core as _install_workshop_sandbox
 
 _install_workshop_sandbox()
 del _install_workshop_sandbox
+
+from .workshop_script_shelf import install_core as _install_workshop_script_shelf
+
+_install_workshop_script_shelf()
+del _install_workshop_script_shelf
