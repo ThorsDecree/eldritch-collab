@@ -420,6 +420,9 @@ class HousePort:
         self.open_curation = open_curation
         self.images = image_service
         self.legible = LegibleLedger(config, db)
+        from .bootstrap import bootstrap_runtime
+
+        bootstrap_runtime()
         self.registry = CapabilityRegistry(config)
         with self.db.connect() as connection:
             connection.executescript(HOUSE_SCHEMA)
@@ -1000,6 +1003,12 @@ class HousePort:
     # ---------- resident-facing dispatch ----------
 
     def _install_capabilities(self) -> None:
+        self._install_core_capabilities()
+        from .composition import install_capability_contributions
+
+        install_capability_contributions(self)
+
+    def _install_core_capabilities(self) -> None:
         handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
             "list": self._list,
             "search": self._search,
@@ -3459,6 +3468,17 @@ class HousePort:
         }
 
     def _image_drawer(
+        self, payload: dict[str, Any], context: dict[str, Any]
+    ) -> dict[str, Any]:
+        from .composition import dispatch_drawer_mode
+
+        handled, result = dispatch_drawer_mode(self, payload, context)
+        if handled:
+            assert result is not None
+            return result
+        return self._image_drawer_core(payload, context)
+
+    def _image_drawer_core(
         self, payload: dict[str, Any], context: dict[str, Any]
     ) -> dict[str, Any]:
         images = self._require_images()

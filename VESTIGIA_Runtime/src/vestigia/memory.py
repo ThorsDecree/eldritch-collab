@@ -105,6 +105,13 @@ class MemoryService:
         )
 
     def extract_from_participant_turn(self, text: str, turn_id: str) -> list[str]:
+        from .composition import run_memory_extract
+
+        return run_memory_extract(
+            self, text, turn_id, self._extract_from_participant_turn_core
+        )
+
+    def _extract_from_participant_turn_core(self, text: str, turn_id: str) -> list[str]:
         ids = []
         for candidate in self.extractor.extract(text):
             ids.append(

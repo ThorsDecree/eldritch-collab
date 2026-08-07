@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 import json
 import re
 from typing import Any, Callable
@@ -167,6 +167,15 @@ class CapabilityRegistry:
                 f"Outward facing capability {spec.name} must declare a non-none confirmation policy."
             )
         self._specs[name] = spec
+
+    def replace_spec(self, name: str, **changes: Any) -> CapabilitySpec:
+        normalized = name.strip().lower()
+        current = self.spec(normalized)
+        updated = replace(current, **changes)
+        if updated.name != normalized:
+            raise ValueError("replacement capability name must not change")
+        self._specs[normalized] = updated
+        return updated
 
     def spec(self, name: str) -> CapabilitySpec:
         normalized = name.strip().lower()

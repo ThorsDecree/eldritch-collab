@@ -9,7 +9,6 @@ from typing import Any
 from .utils import new_id, sha256_text, stable_json, utc_now_iso
 
 
-_INSTALLED = False
 _DRAWER_MODES = (
     "browse",
     "search",
@@ -851,10 +850,21 @@ def remove_bookmark(images: Any, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _extend_contract() -> None:
+def _contract_contribution(
+    fields: dict[str, Any],
+    required: tuple[str, ...],
+    examples: tuple[dict[str, Any], ...] | None,
+    group: str,
+    related: tuple[str, ...],
+) -> tuple[
+    dict[str, Any],
+    tuple[str, ...],
+    tuple[dict[str, Any], ...] | None,
+    str,
+    tuple[str, ...],
+]:
     from . import capability_contracts as contracts
 
-    fields, required = contracts.FIELDS["image.drawer"]
     updated = dict(fields)
     updated["mode"] = contracts.S(enum=list(_DRAWER_MODES))
     updated.update(
@@ -865,8 +875,7 @@ def _extend_contract() -> None:
             "note": contracts.S(maxLength=2000),
         }
     )
-    contracts.FIELDS["image.drawer"] = (updated, required)
-    existing = tuple(contracts.EXAMPLES.get("image.drawer", ()))
+    existing = tuple(examples or ())
     continuation_examples = (
         {
             "action": "image.drawer",
@@ -888,59 +897,63 @@ def _extend_contract() -> None:
             "after": "continue",
         },
     )
-    contracts.EXAMPLES["image.drawer"] = existing + continuation_examples
+    return updated, required, existing + continuation_examples, group, related
 
 
-def install_core() -> None:
-    global _INSTALLED
-    if _INSTALLED:
+def _drawer_mode_handler(
+    house: Any, payload: dict[str, Any], _context: dict[str, Any]
+) -> dict[str, Any]:
+    images = house._require_images()
+    mode = str(payload.get("mode") or "browse").strip().lower()
+    if mode in {"browse", "search"}:
+        return start_page(images, payload)
+    if mode == "continue":
+        return continue_page(images, payload)
+    if mode == "bookmark":
+        return bookmark_position(images, payload)
+    if mode == "open_bookmark":
+        return open_bookmark(images, payload)
+    if mode == "list_bookmarks":
+        return list_bookmarks(images, payload)
+    if mode == "remove_bookmark":
+        return remove_bookmark(images, payload)
+    return house._image_drawer_core(payload, _context)
+
+
+def _refresh_spec(house: Any) -> None:
+    try:
+        house.registry.replace_spec(
+            "image.drawer",
+            description=(
+                "Browse, search, resume, bookmark, name, annotate, summarize, "
+                "pocket, or inspect resident-owned image memory cards through "
+                "stable private collection snapshots."
+            ),
+            next_step=(
+                "Use pagination.next_cursor with mode:continue, or preserve the "
+                "current cursor with mode:bookmark."
+            ),
+        )
+    except ValueError:
         return
 
-    _extend_contract()
 
-    from .house_tools import HousePort
+def register_composition() -> None:
+    from .composition import (
+        register_capability_installer,
+        register_contract_contribution,
+        register_drawer_modes,
+    )
 
-    original_drawer = HousePort._image_drawer
-
-    def drawer_with_continuation(
-        self: Any, payload: dict[str, Any], context: dict[str, Any]
-    ) -> dict[str, Any]:
-        images = self._require_images()
-        mode = str(payload.get("mode") or "browse").strip().lower()
-        if mode in {"browse", "search"}:
-            return start_page(images, payload)
-        if mode == "continue":
-            return continue_page(images, payload)
-        if mode == "bookmark":
-            return bookmark_position(images, payload)
-        if mode == "open_bookmark":
-            return open_bookmark(images, payload)
-        if mode == "list_bookmarks":
-            return list_bookmarks(images, payload)
-        if mode == "remove_bookmark":
-            return remove_bookmark(images, payload)
-        return original_drawer(self, payload, context)
-
-    HousePort._image_drawer = drawer_with_continuation
-
-    previous_install = HousePort._install_capabilities
-
-    def install_with_drawer_continuation(self: Any) -> None:
-        previous_install(self)
-        spec = self.registry._specs.get("image.drawer")
-        if spec is not None:
-            self.registry._specs["image.drawer"] = replace(
-                spec,
-                description=(
-                    "Browse, search, resume, bookmark, name, annotate, summarize, "
-                    "pocket, or inspect resident-owned image memory cards through "
-                    "stable private collection snapshots."
-                ),
-                next_step=(
-                    "Use pagination.next_cursor with mode:continue, or preserve the "
-                    "current cursor with mode:bookmark."
-                ),
-            )
-
-    HousePort._install_capabilities = install_with_drawer_continuation
-    _INSTALLED = True
+    register_drawer_modes(
+        "image.drawer.continuation", _DRAWER_MODES, _drawer_mode_handler, order=40
+    )
+    register_contract_contribution(
+        "image.drawer.continuation",
+        "image.drawer",
+        _contract_contribution,
+        order=40,
+    )
+    register_capability_installer(
+        "image.drawer.continuation", _refresh_spec, order=40
+    )
