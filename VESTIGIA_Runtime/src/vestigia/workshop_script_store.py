@@ -297,35 +297,41 @@ def record_event(
     note: str | None = None,
     connection: Any | None = None,
 ) -> str:
+    if connection is None:
+        with house.db.connect() as owned:
+            return record_event(
+                house,
+                script_id=script_id,
+                version=version,
+                event_type=event_type,
+                from_state=from_state,
+                to_state=to_state,
+                evidence_id=evidence_id,
+                note=note,
+                connection=owned,
+            )
+
     event_id = new_id("script_event")
-    note_hash = sha256_text(note) if note else None
-    own = connection is None
-    if own:
-        connection = house.db.connect()
-    try:
-        connection.execute(
-            """
-            INSERT INTO workshop_script_events
-            (id, resident_id, script_id, version, event_type, from_state, to_state,
-             evidence_id, note_hash, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                event_id,
-                house.resident_id,
-                script_id,
-                version,
-                event_type,
-                from_state,
-                to_state,
-                evidence_id,
-                note_hash,
-                utc_now_iso(),
-            ),
-        )
-    finally:
-        if own:
-            connection.close()
+    connection.execute(
+        """
+        INSERT INTO workshop_script_events
+        (id, resident_id, script_id, version, event_type, from_state, to_state,
+         evidence_id, note_hash, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event_id,
+            house.resident_id,
+            script_id,
+            int(version),
+            event_type,
+            from_state,
+            to_state,
+            evidence_id,
+            sha256_text(note) if note else None,
+            utc_now_iso(),
+        ),
+    )
     return event_id
 
 
@@ -337,36 +343,54 @@ def set_state(
     event_type: str,
     evidence_id: str | None = None,
     reason: str | None = None,
-) -> None:
-    previous = str(row["state"])
-    now = utc_now_iso()
-    with house.db.connect() as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        connection.execute(
-            """
-            UPDATE workshop_scripts SET state=?, quarantine_reason=?, updated_at=?
-            WHERE resident_id=? AND script_id=? AND version=?
-            """,
-            (
+    expected_state: str | None = None,
+    connection: Any | None = None,
+) -> str:
+    if connection is None:
+        with house.db.connect() as owned:
+            owned.execute("BEGIN IMMEDIATE")
+            return set_state(
+                house,
+                row,
                 state,
-                reason if state == "quarantined" else None,
-                now,
-                house.resident_id,
-                row["script_id"],
-                row["version"],
-            ),
-        )
-        record_event(
-            house,
-            script_id=str(row["script_id"]),
-            version=int(row["version"]),
-            event_type=event_type,
-            from_state=previous,
-            to_state=state,
-            evidence_id=evidence_id,
-            note=reason,
-            connection=connection,
-        )
+                event_type=event_type,
+                evidence_id=evidence_id,
+                reason=reason,
+                expected_state=expected_state,
+                connection=owned,
+            )
+
+    previous = expected_state or str(row["state"])
+    now = utc_now_iso()
+    cursor = connection.execute(
+        """
+        UPDATE workshop_scripts
+        SET state=?, quarantine_reason=?, updated_at=?
+        WHERE resident_id=? AND script_id=? AND version=? AND state=?
+        """,
+        (
+            state,
+            reason if state == "quarantined" else None,
+            now,
+            house.resident_id,
+            row["script_id"],
+            int(row["version"]),
+            previous,
+        ),
+    )
+    if cursor.rowcount != 1:
+        raise RuntimeError("script state changed concurrently; retry from fresh evidence")
+    return record_event(
+        house,
+        script_id=str(row["script_id"]),
+        version=int(row["version"]),
+        event_type=event_type,
+        from_state=previous,
+        to_state=state,
+        evidence_id=evidence_id,
+        note=reason,
+        connection=connection,
+    )
 
 
 def list_scripts(house: Any, limit: int) -> list[dict[str, Any]]:
