@@ -1,21 +1,24 @@
 name: One-shot v0.7.0 publication
 
 on:
-  pull_request:
-    types: [opened, synchronize, ready_for_review]
-    branches: [main]
+  push:
+    branches:
+      - automation/v0.7.0-publish
 
 permissions:
   actions: read
   contents: write
   issues: write
 
+concurrency:
+  group: one-shot-v070-publication
+  cancel-in-progress: false
+
 jobs:
   publish:
     if: >-
-      github.head_ref == 'automation/v0.7.0-publish' &&
-      github.base_ref == 'main' &&
-      github.repository == 'ThorsDecree/eldritch-collab'
+      github.repository == 'ThorsDecree/eldritch-collab' &&
+      github.ref == 'refs/heads/automation/v0.7.0-publish'
     runs-on: windows-latest
 
     steps:
@@ -68,6 +71,7 @@ jobs:
 
           $wheelHash = (Get-FileHash $wheel.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $sdistHash = (Get-FileHash $sdist.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifestHash = (Get-FileHash $sums.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $manifest = Get-Content $sums.FullName -Raw
           if ($manifest -notmatch [regex]::Escape("$wheelHash  vestigia_runtime-0.7.0-py3-none-any.whl")) { throw 'Wheel hash does not match SHA256SUMS.txt' }
           if ($manifest -notmatch [regex]::Escape("$sdistHash  vestigia_runtime-0.7.0.tar.gz")) { throw 'Source distribution hash does not match SHA256SUMS.txt' }
@@ -108,6 +112,7 @@ jobs:
           - Artifact ZIP SHA-256: `$artifactZipHash`
           - Wheel SHA-256: `$wheelHash`
           - Source distribution SHA-256: `$sdistHash`
+          - SHA256SUMS.txt SHA-256: `$manifestHash`
 
           Validation includes Windows Python 3.11 and 3.14, isolated wheel installation, genuine v0.6.1 upgrade/turn/pack/restore coverage, and the completed redacted live Discord trust-boundary ledger recorded in the repository.
 
@@ -117,17 +122,20 @@ jobs:
 
           $releases = @(gh api "repos/$env:REPOSITORY/releases?per_page=100" | ConvertFrom-Json)
           $existingRelease = @($releases | Where-Object { $_.tag_name -eq $env:RELEASE_TAG })
-          if ($existingRelease.Count -ne 0) { throw "Release $env:RELEASE_TAG already exists; refusing to overwrite it" }
-
-          gh release create $env:RELEASE_TAG $wheel.FullName $sdist.FullName $sums.FullName --repo $env:REPOSITORY --verify-tag --title "VESTIGIA Runtime v0.7.0 — The Resident's Drawers" --notes-file release-notes.md
+          if ($existingRelease.Count -eq 0) {
+            gh release create $env:RELEASE_TAG $wheel.FullName $sdist.FullName $sums.FullName --repo $env:REPOSITORY --verify-tag --title "VESTIGIA Runtime v0.7.0 — The Resident's Drawers" --notes-file release-notes.md
+          } elseif ($existingRelease.Count -eq 1) {
+            Write-Host "Release already exists; validating existing public assets rather than overwriting it."
+          } else {
+            throw 'Multiple releases reference v0.7.0'
+          }
 
           New-Item -ItemType Directory -Path public | Out-Null
           gh release download $env:RELEASE_TAG --repo $env:REPOSITORY --dir public --pattern 'vestigia_runtime-0.7.0-py3-none-any.whl' --pattern 'vestigia_runtime-0.7.0.tar.gz' --pattern 'SHA256SUMS.txt'
           $publicWheelHash = (Get-FileHash 'public/vestigia_runtime-0.7.0-py3-none-any.whl' -Algorithm SHA256).Hash.ToLowerInvariant()
           $publicSdistHash = (Get-FileHash 'public/vestigia_runtime-0.7.0.tar.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
-          $publicSumsHash = (Get-FileHash 'public/SHA256SUMS.txt' -Algorithm SHA256).Hash.ToLowerInvariant()
-          $sourceSumsHash = (Get-FileHash $sums.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($publicWheelHash -ne $wheelHash -or $publicSdistHash -ne $sdistHash -or $publicSumsHash -ne $sourceSumsHash) { throw 'Public release attachment hash verification failed' }
+          $publicManifestHash = (Get-FileHash 'public/SHA256SUMS.txt' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($publicWheelHash -ne $wheelHash -or $publicSdistHash -ne $sdistHash -or $publicManifestHash -ne $manifestHash) { throw 'Public release attachment hash verification failed' }
 
           $releaseJson = gh release view $env:RELEASE_TAG --repo $env:REPOSITORY --json url,tagName | ConvertFrom-Json
           $report = @"
@@ -141,9 +149,10 @@ jobs:
           - artifact ZIP SHA-256: `$artifactZipHash`
           - wheel SHA-256: `$wheelHash`
           - sdist SHA-256: `$sdistHash`
+          - SHA256SUMS.txt SHA-256: `$manifestHash`
           - public wheel recheck: `$publicWheelHash`
           - public sdist recheck: `$publicSdistHash`
-          - public SHA256SUMS recheck: `$publicSumsHash`
+          - public SHA256SUMS recheck: `$publicManifestHash`
           - tag: `$env:RELEASE_TAG` -> `$env:RELEASE_SHA`
           - release: $($releaseJson.url)
 
