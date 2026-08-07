@@ -1179,4 +1179,13 @@ write(DOCS / "WORKSHOP_SCRIPT_SHELF_RUNTIME.md", doc)
 # Remove the package-import installer left by the earlier branch. PR #27 owns bootstrap.
 write(SRC / "__init__.py", '"""VESTIGIA portable continuity runtime."""\n\n__version__ = "0.8.0.dev0"\n')
 
+# Extend the explicit bootstrap fixture for the shelf registrar.
+bootstrap_test = TESTS / "test_runtime_bootstrap.py"
+replace(
+    bootstrap_test,
+    '        ("workshop_sandbox", "register_composition"),\n    )',
+    '        ("workshop_sandbox", "register_composition"),\n'
+    '        ("workshop_script_shelf", "register_composition"),\n    )',
+)
+
 Path(__file__).unlink()
