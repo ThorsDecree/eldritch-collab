@@ -13,48 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  fix-composition:
-    name: apply composition follow-up fixes
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/runtime-composition-hardening'
-    runs-on: windows-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Check out pull-request branch
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Apply, test, and publish follow-up fixes
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          if (-not (Test-Path ".github\scripts\fix_composition_followups.py")) {
-            exit 0
-          }
-
-          python ".github\scripts\fix_composition_followups.py"
-
-          Push-Location "VESTIGIA_Runtime"
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,discord,tokens]"
-          python -m compileall -q src
-          python -m pytest -q
-          Pop-Location
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "fix: preserve core drawer modes and reject composition collisions"
-          git push origin "HEAD:${{ github.head_ref }}"
-
   test:
     name: test (Windows, Python ${{ matrix.python_version }})
 
