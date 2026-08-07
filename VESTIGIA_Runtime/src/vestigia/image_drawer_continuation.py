@@ -917,7 +917,7 @@ def _drawer_mode_handler(
         return list_bookmarks(images, payload)
     if mode == "remove_bookmark":
         return remove_bookmark(images, payload)
-    raise ValueError(f"unsupported registered image drawer mode: {mode}")
+    return house._image_drawer_core(payload, _context)
 
 
 def _refresh_spec(house: Any) -> None:

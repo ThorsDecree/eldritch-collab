@@ -95,3 +95,25 @@ def test_production_feature_modules_do_not_assign_private_runtime_methods() -> N
         assert "def install_core" not in text
         for marker in forbidden:
             assert marker not in text, f"{name} still contains {marker}"
+
+def test_image_drawer_extension_delegates_legacy_core_modes() -> None:
+    from vestigia.image_drawer_continuation import _drawer_mode_handler
+
+    class House:
+        def _require_images(self):
+            return object()
+
+        def _image_drawer_core(self, payload, context):
+            return {
+                "delegated": True,
+                "mode": payload["mode"],
+                "context": context,
+            }
+
+    result = _drawer_mode_handler(House(), {"mode": "get"}, {"source": "test"})
+    assert result == {
+        "delegated": True,
+        "mode": "get",
+        "context": {"source": "test"},
+    }
+

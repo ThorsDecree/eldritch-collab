@@ -111,9 +111,12 @@ def register_drawer_modes(
     *,
     order: int,
 ) -> None:
+    del name
     for mode in modes:
         normalized = str(mode).strip().lower()
-        _drawer_modes.register(f"{normalized}:{name}", callback, order=order)
+        if not normalized:
+            raise ValueError("drawer mode names must not be empty")
+        _drawer_modes.register(normalized, callback, order=order)
 
 
 def register_contract_contribution(
@@ -226,12 +229,13 @@ def dispatch_drawer_mode(
     context: dict[str, Any],
 ) -> tuple[bool, dict[str, Any] | None]:
     mode = str(payload.get("mode") or "browse").strip().lower()
-    matches = [entry for entry in _drawer_modes.entries() if entry.name.startswith(mode + ":")]
-    if not matches:
+    entry = next(
+        (candidate for candidate in _drawer_modes.entries() if candidate.name == mode),
+        None,
+    )
+    if entry is None:
         return False, None
-    if len(matches) != 1:
-        raise RuntimeError(f"drawer mode collision: {mode}")
-    result = matches[0].callback(house, payload, context)
+    result = entry.callback(house, payload, context)
     if not isinstance(result, dict):
         raise TypeError(f"drawer mode {mode} returned a non-object")
     return True, result
