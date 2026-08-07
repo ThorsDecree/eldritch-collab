@@ -19,7 +19,6 @@ from .sensory_events import explain, forget, list_events
 from .utils import sha256_text, utc_now_iso
 
 
-_CORE_INSTALLED = False
 _NOTHING_TURN: contextvars.ContextVar[str] = contextvars.ContextVar(
     "vestigia_make_nothing_happen_turn", default=""
 )
@@ -44,7 +43,7 @@ def _safe_rows(
         return []
 
 
-def _observatory(house: Any, payload: dict[str, Any]) -> dict[str, Any]:
+def _observatory_core(house: Any, payload: dict[str, Any]) -> dict[str, Any]:
     from . import resident_controls
 
     limit = max(1, min(int(payload.get("limit", 20)), 100))
@@ -155,6 +154,12 @@ def _observatory(house: Any, payload: dict[str, Any]) -> dict[str, Any]:
             "send, retry, consume, or publish anything."
         ),
     }
+
+
+def _observatory(house: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    from .composition import render_observatory
+
+    return render_observatory(house, payload, _observatory_core)
 
 
 def _sensory_control(
@@ -297,6 +302,20 @@ def _make_nothing(
     }
 
 
+def _explain_source(house: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    from . import resident_controls
+    from .composition import enrich_source_explain
+
+    event_id = str(payload.get("event_id") or "")
+    result = explain(
+        house.db,
+        house.resident_id,
+        event_id,
+        resident_controls.ensure_listening_schema,
+    )
+    return enrich_source_explain(house.db, house.resident_id, event_id, result)
+
+
 def _register_capabilities(house: Any) -> None:
     from . import resident_controls
 
@@ -369,12 +388,7 @@ def _register_capabilities(house: Any) -> None:
                 {"action": "source.explain", "event_id": "listen_...", "after": "continue"},
             ),
         ),
-        lambda payload, _context: explain(
-            house.db,
-            house.resident_id,
-            str(payload.get("event_id") or ""),
-            resident_controls.ensure_listening_schema,
-        ),
+        lambda payload, _context: _explain_source(house, payload),
     )
     house.registry.register(
         CapabilitySpec(
@@ -494,70 +508,38 @@ def _register_capabilities(house: Any) -> None:
     )
 
 
-def install_core() -> None:
-    global _CORE_INSTALLED
-    if _CORE_INSTALLED:
-        return
+def _memory_extract_veto(_service: Any, _text: str, turn_id: str) -> bool:
+    return _NOTHING_TURN.get() == str(turn_id)
 
-    from .house_tools import HousePort
 
-    original_install = HousePort._install_capabilities
+def _curation_veto(_runtime: Any, values: dict[str, Any]) -> bool:
+    return _NOTHING_TURN.get() == str(values.get("input_turn_id") or "")
 
-    def install_with_sensory(self: Any) -> None:
-        original_install(self)
-        _register_capabilities(self)
 
-    HousePort._install_capabilities = install_with_sensory
+def _receipt_filter(receipts: list[str], *, compact: bool) -> list[str]:
+    del compact
+    return [
+        item
+        for item in receipts
+        if not item.startswith("tool_action:ok:make.nothing.happen:")
+    ]
 
-    from .memory import MemoryService
-    from .runtime import CoreRuntime
 
-    original_extract = MemoryService.extract_from_participant_turn
-
-    def extract_unless_nothing(
-        self: Any, text: str, turn_id: str
-    ) -> list[str]:
-        if _NOTHING_TURN.get() == str(turn_id):
-            return []
-        return original_extract(self, text, turn_id)
-
-    MemoryService.extract_from_participant_turn = extract_unless_nothing
-
-    original_curation = CoreRuntime._run_curation_if_due
-
-    def curate_unless_nothing(
-        self: Any,
-        *,
-        input_turn_id: str,
-        assistant_turn_id: str,
-        interface: str,
-        model_route: str,
-    ) -> list[str]:
-        if _NOTHING_TURN.get() == str(input_turn_id):
-            return []
-        return original_curation(
-            self,
-            input_turn_id=input_turn_id,
-            assistant_turn_id=assistant_turn_id,
-            interface=interface,
-            model_route=model_route,
-        )
-
-    CoreRuntime._run_curation_if_due = curate_unless_nothing
-
-    original_format = CoreRuntime._format_resident_receipts
-
-    def format_without_noop_receipt(
-        receipts: list[str], *, compact: bool
-    ) -> str:
-        visible = [
-            item
-            for item in receipts
-            if not item.startswith("tool_action:ok:make.nothing.happen:")
-        ]
-        return original_format(visible, compact=compact) if visible else ""
-
-    CoreRuntime._format_resident_receipts = staticmethod(
-        format_without_noop_receipt
+def register_composition() -> None:
+    from .composition import (
+        register_capability_installer,
+        register_curation_veto,
+        register_memory_extract_veto,
+        register_receipt_filter,
     )
-    _CORE_INSTALLED = True
+
+    register_capability_installer("sensory", _register_capabilities, order=10)
+    register_memory_extract_veto(
+        "sensory.make_nothing_happen", _memory_extract_veto, order=10
+    )
+    register_curation_veto(
+        "sensory.make_nothing_happen", _curation_veto, order=10
+    )
+    register_receipt_filter(
+        "sensory.make_nothing_happen", _receipt_filter, order=10
+    )

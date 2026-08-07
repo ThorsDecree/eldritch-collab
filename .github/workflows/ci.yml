@@ -66,9 +66,9 @@ jobs:
         if: matrix.package_smoke
         run: |
           $ErrorActionPreference = "Stop"
-          $files = Get-ChildItem "dist\vestigia_runtime-0.7.0*" -File | Sort-Object Name
+          $files = Get-ChildItem "dist\vestigia_runtime-0.8.0.dev0*" -File | Sort-Object Name
           if ($files.Count -ne 2) {
-            throw "Expected one v0.7.0 wheel and one source distribution; found $($files.Count)"
+            throw "Expected one v0.8.0.dev0 wheel and one source distribution; found $($files.Count)"
           }
           $lines = foreach ($file in $files) {
             $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -97,22 +97,22 @@ jobs:
 
           & $smokePython -m pip install "${wheel}[discord,tokens]"
           & $smokePython -m pip check
-          & $smokePython -c "import vestigia, discord, tiktoken; assert vestigia.__version__ == '0.7.0'"
+          & $smokePython -c "import vestigia, discord, tiktoken; assert vestigia.__version__ == '0.8.0.dev0'"
 
-      - name: Preserve verified release artifacts
+      - name: Preserve verified development artifacts
         if: matrix.package_smoke
         uses: actions/upload-artifact@v4
         with:
-          name: vestigia-runtime-0.7.0-${{ github.sha }}
+          name: vestigia-runtime-0.8.0.dev0-${{ github.sha }}
           path: |
-            VESTIGIA_Runtime/dist/vestigia_runtime-0.7.0-py3-none-any.whl
-            VESTIGIA_Runtime/dist/vestigia_runtime-0.7.0.tar.gz
+            VESTIGIA_Runtime/dist/vestigia_runtime-0.8.0.dev0-py3-none-any.whl
+            VESTIGIA_Runtime/dist/vestigia_runtime-0.8.0.dev0.tar.gz
             VESTIGIA_Runtime/dist/SHA256SUMS.txt
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 30
 
   upgrade-canary:
-    name: upgrade canary (v0.6.1 to v0.7.0)
+    name: upgrade canary (v0.6.1 to current)
     runs-on: windows-latest
 
     steps:
@@ -128,7 +128,7 @@ jobs:
           cache: pip
           cache-dependency-path: VESTIGIA_Runtime/pyproject.toml
 
-      - name: Install release-candidate dependencies
+      - name: Install current development dependencies
         working-directory: VESTIGIA_Runtime
         shell: pwsh
         run: |
@@ -164,17 +164,17 @@ jobs:
           "CANARY_HOME=$canaryHome" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "CANARY_BASELINE=$baseline" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Upgrade, turn, pack, restore, and verify under v0.7.0
+      - name: Upgrade, turn, pack, restore, and verify under current development
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $archive = Join-Path $env:CANARY_ROOT "synthetic-v061-upgraded.vestigia.zip"
           $restored = Join-Path $env:CANARY_ROOT "synthetic-v061-restored"
-          $evidence = Join-Path $env:CANARY_ROOT "upgrade-v061-to-v070.json"
+          $evidence = Join-Path $env:CANARY_ROOT "upgrade-v061-to-current.json"
 
           $env:PYTHONPATH = Join-Path $PWD "VESTIGIA_Runtime\src"
-          python -c "import pathlib, vestigia; root=pathlib.Path(r'$PWD\VESTIGIA_Runtime').resolve(); loaded=pathlib.Path(vestigia.__file__).resolve(); assert root in loaded.parents; assert vestigia.__version__ == '0.7.0'"
-          python ".github\scripts\v061_upgrade_canary.py" upgrade --home $env:CANARY_HOME --baseline $env:CANARY_BASELINE --archive $archive --restored $restored --evidence $evidence --expected-version 0.7.0
+          python -c "import pathlib, vestigia; root=pathlib.Path(r'$PWD\VESTIGIA_Runtime').resolve(); loaded=pathlib.Path(vestigia.__file__).resolve(); assert root in loaded.parents; assert vestigia.__version__ == '0.8.0.dev0'"
+          python ".github\scripts\v061_upgrade_canary.py" upgrade --home $env:CANARY_HOME --baseline $env:CANARY_BASELINE --archive $archive --restored $restored --evidence $evidence --expected-version 0.8.0.dev0
 
           $result = Get-Content $evidence -Raw | ConvertFrom-Json
           @(
@@ -192,10 +192,10 @@ jobs:
       - name: Preserve synthetic upgrade evidence
         uses: actions/upload-artifact@v4
         with:
-          name: v061-to-v070-upgrade-canary-${{ github.sha }}
+          name: v061-to-current-upgrade-canary-${{ github.sha }}
           path: |
             ${{ runner.temp }}/v061-upgrade-canary/baseline-v061.json
-            ${{ runner.temp }}/v061-upgrade-canary/upgrade-v061-to-v070.json
+            ${{ runner.temp }}/v061-upgrade-canary/upgrade-v061-to-current.json
             ${{ runner.temp }}/v061-upgrade-canary/synthetic-v061-upgraded.vestigia.zip
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 30

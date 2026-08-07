@@ -133,6 +133,13 @@ class CoreRuntime:
             return self._chat_unlocked(message, model_route=model_route)
 
     def _chat_unlocked(self, message: NormalizedMessage, *, model_route: str = "default") -> RuntimeResult:
+        from .composition import run_chat_middleware
+
+        return run_chat_middleware(
+            self, message, model_route, self._chat_core_unlocked
+        )
+
+    def _chat_core_unlocked(self, message: NormalizedMessage, *, model_route: str = "default") -> RuntimeResult:
         turn_id = new_id("turn")
         self.db.add_turn(
             resident_id=self.resident_id,
@@ -339,6 +346,15 @@ class CoreRuntime:
 
     @staticmethod
     def _format_resident_receipts(receipts: list[str], *, compact: bool) -> str:
+        from .composition import filter_receipts
+
+        visible = filter_receipts(receipts, compact=compact)
+        if not visible:
+            return ""
+        return CoreRuntime._format_resident_receipts_core(visible, compact=compact)
+
+    @staticmethod
+    def _format_resident_receipts_core(receipts: list[str], *, compact: bool) -> str:
         if not compact:
             return "\n".join(
                 f"[Runtime resident receipt: {item}]" for item in receipts
@@ -870,6 +886,25 @@ class CoreRuntime:
         raise AssertionError("unreachable house tool loop state")
 
     def _run_curation_if_due(
+        self,
+        *,
+        input_turn_id: str,
+        assistant_turn_id: str,
+        interface: str,
+        model_route: str,
+    ) -> list[str]:
+        from .composition import run_curation
+
+        return run_curation(
+            self,
+            self._run_curation_core_if_due,
+            input_turn_id=input_turn_id,
+            assistant_turn_id=assistant_turn_id,
+            interface=interface,
+            model_route=model_route,
+        )
+
+    def _run_curation_core_if_due(
         self,
         *,
         input_turn_id: str,

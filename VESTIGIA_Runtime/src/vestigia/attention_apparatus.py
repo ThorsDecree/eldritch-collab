@@ -15,8 +15,6 @@ from .attention_router import (
 from .capabilities import CapabilitySpec, object_schema
 
 
-_INSTALLED = False
-
 
 def _listening_controls(house: Any) -> dict[str, Any]:
     from .resident_controls import load_resident_controls
@@ -251,76 +249,58 @@ def _register(house: Any) -> None:
     )
 
 
-def install_core() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-
-    from .house_tools import HousePort
-
-    previous_install = HousePort._install_capabilities
-
-    def install_with_router(self: Any) -> None:
-        previous_install(self)
-        _register(self)
-
-    HousePort._install_capabilities = install_with_router
-
-    # The Observatory remains read-only; the router panel is another window, not
-    # another control surface.
-    from . import sensory_apparatus
-
-    original_observatory = sensory_apparatus._observatory
-
-    def observatory_with_router(house: Any, payload: dict[str, Any]) -> dict[str, Any]:
-        result = original_observatory(house, payload)
-        panels = result.get("observatory")
-        if not isinstance(panels, dict):
-            return result
-        state = report(
-            house.config,
-            house.db,
-            house.resident_id,
-            listening_controls=_listening_controls(house),
-        )
-        summary = {
-            "controls": state,
-            "metrics": metrics(house.db, house.resident_id, hours=24),
-            "recent_decisions": list_events(
-                house.db, house.resident_id, limit=10
-            ),
-            "shadow_mode": True,
-            "live_routing_changed": False,
-            "semantic_gate_is_authority": False,
-        }
-        section = str(payload.get("section") or "all").strip().lower()
-        if section == "all":
-            panels["attention_router"] = summary
-        elif "doors" in panels and isinstance(panels["doors"], dict):
-            panels["doors"]["attention_router"] = state
+def _observatory_panel(
+    house: Any, payload: dict[str, Any], result: dict[str, Any]
+) -> dict[str, Any]:
+    panels = result.get("observatory")
+    if not isinstance(panels, dict):
         return result
+    state = report(
+        house.config,
+        house.db,
+        house.resident_id,
+        listening_controls=_listening_controls(house),
+    )
+    summary = {
+        "controls": state,
+        "metrics": metrics(house.db, house.resident_id, hours=24),
+        "recent_decisions": list_events(house.db, house.resident_id, limit=10),
+        "shadow_mode": True,
+        "live_routing_changed": False,
+        "semantic_gate_is_authority": False,
+    }
+    section = str(payload.get("section") or "all").strip().lower()
+    if section == "all":
+        panels["attention_router"] = summary
+    elif "doors" in panels and isinstance(panels["doors"], dict):
+        panels["doors"]["attention_router"] = state
+    return result
 
-    sensory_apparatus._observatory = observatory_with_router
 
-    original_explain = sensory_apparatus.explain
-
-    def explain_with_router(
-        db: Any,
-        resident_id: str,
-        event_id: str,
-        ensure_listening_schema: Any,
-    ) -> dict[str, Any]:
-        result = original_explain(
-            db, resident_id, event_id, ensure_listening_schema
+def _source_explain_enricher(
+    db: Any, resident_id: str, event_id: str, result: dict[str, Any]
+) -> dict[str, Any]:
+    router_event = by_listening_event(db, resident_id, event_id)
+    if router_event is not None:
+        result["attention_router"] = router_event
+        result["attention_router_boundary"] = (
+            "This was a shadow assessment. It did not widen authority or alter "
+            "the live sensory consequence."
         )
-        router_event = by_listening_event(db, resident_id, event_id)
-        if router_event is not None:
-            result["attention_router"] = router_event
-            result["attention_router_boundary"] = (
-                "This was a shadow assessment. It did not widen authority or alter "
-                "the live sensory consequence."
-            )
-        return result
+    return result
 
-    sensory_apparatus.explain = explain_with_router
-    _INSTALLED = True
+
+def register_composition() -> None:
+    from .composition import (
+        register_capability_installer,
+        register_observatory_panel,
+        register_source_explain_enricher,
+    )
+
+    register_capability_installer("attention.router", _register, order=20)
+    register_observatory_panel(
+        "attention.router", _observatory_panel, order=20
+    )
+    register_source_explain_enricher(
+        "attention.router", _source_explain_enricher, order=20
+    )
