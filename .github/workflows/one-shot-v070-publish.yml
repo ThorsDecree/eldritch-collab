@@ -39,73 +39,53 @@ jobs:
 
           $runs = gh api "repos/$env:REPOSITORY/actions/runs?head_sha=$env:RELEASE_SHA&event=push&status=completed&per_page=100" | ConvertFrom-Json
           $matches = @($runs.workflow_runs | Where-Object {
-            $_.name -eq 'Runtime CI' -and
-            $_.head_sha -eq $env:RELEASE_SHA -and
-            $_.head_branch -eq 'main' -and
-            $_.event -eq 'push' -and
-            $_.conclusion -eq 'success'
+            $_.name -eq 'Runtime CI' -and $_.head_sha -eq $env:RELEASE_SHA -and
+            $_.head_branch -eq 'main' -and $_.event -eq 'push' -and $_.conclusion -eq 'success'
           })
-          if ($matches.Count -ne 1) {
-            throw "Expected exactly one successful Runtime CI push run for $env:RELEASE_SHA; found $($matches.Count)"
-          }
+          if ($matches.Count -ne 1) { throw "Expected exactly one successful Runtime CI push run; found $($matches.Count)" }
           $run = $matches[0]
           $runId = [long]$run.id
           $runNumber = [long]$run.run_number
 
           $artifactResponse = gh api "repos/$env:REPOSITORY/actions/runs/$runId/artifacts?per_page=100" | ConvertFrom-Json
-          $artifactMatches = @($artifactResponse.artifacts | Where-Object {
-            $_.name -eq $env:EXPECTED_ARTIFACT_NAME -and -not $_.expired
-          })
-          if ($artifactMatches.Count -ne 1) {
-            throw "Expected exactly one unexpired artifact named $env:EXPECTED_ARTIFACT_NAME; found $($artifactMatches.Count)"
-          }
+          $artifactMatches = @($artifactResponse.artifacts | Where-Object { $_.name -eq $env:EXPECTED_ARTIFACT_NAME -and -not $_.expired })
+          if ($artifactMatches.Count -ne 1) { throw "Expected exactly one unexpired artifact $env:EXPECTED_ARTIFACT_NAME; found $($artifactMatches.Count)" }
           $artifact = $artifactMatches[0]
           $artifactId = [long]$artifact.id
           $artifactApiDigest = [string]$artifact.digest
 
           curl.exe -fsSL -H "Authorization: Bearer $env:GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" -o artifact.zip "https://api.github.com/repos/$env:REPOSITORY/actions/artifacts/$artifactId/zip"
-
           $artifactZipHash = (Get-FileHash artifact.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($artifactApiDigest -and $artifactApiDigest.StartsWith('sha256:')) {
-            $expectedZipHash = $artifactApiDigest.Substring(7).ToLowerInvariant()
-            if ($artifactZipHash -ne $expectedZipHash) {
-              throw "Artifact ZIP digest mismatch: API=$expectedZipHash downloaded=$artifactZipHash"
-            }
-          }
+          if ($artifactApiDigest.StartsWith('sha256:') -and $artifactZipHash -ne $artifactApiDigest.Substring(7).ToLowerInvariant()) { throw 'Artifact ZIP digest mismatch' }
 
           New-Item -ItemType Directory -Path payload | Out-Null
           Expand-Archive artifact.zip -DestinationPath payload
           $wheel = Get-ChildItem payload -Recurse -File -Filter 'vestigia_runtime-0.7.0-py3-none-any.whl' | Select-Object -First 1
           $sdist = Get-ChildItem payload -Recurse -File -Filter 'vestigia_runtime-0.7.0.tar.gz' | Select-Object -First 1
           $sums = Get-ChildItem payload -Recurse -File -Filter 'SHA256SUMS.txt' | Select-Object -First 1
-          if (-not $wheel -or -not $sdist -or -not $sums) {
-            throw 'Artifact does not contain the expected wheel, sdist, and SHA256SUMS.txt'
-          }
+          if (-not $wheel -or -not $sdist -or -not $sums) { throw 'Expected release payload files are missing' }
 
           $wheelHash = (Get-FileHash $wheel.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $sdistHash = (Get-FileHash $sdist.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $manifest = Get-Content $sums.FullName -Raw
-          if ($manifest -notmatch [regex]::Escape("$wheelHash  vestigia_runtime-0.7.0-py3-none-any.whl")) {
-            throw 'Wheel hash does not match SHA256SUMS.txt'
-          }
-          if ($manifest -notmatch [regex]::Escape("$sdistHash  vestigia_runtime-0.7.0.tar.gz")) {
-            throw 'Source distribution hash does not match SHA256SUMS.txt'
-          }
+          if ($manifest -notmatch [regex]::Escape("$wheelHash  vestigia_runtime-0.7.0-py3-none-any.whl")) { throw 'Wheel hash does not match SHA256SUMS.txt' }
+          if ($manifest -notmatch [regex]::Escape("$sdistHash  vestigia_runtime-0.7.0.tar.gz")) { throw 'Source distribution hash does not match SHA256SUMS.txt' }
 
           @'
           import pathlib, tarfile, zipfile
+          from email.parser import Parser
           wheel = pathlib.Path(r"__WHEEL__")
           sdist = pathlib.Path(r"__SDIST__")
           with zipfile.ZipFile(wheel) as zf:
-              metadata = [n for n in zf.namelist() if n.endswith('.dist-info/METADATA')]
-              assert len(metadata) == 1, metadata
-              text = zf.read(metadata[0]).decode('utf-8')
-              assert '\nVersion: 0.7.0\n' in '\n' + text, text[:500]
+              names = [n for n in zf.namelist() if n.endswith('.dist-info/METADATA')]
+              assert len(names) == 1, names
+              meta = Parser().parsestr(zf.read(names[0]).decode('utf-8'))
+              assert meta.get('Version') == '0.7.0', meta.get('Version')
           with tarfile.open(sdist, 'r:gz') as tf:
-              pkg = [m for m in tf.getmembers() if m.name.endswith('/PKG-INFO')]
-              assert pkg, 'PKG-INFO missing from sdist'
-              text = tf.extractfile(pkg[0]).read().decode('utf-8')
-              assert '\nVersion: 0.7.0\n' in '\n' + text, text[:500]
+              names = [m for m in tf.getmembers() if m.name.endswith('/PKG-INFO')]
+              assert names, 'PKG-INFO missing from sdist'
+              meta = Parser().parsestr(tf.extractfile(names[0]).read().decode('utf-8'))
+              assert meta.get('Version') == '0.7.0', meta.get('Version')
           '@.Replace('__WHEEL__', $wheel.FullName.Replace('\','\\')).Replace('__SDIST__', $sdist.FullName.Replace('\','\\')) | Set-Content verify_metadata.py -Encoding utf8
           python verify_metadata.py
 
@@ -113,15 +93,11 @@ jobs:
           try {
             $tagRef = gh api "repos/$env:REPOSITORY/git/ref/tags/$env:RELEASE_TAG" | ConvertFrom-Json
             $tagExists = $true
-            if ($tagRef.object.type -ne 'commit' -or $tagRef.object.sha -ne $env:RELEASE_SHA) {
-              throw "Existing tag $env:RELEASE_TAG does not point directly at $env:RELEASE_SHA"
-            }
+            if ($tagRef.object.type -ne 'commit' -or $tagRef.object.sha -ne $env:RELEASE_SHA) { throw "Existing tag points somewhere else" }
           } catch {
             if ($_.Exception.Message -notmatch 'HTTP 404|Not Found') { throw }
           }
-          if (-not $tagExists) {
-            gh api --method POST "repos/$env:REPOSITORY/git/refs" -f "ref=refs/tags/$env:RELEASE_TAG" -f "sha=$env:RELEASE_SHA" | Out-Null
-          }
+          if (-not $tagExists) { gh api --method POST "repos/$env:REPOSITORY/git/refs" -f "ref=refs/tags/$env:RELEASE_TAG" -f "sha=$env:RELEASE_SHA" | Out-Null }
 
           $notes = @"
           # VESTIGIA Runtime v0.7.0 — The Resident's Drawers
@@ -141,29 +117,24 @@ jobs:
           "@
           Set-Content release-notes.md $notes -Encoding utf8
 
-          $releaseExists = $false
           try {
             gh release view $env:RELEASE_TAG --repo $env:REPOSITORY --json tagName,url | Out-Null
-            $releaseExists = $true
+            throw "Release $env:RELEASE_TAG already exists; refusing to overwrite it"
           } catch {
-            $releaseExists = $false
-          }
-          if ($releaseExists) {
-            throw "Release $env:RELEASE_TAG already exists; refusing to overwrite an existing public release"
+            if ($_.Exception.Message -notmatch 'release not found|HTTP 404|Not Found') {
+              if ($_.Exception.Message -match 'already exists') { throw }
+            }
           }
 
           gh release create $env:RELEASE_TAG $wheel.FullName $sdist.FullName $sums.FullName --repo $env:REPOSITORY --verify-tag --title "VESTIGIA Runtime v0.7.0 — The Resident's Drawers" --notes-file release-notes.md
 
           New-Item -ItemType Directory -Path public | Out-Null
           gh release download $env:RELEASE_TAG --repo $env:REPOSITORY --dir public --pattern 'vestigia_runtime-0.7.0-py3-none-any.whl' --pattern 'vestigia_runtime-0.7.0.tar.gz' --pattern 'SHA256SUMS.txt'
-
           $publicWheelHash = (Get-FileHash 'public/vestigia_runtime-0.7.0-py3-none-any.whl' -Algorithm SHA256).Hash.ToLowerInvariant()
           $publicSdistHash = (Get-FileHash 'public/vestigia_runtime-0.7.0.tar.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
           $publicSumsHash = (Get-FileHash 'public/SHA256SUMS.txt' -Algorithm SHA256).Hash.ToLowerInvariant()
           $sourceSumsHash = (Get-FileHash $sums.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($publicWheelHash -ne $wheelHash -or $publicSdistHash -ne $sdistHash -or $publicSumsHash -ne $sourceSumsHash) {
-            throw 'Public release attachment hash verification failed'
-          }
+          if ($publicWheelHash -ne $wheelHash -or $publicSdistHash -ne $sdistHash -or $publicSumsHash -ne $sourceSumsHash) { throw 'Public release attachment hash verification failed' }
 
           $releaseJson = gh release view $env:RELEASE_TAG --repo $env:REPOSITORY --json url,tagName | ConvertFrom-Json
           $report = @"
@@ -187,7 +158,6 @@ jobs:
           "@
           Set-Content publication-report.md $report -Encoding utf8
           gh issue comment 5 --repo $env:REPOSITORY --body-file publication-report.md
-
           $report | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Preserve publication report
