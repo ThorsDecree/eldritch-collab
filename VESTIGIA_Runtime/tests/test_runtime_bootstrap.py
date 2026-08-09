@@ -31,6 +31,7 @@ def test_runtime_bootstrap_plan_is_explicit_and_unique() -> None:
         ("workshop_sandbox", "register_composition"),
         ("workshop_script_shelf", "register_composition"),
         ("workshop_microscope", "register_composition"),
+        ("library_window", "register_composition"),
     )
     assert len(plan) == len(set(plan))
 
@@ -78,6 +79,7 @@ def test_production_feature_modules_do_not_assign_private_runtime_methods() -> N
         "attention_keyring.py",
         "image_drawer_continuation.py",
         "workshop_sandbox.py",
+        "library_window.py",
     )
     forbidden = (
         "HousePort._install_capabilities =",
