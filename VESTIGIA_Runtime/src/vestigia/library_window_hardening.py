@@ -249,63 +249,185 @@ def store_source_guarded(
     extraction: ExtractionResult,
     search_provenance: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    """Persist one source capsule with lineage and custody event atomically.
+
+    Content-addressed bytes are written before the SQLite transaction. They are inert
+    and may be safely orphaned by an interrupted transaction, but no resident-visible
+    source row is committed unless its discovery lineage and `stored` custody event
+    commit in the same transaction.
+    """
+
     ensure_policy_schema(house)
-    quota = quota_summary(house)
-    if quota["source_count"] >= quota["max_sources"]:
+
+    # Fast preflight avoids unnecessary CAS writes in the common quota-exhausted case.
+    # The quota is checked again under BEGIN IMMEDIATE below, which is authoritative.
+    preflight = quota_summary(house)
+    if preflight["source_count"] >= preflight["max_sources"]:
         raise PermissionError("Library Window source-count quota reached")
-    if quota["source_bytes"] + len(fetched.body) > quota["max_total_source_bytes"]:
+    if preflight["source_bytes"] + len(fetched.body) > preflight["max_total_source_bytes"]:
         raise PermissionError("Library Window aggregate source-byte quota reached")
-    source = store_source(house, fetched=fetched, extraction=extraction)
-    discovery_search_id = None
-    discovery_rank = None
-    discovery_query_hash = None
+
+    raw_hash = _store._sha256_bytes(fetched.body)
+    raw_path = _store._store_content_addressed(
+        house.home, raw_hash, ".raw", fetched.body
+    )
+    readable_hash: str | None = None
+    readable_path: str | None = None
+    readable_size = 0
+    if extraction.text:
+        readable = extraction.text.encode("utf-8")
+        readable_hash = _store._sha256_bytes(readable)
+        readable_path = _store._store_content_addressed(
+            house.home, readable_hash, ".txt", readable
+        )
+        readable_size = len(readable)
+
+    source_id = _store.new_id("source")
+    event_id = new_id("source_event")
+    now = utc_now_iso()
+    discovery_search_id: str | None = None
+    discovery_rank: int | None = None
+    discovery_query_hash: str | None = None
     if search_provenance:
-        discovery_search_id = str(search_provenance.get("search_id") or "") or None
-        discovery_rank = int(search_provenance["rank"]) if search_provenance.get("rank") is not None else None
-        if discovery_search_id:
-            with house.db.connect() as connection:
-                row = connection.execute(
-                    "SELECT query_hash FROM library_web_searches WHERE id=? AND resident_id=?",
-                    (discovery_search_id, house.resident_id),
-                ).fetchone()
-            if row is not None:
-                discovery_query_hash = str(row["query_hash"])
+        discovery_search_id = str(search_provenance.get("search_id") or "").strip() or None
+        if search_provenance.get("rank") is not None:
+            discovery_rank = int(search_provenance["rank"])
+        if discovery_search_id and discovery_rank is None:
+            raise ValueError("search provenance requires rank when search_id is present")
+
     with house.db.connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
+
+        # Re-check quota under the write lock so concurrent source creation cannot race
+        # two individually-valid writes past the aggregate resident ceiling.
+        quota_row = connection.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(raw_size_bytes), 0) AS bytes "
+            "FROM library_sources WHERE resident_id=?",
+            (house.resident_id,),
+        ).fetchone()
+        max_sources = max(1, min(int(house.config.get("web.max_sources", 250)), 10000))
+        max_bytes = max(
+            1_000_000,
+            min(
+                int(house.config.get("web.max_total_source_bytes", 250_000_000)),
+                20_000_000_000,
+            ),
+        )
+        if int(quota_row["n"]) >= max_sources:
+            raise PermissionError("Library Window source-count quota reached")
+        if int(quota_row["bytes"]) + len(fetched.body) > max_bytes:
+            raise PermissionError("Library Window aggregate source-byte quota reached")
+
+        if discovery_search_id is not None:
+            provenance_row = connection.execute(
+                """
+                SELECT s.query_hash
+                FROM library_web_searches s
+                JOIN library_web_search_results r
+                  ON r.search_id=s.id AND r.resident_id=s.resident_id
+                WHERE s.id=? AND s.resident_id=? AND r.rank=?
+                """,
+                (discovery_search_id, house.resident_id, discovery_rank),
+            ).fetchone()
+            if provenance_row is None:
+                raise KeyError("unknown discovery search result")
+            discovery_query_hash = str(provenance_row["query_hash"])
+
         connection.execute(
             """
-            UPDATE library_sources
-            SET discovery_search_id=?, discovery_rank=?, discovery_query_hash=?, retrieval_eligible=1
-            WHERE id=? AND resident_id=?
+            INSERT INTO library_sources
+            (id, resident_id, original_url, final_url, title, media_type,
+             http_status, raw_hash, raw_size_bytes, raw_path, readable_hash,
+             readable_size_bytes, readable_path, extraction_method,
+             redirect_chain_json, response_headers_json, warnings_json,
+             risk_signals_json, trust_class, authority_state, review_state,
+             fetched_at, elapsed_ms, discovery_search_id, discovery_rank,
+             discovery_query_hash, retrieval_eligible)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, 1)
             """,
             (
+                source_id,
+                house.resident_id,
+                fetched.original_url,
+                fetched.final_url,
+                extraction.title,
+                fetched.media_type,
+                int(fetched.status),
+                raw_hash,
+                len(fetched.body),
+                raw_path,
+                readable_hash,
+                readable_size,
+                readable_path,
+                extraction.method,
+                stable_json(list(fetched.redirect_chain)),
+                stable_json(fetched.response_headers),
+                stable_json(list(extraction.warnings)),
+                stable_json(list(extraction.risk_signals)),
+                "remote_untrusted",
+                "evidence_only_not_authority",
+                "unreviewed",
+                now,
+                int(fetched.elapsed_ms),
                 discovery_search_id,
                 discovery_rank,
                 discovery_query_hash,
-                source["source_id"],
-                house.resident_id,
             ),
         )
-        event_id = new_id("source_event")
+
         payload_hash = _sha256_text(
             stable_json(
                 {
-                    "source_id": source["source_id"],
+                    "source_id": source_id,
                     "discovery_search_id": discovery_search_id,
                     "discovery_rank": discovery_rank,
                     "discovery_query_hash": discovery_query_hash,
-                    "raw_hash": source["content_hash"],
+                    "raw_hash": raw_hash,
                 }
             )
         )
         connection.execute(
-            "INSERT INTO library_source_events "
-            "(id, resident_id, source_id, event_type, payload_hash, created_at) "
-            "VALUES (?, ?, ?, 'stored', ?, ?)",
-            (event_id, house.resident_id, source["source_id"], payload_hash, utc_now_iso()),
+            """
+            INSERT INTO library_source_events
+            (id, resident_id, source_id, event_type, payload_hash, created_at)
+            VALUES (?, ?, ?, 'stored', ?, ?)
+            """,
+            (event_id, house.resident_id, source_id, payload_hash, now),
         )
-    return source_metadata_guarded(house, str(source["source_id"]))
 
+    # Legible-object indexing happens only after the custody transaction commits. A
+    # failed index update cannot create a provenance-bearing object for an uncommitted
+    # source record.
+    house.legible.register_object(
+        object_type="web_source",
+        locator=f"research/sources/{source_id}",
+        content_hash=raw_hash,
+        evidence_state="verified_snapshot",
+        metadata={
+            "source_id": source_id,
+            "title": extraction.title,
+            "media_type": fetched.media_type,
+            "fetched_at": now,
+            "review_state": "unreviewed",
+            "readable": bool(extraction.text),
+        },
+        provenance={
+            "source_class": "direct_remote_snapshot",
+            "original_url": fetched.original_url,
+            "final_url": fetched.final_url,
+            "retrieved_at": now,
+            "trust_class": "remote_untrusted",
+            "authority_state": "evidence_only_not_authority",
+            "discovery_search_id": discovery_search_id,
+            "discovery_rank": discovery_rank,
+            "discovery_query_hash": discovery_query_hash,
+            "memory_promotion": False,
+            "identity_effect": False,
+        },
+        preferred_id=source_id,
+    )
+    return source_metadata_guarded(house, source_id)
 
 def _policy_row(house: Any, source_id: str) -> Any:
     ensure_policy_schema(house)

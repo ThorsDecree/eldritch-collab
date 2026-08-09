@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 
@@ -119,6 +120,55 @@ def test_search_lineage_is_durable_on_source_capsule(tmp_path: Path) -> None:
     assert source["discovery_provenance"]["rank"] == 1
     assert source["discovery_provenance"]["query_hash"]
 
+
+
+def test_source_row_lineage_and_stored_event_are_one_transaction(tmp_path: Path) -> None:
+    house = _house(tmp_path, web_enabled=True)
+    ensure_policy_schema(house)
+    turn_id = _turn(house, "Search for paper.")
+    fetched_search = _fetch(b"search", url="https://html.duckduckgo.com/html/?q=paper")
+    search_id, _ = record_search_guarded(
+        house,
+        query="paper",
+        results=[{"rank": 1, "title": "Paper", "url": "https://example.com/source", "snippet": "x"}],
+        fetched=fetched_search,
+        requested_turn_id=turn_id,
+    )
+
+    # Force the custody-event insert to fail after the source INSERT has executed.
+    # If source creation and lineage are not in the same transaction, a partial source
+    # row would survive this uniqueness failure.
+    with house.db.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO library_source_events
+            (id, resident_id, source_id, event_type, payload_hash, created_at)
+            VALUES ('source_event_collision', ?, 'sentinel', 'sentinel', 'sentinel', '2000-01-01T00:00:00Z')
+            """,
+            (house.resident_id,),
+        )
+
+    fetched = _fetch(b"<html><body>Atomic evidence</body></html>")
+    with patch("vestigia.library_window_hardening.new_id", return_value="source_event_collision"):
+        with pytest.raises(sqlite3.IntegrityError):
+            store_source_guarded(
+                house,
+                fetched=fetched,
+                extraction=extract_readable(fetched),
+                search_provenance={"search_id": search_id, "rank": 1},
+            )
+
+    with house.db.connect() as connection:
+        source_rows = connection.execute(
+            "SELECT id FROM library_sources WHERE resident_id=?",
+            (house.resident_id,),
+        ).fetchall()
+        stored_events = connection.execute(
+            "SELECT source_id FROM library_source_events WHERE resident_id=? AND event_type='stored'",
+            (house.resident_id,),
+        ).fetchall()
+    assert source_rows == []
+    assert stored_events == []
 
 def test_revoked_source_cannot_be_read_through_guarded_path(tmp_path: Path) -> None:
     house = _house(tmp_path, web_enabled=True)

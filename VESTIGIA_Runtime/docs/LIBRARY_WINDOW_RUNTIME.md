@@ -19,7 +19,7 @@ Network reads are now **disabled by default**. The operator must explicitly set 
 
 This is a control-plane egress boundary, not a claim that GET requests have no observable effect. Search queries and requested URLs are network disclosures and are labeled as such in capability effects.
 
-Source capsules also have aggregate source-count/byte quotas and a receipted revocation lifecycle. Revocation removes future resident-facing read/quote eligibility without falsifying historical custody. Notebook `retain` and `discard` transitions commit their lifecycle event in the same database transaction as the state/content change.
+Source capsules also have aggregate source-count/byte quotas and a receipted revocation lifecycle. Revocation removes future resident-facing read/quote eligibility without falsifying historical custody. Notebook `retain` and `discard` transitions commit their lifecycle event in the same database transaction as the state/content change. Source creation now likewise commits the source row, discovery-search lineage, retrieval eligibility, and `stored` custody event in one SQLite transaction; interrupted writes cannot expose a partially-provenanced source capsule.
 
 A webpage, search snippet, document title, redirect target, or quoted passage cannot become a system/developer instruction, resident identity, memory, consent record, capability grant, or authorization merely because the Runtime fetched it.
 
