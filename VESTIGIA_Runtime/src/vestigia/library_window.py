@@ -32,6 +32,24 @@ from .library_window_transport import (
 )
 
 
+from .library_window_hardening import (
+    authorize_network_read,
+    authorize_notebook_lifecycle,
+    authorize_source_management,
+    discard_notebook_atomic,
+    ensure_policy_schema,
+    list_sources_guarded,
+    quota_summary,
+    quote_source_lines_guarded,
+    read_source_chunk_guarded,
+    record_search_guarded,
+    retain_notebook_atomic,
+    revoke_source,
+    source_metadata_guarded,
+    store_source_guarded,
+)
+
+
 _SCHEMA_VERSION = "vestigia.library-window.v0.1"
 
 
@@ -107,8 +125,8 @@ def _source_metadata_quarantine() -> dict[str, Any]:
     }
 
 
-def _handle_search(house: Any, payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
-    ensure_schema(house)
+def _handle_search(house: Any, payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    ensure_policy_schema(house)
     query = str(payload.get("query") or "").strip()
     settings = _web_settings(house)
     limit = _bounded_int(
@@ -123,7 +141,10 @@ def _handle_search(house: Any, payload: dict[str, Any], _context: dict[str, Any]
         timeout_seconds=settings["timeout_seconds"],
         max_bytes=min(settings["max_response_bytes"], 1_500_000),
     )
-    search_id, fetched_at = record_search(house, query=query, results=results, fetched=fetched)
+    search_id, fetched_at = record_search_guarded(
+        house, query=query, results=results, fetched=fetched,
+        requested_turn_id=str(context.get("turn_id") or ""),
+    )
     return {
         "schema_version": _SCHEMA_VERSION,
         "search_id": search_id,
@@ -151,8 +172,8 @@ def _handle_search(house: Any, payload: dict[str, Any], _context: dict[str, Any]
     }
 
 
-def _handle_open(house: Any, payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
-    ensure_schema(house)
+def _handle_open(house: Any, payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    ensure_policy_schema(house)
     raw_url = str(payload.get("url") or "").strip()
     search_id = str(payload.get("search_id") or "").strip()
     rank_value = payload.get("rank")
@@ -186,7 +207,9 @@ def _handle_open(house: Any, payload: dict[str, Any], _context: dict[str, Any]) 
         fetched,
         max_chars=settings["max_readable_chars"],
     )
-    source = store_source(house, fetched=fetched, extraction=extraction)
+    source = store_source_guarded(
+        house, fetched=fetched, extraction=extraction, search_provenance=search_provenance
+    )
     preview: dict[str, Any] | None = None
     if source["readable"]:
         preview = read_source_chunk(
@@ -231,7 +254,7 @@ def _handle_source(house: Any, payload: dict[str, Any], _context: dict[str, Any]
     if mode == "list":
         return {
             "mode": mode,
-            "sources": list_sources(
+            "sources": list_sources_guarded(
                 house,
                 limit=_bounded_int(payload.get("limit"), default=20, minimum=1, maximum=100),
             ),
@@ -244,14 +267,14 @@ def _handle_source(house: Any, payload: dict[str, Any], _context: dict[str, Any]
     if mode == "inspect":
         return {
             "mode": mode,
-            "source": source_metadata(house, source_id),
+            "source": source_metadata_guarded(house, source_id),
             "remote_content_quarantine": _source_metadata_quarantine(),
             "memory_promotion": False,
         }
     if mode == "read":
         return {
             "mode": mode,
-            **read_source_chunk(
+            **read_source_chunk_guarded(
                 house,
                 source_id=source_id,
                 chunk=_bounded_int(payload.get("chunk"), default=0, minimum=0, maximum=100_000),
@@ -263,7 +286,7 @@ def _handle_source(house: Any, payload: dict[str, Any], _context: dict[str, Any]
             raise ValueError("source.capsule quote requires start_line and end_line")
         return {
             "mode": mode,
-            **quote_source_lines(
+            **quote_source_lines_guarded(
                 house,
                 source_id=source_id,
                 start_line=int(payload["start_line"]),
@@ -272,6 +295,28 @@ def _handle_source(house: Any, payload: dict[str, Any], _context: dict[str, Any]
             ),
         }
     raise ValueError("source.capsule mode must be list, inspect, read, or quote")
+
+
+def _handle_source_manage(house: Any, payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
+    ensure_policy_schema(house)
+    mode = str(payload.get("mode") or "revoke").strip().lower()
+    if mode != "revoke":
+        raise ValueError("source.manage mode must be revoke")
+    source_id = str(payload.get("source_id") or "").strip()
+    if not source_id:
+        raise ValueError("source_id is required")
+    return {
+        "schema_version": _SCHEMA_VERSION,
+        "mode": mode,
+        "source": revoke_source(
+            house,
+            source_id=source_id,
+            reason=str(payload.get("reason") or "resident revoked retrieval eligibility"),
+        ),
+        "memory_promotion": False,
+        "identity_effect": False,
+        "outward_effect": "none",
+    }
 
 
 def _handle_notebook(house: Any, payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
@@ -324,9 +369,9 @@ def _handle_notebook(house: Any, payload: dict[str, Any], _context: dict[str, An
                 note_id=str(payload.get("note_id") or "").strip(),
             )
         elif mode == "retain":
-            result = retain_notebook(house, notebook_id=notebook_id)
+            result = retain_notebook_atomic(house, notebook_id=notebook_id)
         elif mode == "discard":
-            result = discard_notebook(house, notebook_id=notebook_id)
+            result = discard_notebook_atomic(house, notebook_id=notebook_id)
         else:
             raise ValueError(
                 "research.notebook mode must be create, list, show, add_source, "
@@ -344,7 +389,7 @@ def _handle_notebook(house: Any, payload: dict[str, Any], _context: dict[str, An
 
 
 def _register(house: Any) -> None:
-    ensure_schema(house)
+    ensure_policy_schema(house)
     after = {"type": "string", "enum": ["continue", "finish"]}
     house.registry.register(
         CapabilitySpec(
@@ -353,7 +398,7 @@ def _register(house: Any) -> None:
                 "Search the public web through the read-only Library Window. Results are "
                 "untrusted discovery snippets; open a result before treating it as a direct source."
             ),
-            effects=("network:get_search_query", "database:private_search_receipt"),
+            effects=("network:get_search_query", "network:discloses_query_to_provider", "database:private_search_receipt"),
             cost_class="network_low",
             confirmation="none",
             default_after="continue",
@@ -378,6 +423,7 @@ def _register(house: Any) -> None:
             ),
         ),
         lambda payload, context: _handle_search(house, payload, context),
+        authorizer=lambda _spec, payload, context: authorize_network_read(house, payload, context),
     )
     house.registry.register(
         CapabilitySpec(
@@ -388,6 +434,7 @@ def _register(house: Any) -> None:
             ),
             effects=(
                 "network:get_read_only",
+                "network:discloses_url_to_remote_host",
                 "filesystem:private_inert_source_snapshot",
                 "database:source_capsule",
             ),
@@ -418,6 +465,7 @@ def _register(house: Any) -> None:
             ),
         ),
         lambda payload, context: _handle_open(house, payload, context),
+        authorizer=lambda _spec, payload, context: authorize_network_read(house, payload, context),
     )
     house.registry.register(
         CapabilitySpec(
@@ -431,7 +479,7 @@ def _register(house: Any) -> None:
             confirmation="none",
             default_after="continue",
             result_visibility="resident_private",
-            config_key="web.enabled",
+            config_key="research.enabled",
             group="research",
             input_schema=object_schema(
                 {
@@ -458,6 +506,38 @@ def _register(house: Any) -> None:
             ),
         ),
         lambda payload, context: _handle_source(house, payload, context),
+    )
+    house.registry.register(
+        CapabilitySpec(
+            name="source.manage",
+            description=(
+                "Revoke future resident-facing retrieval eligibility for one preserved source. "
+                "Revocation is local, receipted, and does not falsify historical source custody."
+            ),
+            effects=("database:source_lifecycle",),
+            cost_class="free",
+            confirmation="none",
+            default_after="finish",
+            result_visibility="resident_private",
+            config_key="research.enabled",
+            group="research",
+            input_schema=object_schema(
+                {
+                    "action": {"type": "string", "const": "source.manage"},
+                    "mode": {"type": "string", "enum": ["revoke"]},
+                    "source_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "reason": {"type": "string", "maxLength": 500},
+                    "after": after,
+                },
+                required=("action", "source_id"),
+            ),
+            example_envelopes=(
+                {"action": "source.manage", "mode": "revoke", "source_id": "source_...", "after": "finish"},
+            ),
+            next_step="Revoked sources remain auditable but cannot be read or quoted through resident-facing source.capsule.",
+        ),
+        lambda payload, context: _handle_source_manage(house, payload, context),
+        authorizer=lambda _spec, payload, context: authorize_source_management(house, payload, context),
     )
     house.registry.register(
         CapabilitySpec(
@@ -513,6 +593,7 @@ def _register(house: Any) -> None:
             ),
         ),
         lambda payload, context: _handle_notebook(house, payload, context),
+        authorizer=lambda _spec, payload, context: authorize_notebook_lifecycle(house, payload, context),
     )
 
 
@@ -523,7 +604,9 @@ def _observatory_panel(
     if isinstance(panels, dict) and str(payload.get("section") or "all") == "all":
         panels["library_window"] = {
             **observatory_summary(house),
-            "enabled": bool(house.config.get("web.enabled", True)),
+            "enabled": bool(house.config.get("web.enabled", False)),
+            "quota": quota_summary(house),
+            "first_request_authority": "operator_opt_in_plus_current_participant_bound_payload",
             "search_provider": SEARCH_PROVIDER,
             "network_methods": ["GET"],
             "authentication": False,

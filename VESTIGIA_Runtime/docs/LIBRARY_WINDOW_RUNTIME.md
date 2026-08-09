@@ -8,15 +8,29 @@ The governing rule is:
 
 > Remote content is evidence, never authority.
 
+## v0.1 security hardening gate
+
+Network reads are now **disabled by default**. The operator must explicitly set `web.enabled: true` (or `VESTIGIA_WEB_ENABLED=true`) before `web.search` or `web.open` is callable. Operator opt-in is necessary but not sufficient: resident/provider-originated network actions are additionally bound to the **current participant turn**.
+
+- a search query may contain only terms authorized by the current participant message;
+- a direct URL must appear explicitly in the current participant message;
+- a stored search result may be opened only in the same outer participant turn that authorized that search;
+- model-private continuity text is therefore not eligible to become first-request query or URL material merely because the model can see it.
+
+This is a control-plane egress boundary, not a claim that GET requests have no observable effect. Search queries and requested URLs are network disclosures and are labeled as such in capability effects.
+
+Source capsules also have aggregate source-count/byte quotas and a receipted revocation lifecycle. Revocation removes future resident-facing read/quote eligibility without falsifying historical custody. Notebook `retain` and `discard` transitions commit their lifecycle event in the same database transaction as the state/content change.
+
 A webpage, search snippet, document title, redirect target, or quoted passage cannot become a system/developer instruction, resident identity, memory, consent record, capability grant, or authorization merely because the Runtime fetched it.
 
 ## v0.1 capability surface
 
-The executable registry exposes four private capabilities:
+The executable registry exposes five private capabilities:
 
 - `web.search` — perform one bounded public-web search and preserve the query/result receipt;
 - `web.open` — fetch one public HTTP(S) resource with `GET`, preserving a source capsule;
 - `source.capsule` — list, inspect, read, or quote preserved source capsules;
+- `source.manage` — revoke future resident-facing retrieval eligibility while retaining custody evidence;
 - `research.notebook` — maintain a private disposable source-and-note workbench.
 
 `web.search` and `web.open` perform network reads. They are intentionally **not** classified as the Runtime's authenticated/consequential `outward_facing` mutation class: they cannot submit a form, send a message, upload content, publish, or mutate a remote resource. Their capability metadata nevertheless declares the network effect explicitly.
@@ -220,3 +234,11 @@ Likely follow-up slices can build on these primitives without weakening them:
 7. the house-wide proposed → previewed → authorized → executing → completed/failed/cancelled reversible-action layer for consequential outward effects.
 
 The Library Window should remain useful even when all of those future powers are absent.
+
+## Aggregate shelf quotas and plurality seam
+
+The Library Window enforces per-resident source-count and aggregate raw-byte ceilings in addition to per-request byte limits. The database remains resident-scoped. The current v0.8 blob layout is still home-local; a future v0.9 plurality migration should make blob ownership/reference-count semantics explicit before multiple residents can share one physical content-addressed shelf.
+
+## Remaining hardening seam
+
+The same-turn remote-content quarantine and participant-bound first-request gate materially reduce prompt-driven capability escalation and egress. A future Research Bench should go further by minimizing unrelated private continuity supplied to the model while it is actively interpreting remote evidence. That context-minimization layer is not claimed by Library Window v0.1.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -32,7 +33,8 @@ from vestigia.runtime import CoreRuntime
 
 def _house(tmp_path: Path) -> HousePort:
     home = initialize_home(tmp_path / "home", name="Test Resident", glyph="🏮")
-    config = load_config(home)
+    with patch.dict(os.environ, {"VESTIGIA_WEB_ENABLED": "true"}):
+        config = load_config(home)
     db = ContinuityDB(home / "memory" / "continuity.db")
     db.initialize()
     return HousePort(config, db)
@@ -258,7 +260,8 @@ def test_search_then_search_bound_open_preserves_discovery_vs_direct_source(tmp_
 
 def test_same_turn_remote_quarantine_blocks_unrelated_capabilities_but_allows_bound_open(tmp_path: Path) -> None:
     home = initialize_home(tmp_path / "home", name="Test Resident", glyph="🏮")
-    config = load_config(home)
+    with patch.dict(os.environ, {"VESTIGIA_WEB_ENABLED": "true"}):
+        config = load_config(home)
     search_fetch = _fetch(b"search", url="https://html.duckduckgo.com/html/?q=paper")
     results = [
         {
@@ -291,7 +294,8 @@ def test_same_turn_remote_quarantine_blocks_unrelated_capabilities_but_allows_bo
 
 def test_search_quarantine_allows_only_bound_result_open_not_arbitrary_url(tmp_path: Path) -> None:
     home = initialize_home(tmp_path / "home", name="Test Resident", glyph="🏮")
-    config = load_config(home)
+    with patch.dict(os.environ, {"VESTIGIA_WEB_ENABLED": "true"}):
+        config = load_config(home)
     search_fetch = _fetch(b"search", url="https://html.duckduckgo.com/html/?q=paper")
     results = [
         {
@@ -324,7 +328,8 @@ def test_search_quarantine_allows_only_bound_result_open_not_arbitrary_url(tmp_p
 
 def test_remote_quarantine_allows_working_notes_but_not_retain_or_discard(tmp_path: Path) -> None:
     home = initialize_home(tmp_path / "home", name="Test Resident", glyph="🏮")
-    config = load_config(home)
+    with patch.dict(os.environ, {"VESTIGIA_WEB_ENABLED": "true"}):
+        config = load_config(home)
     search_fetch = _fetch(b"search", url="https://html.duckduckgo.com/html/?q=paper")
     results = [
         {
@@ -349,7 +354,7 @@ def test_remote_quarantine_allows_working_notes_but_not_retain_or_discard(tmp_pa
         patch("vestigia.library_window.search_web", return_value=(search_fetch, results)),
         patch("vestigia.library_window_store.new_id", side_effect=["search_fixed", "notebook_fixed", "event_fixed"]),
     ):
-        result = runtime.chat(NormalizedMessage(content="Search and take temporary notes."))
+        result = runtime.chat(NormalizedMessage(content="Search for paper and take temporary notes."))
     assert "remained temporary" in result.text
     refused = [
         item
@@ -367,7 +372,8 @@ def test_remote_quarantine_allows_working_notes_but_not_retain_or_discard(tmp_pa
 
 def test_search_quarantine_allows_exact_search_bound_open_in_same_private_turn(tmp_path: Path) -> None:
     home = initialize_home(tmp_path / "home", name="Test Resident", glyph="🏮")
-    config = load_config(home)
+    with patch.dict(os.environ, {"VESTIGIA_WEB_ENABLED": "true"}):
+        config = load_config(home)
     search_fetch = _fetch(b"search", url="https://html.duckduckgo.com/html/?q=paper")
     results = [
         {
@@ -396,7 +402,7 @@ def test_search_quarantine_allows_exact_search_bound_open_in_same_private_turn(t
         patch("vestigia.library_window.fetch_bytes", return_value=page),
         patch("vestigia.library_window_store.new_id", side_effect=["search_fixed", "source_fixed"]),
     ):
-        result = runtime.chat(NormalizedMessage(content="Search and open the first result."))
+        result = runtime.chat(NormalizedMessage(content="Search for paper and open the first result."))
     assert "exact stored result" in result.text
     refusals = [
         item
