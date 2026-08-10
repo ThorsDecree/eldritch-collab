@@ -22,6 +22,7 @@ from .config import ResolvedConfig
 from .db import ContinuityDB
 from .home import validate_home
 from .packing import EXCLUDED_NAMES, EXCLUDED_SUFFIXES, inspect_home_pack
+from .research_maintenance import inspect_research_cas
 from .utils import sha256_file, utc_now_iso
 
 
@@ -337,15 +338,24 @@ def build_doctor_report(
     dependencies = dependency_status(config)
     operations = operation_health(config, db)
     backup = backup_health(home, db)
+    research_cas = inspect_research_cas(home, db)
     required_missing = [
         name
         for name, status in dependencies["required"].items()
         if not status["installed"] or not status["importable"]
     ]
     overall = "ok"
-    if database["integrity"] != "ok" or database["foreign_key_violations"]:
+    if (
+        database["integrity"] != "ok"
+        or database["foreign_key_violations"]
+        or research_cas["status"] == "error"
+    ):
         overall = "error"
-    elif required_missing or operations["image_jobs"]["stale_running"]:
+    elif (
+        required_missing
+        or operations["image_jobs"]["stale_running"]
+        or research_cas["status"] == "warning"
+    ):
         overall = "warning"
     return {
         "schema_version": "vestigia.doctor.v0.2",
@@ -364,6 +374,7 @@ def build_doctor_report(
         "database": database,
         "dependencies": dependencies,
         "backup": backup,
+        "research_cas": research_cas,
         "operations": operations,
         "credentials": {
             "openai_key": "present" if config.secret("OPENAI_API_KEY") else "absent",
@@ -416,6 +427,9 @@ def format_doctor_text(report: dict[str, Any]) -> str:
         f"foreign_keys={database['foreign_key_violations']}",
         f"Backup: packable={backup['packable']} · files={backup['file_count']} · "
         f"estimated_bytes={backup['estimated_bytes']}",
+        f"Research CAS: status={report['research_cas']['status']} · "
+        f"gc_candidates={len(report['research_cas']['gc_candidates'])} · "
+        f"candidate_bytes={report['research_cas']['gc_candidate_bytes']}",
         f"Image jobs: stale_running={len(operations['image_jobs']['stale_running'])} · "
         f"unnotified={operations['image_jobs']['unnotified_terminal']}",
         f"Interface events: {json.dumps(operations['interface_events']['by_status'], sort_keys=True)}",

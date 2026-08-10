@@ -27,6 +27,11 @@ from .models import NormalizedMessage, RuntimeState
 from .onboarding import onboard
 from .packing import pack_home, restore_home
 from .providers.fake import FakeProvider
+from .research_maintenance import (
+    DEFAULT_MIN_AGE_HOURS,
+    apply_research_gc_plan,
+    build_research_gc_plan,
+)
 from .runtime import CoreRuntime
 
 
@@ -264,6 +269,31 @@ def command_doctor(args: argparse.Namespace) -> int:
         _json(report)
     return 0
 
+
+
+def command_research_gc(args: argparse.Namespace) -> int:
+    config, db = _config_db(args.home, args.env_file)
+    min_age_hours = float(args.min_age_hours)
+    if min_age_hours < 0:
+        raise ValueError("--min-age-hours may not be negative")
+    if args.apply:
+        if not args.plan_hash:
+            raise ValueError("--apply requires --plan-hash from a reviewed research-gc plan")
+        result = apply_research_gc_plan(
+            config.home_path,
+            db,
+            expected_plan_hash=args.plan_hash,
+            runtime_stopped=bool(args.runtime_stopped),
+            min_age_hours=min_age_hours,
+        )
+    else:
+        if args.plan_hash or args.runtime_stopped:
+            raise ValueError("--plan-hash and --runtime-stopped are apply-only options")
+        result = build_research_gc_plan(
+            config.home_path, db, min_age_hours=min_age_hours
+        )
+    _json(result)
+    return 0
 
 def sqlite_version() -> str:
     import sqlite3
@@ -635,6 +665,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Inspect without refreshing the resident-readable house index",
     )
     doctor.set_defaults(func=command_doctor)
+
+    research_gc = sub.add_parser(
+        "research-gc",
+        help="Plan or explicitly apply offline Research CAS garbage collection",
+    )
+    _add_home_env(research_gc)
+    research_gc.add_argument(
+        "--min-age-hours",
+        type=float,
+        default=DEFAULT_MIN_AGE_HOURS,
+        help="Protect younger unreferenced CAS files from collection (default: 24)",
+    )
+    research_gc.add_argument(
+        "--apply", action="store_true",
+        help="Apply an exact reviewed plan instead of producing a plan",
+    )
+    research_gc.add_argument(
+        "--plan-hash",
+        help="Exact sha256 plan hash returned by the planning pass",
+    )
+    research_gc.add_argument(
+        "--runtime-stopped", action="store_true",
+        help="Assert that all VESTIGIA processes using this home are stopped",
+    )
+    research_gc.set_defaults(func=command_research_gc)
 
     remember = sub.add_parser("remember", help="Create a reviewable memory proposal")
     _add_home_env(remember)
