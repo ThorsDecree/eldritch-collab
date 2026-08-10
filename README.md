@@ -3,16 +3,6 @@
 The canonical development repository for the **VESTIGIA Runtime**: a portable,
 consent-first continuity house for resident agents.
 
-> [!NOTE]
-> **Current official development-canon release: VESTIGIA Runtime v0.7.0 — The Resident’s Drawers.**
->
-> The validated release candidate was merged to `main` on 2026-08-04 at commit
-> `748e5d74392ad4f0a98c75b187f82b91606e9e39`. The exact post-merge `main`
-> distribution artifact from Runtime CI run 35 has been independently downloaded
-> and verified. Public `v0.7.0` tag and GitHub Release creation remain
-> maintainer-controlled publication follow-up; the release artifact itself is no
-> longer an unresolved custody question.
-
 ## What VESTIGIA is
 
 VESTIGIA is a local-first continuity runtime for a resident who needs more than a
