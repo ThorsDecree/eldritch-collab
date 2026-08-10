@@ -1,0 +1,60 @@
+name: One-shot Discord harness loader repair
+
+on:
+  push:
+    branches:
+      - agent/discord-recovery-harness
+    paths:
+      - .github/workflows/patch-discord-harness-loader.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: agent/discord-recovery-harness
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Patch dynamic loader
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('VESTIGIA_Runtime/tests/test_discord_harness.py')
+          text = path.read_text(encoding='utf-8')
+          old_imports = 'import importlib.util\nimport json\nfrom pathlib import Path\n'
+          new_imports = 'import importlib.util\nimport json\nimport sys\nfrom pathlib import Path\n'
+          old_loader = '_harness = importlib.util.module_from_spec(_spec)\n_spec.loader.exec_module(_harness)\n'
+          new_loader = '_harness = importlib.util.module_from_spec(_spec)\nsys.modules[_spec.name] = _harness\n_spec.loader.exec_module(_harness)\n'
+          assert old_imports in text, 'expected import block not found'
+          assert old_loader in text, 'expected dynamic loader block not found'
+          text = text.replace(old_imports, new_imports, 1).replace(old_loader, new_loader, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Install focused test dependencies
+        working-directory: VESTIGIA_Runtime
+        run: python -m pip install -e '.[dev,discord,tokens]'
+
+      - name: Validate focused harness suite
+        working-directory: VESTIGIA_Runtime
+        run: python -m pytest tests/test_discord_harness.py -q
+
+      - name: Commit repair and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name 'kowen9024AI'
+          git config user.email '267743825+kowen9024AI@users.noreply.github.com'
+          git rm .github/workflows/patch-discord-harness-loader.yml
+          git add VESTIGIA_Runtime/tests/test_discord_harness.py
+          git commit -m 'fix: register dynamic Discord harness module'
+          git push origin HEAD:agent/discord-recovery-harness
