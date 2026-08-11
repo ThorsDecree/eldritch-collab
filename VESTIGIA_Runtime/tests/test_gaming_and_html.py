@@ -54,13 +54,16 @@ class GamingToolTests(unittest.TestCase):
 
 
 class HtmlHouseDocumentTests(unittest.TestCase):
-    def test_html_is_visible_to_house_search_but_javascript_is_not(self) -> None:
+    def test_html_is_visible_as_text_while_script_lanes_remain_excluded(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             home = initialize_home(Path(temp) / "home", name="Test Resident", glyph="🏮")
             workspace = home / "workspace" / "SRD"
             workspace.mkdir(parents=True, exist_ok=True)
             (workspace / "spells.html").write_text(
-                "<html><body><h1>Arcane Mark</h1><p>xylophone spell reference</p></body></html>",
+                "<html><body><h1>Arcane Mark</h1>"
+                "<p>xylophone spell reference</p>"
+                "<script>const inlinescriptonlytoken = 'not reference text';</script>"
+                "</body></html>",
                 encoding="utf-8",
             )
             (workspace / "scripts.js").write_text(
@@ -77,6 +80,23 @@ class HtmlHouseDocumentTests(unittest.TestCase):
                 {"action": "search", "scope": "workspace", "query": "xylophone", "max_results": 10}
             )
             self.assertIn("workspace/SRD/spells.html", str(html_result))
+
+            read_result = port._read(
+                {"action": "read", "path": "workspace/SRD/spells.html", "max_tokens": 1000}
+            )
+            self.assertIn("Arcane Mark", read_result["text"])
+            self.assertNotIn("<html", read_result["text"].lower())
+            self.assertNotIn("inlinescriptonlytoken", read_result["text"])
+
+            inline_script_result = port._search(
+                {
+                    "action": "search",
+                    "scope": "workspace",
+                    "query": "inlinescriptonlytoken",
+                    "max_results": 10,
+                }
+            )
+            self.assertEqual([], inline_script_result["results"])
 
             js_result = port._search(
                 {
