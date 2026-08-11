@@ -86,8 +86,7 @@ class HtmlHouseDocumentTests(unittest.TestCase):
                     "max_results": 10,
                 }
             )
-            self.assertNotIn("scripts.js", str(js_result))
-            self.assertNotIn("javascriptonlytoken", str(js_result))
+            self.assertEqual([], js_result["results"])
 
 
 if __name__ == "__main__":
