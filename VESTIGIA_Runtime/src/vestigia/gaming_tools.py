@@ -22,8 +22,8 @@ _TERM_RE = re.compile(
 def parse_dice_expression(expression: str) -> dict[str, Any]:
     """Parse a small dice expression without eval or executable syntax.
 
-    Supported examples include ``d20``, ``2d6+3`` and ``1d8+1d6-2``.  Terms
-    may be added or subtracted.  Deliberately unsupported syntax includes
+    Supported examples include ``d20``, ``2d6+3`` and ``1d8+1d6-2``. Terms
+    may be added or subtracted. Deliberately unsupported syntax includes
     function calls, multiplication, exploding dice, keep/drop operators, and
     arbitrary Python expressions.
     """
@@ -211,7 +211,6 @@ def _register(house: Any) -> None:
             confirmation="none",
             default_after="continue",
             result_visibility="resident_private",
-            forgeable=True,
             group="play",
             input_schema=object_schema(
                 {
