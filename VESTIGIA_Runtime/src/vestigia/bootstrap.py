@@ -15,8 +15,10 @@ _INSTALLATION_PLAN: Final[tuple[tuple[str, str], ...]] = (
     ("workshop_sandbox", "register_composition"),
     ("workshop_script_shelf", "register_composition"),
     ("workshop_microscope", "register_composition"),
+    ("document_formats", "register_composition"),
     ("library_window", "register_composition"),
     ("library_window_lifecycle", "register_composition"),
+    ("gaming_tools", "register_composition"),
 )
 
 _lock = RLock()
