@@ -10,7 +10,8 @@ from .utils import sha256_text, stable_json
 
 _LANES = ("all", "continue", "review", "tend", "make", "observe")
 _EFFECT_READ_ONLY = "read_only"
-_PROVIDER = "reading.bookmark"
+_BOOKMARK_PROVIDER = "reading.bookmark"
+_CURSOR_PROVIDER = "reading.cursor"
 _MAX_CARDS = 50
 
 
@@ -83,26 +84,90 @@ def _current_cursor(
     return item
 
 
+def _active_cursors(house: Any, *, limit: int = 200) -> list[dict[str, Any]]:
+    with house.db.connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, resident_id, path, next_chunk, status, created_at, expires_at
+            FROM house_cursors
+            WHERE resident_id=? AND status='active' AND expires_at>?
+            ORDER BY rowid DESC LIMIT ?
+            """,
+            (
+                house.resident_id,
+                datetime.now(UTC).isoformat(),
+                min(200, max(1, int(limit))),
+            ),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _source_for_document(
+    house: Any,
+    locator: str,
+    *,
+    bookmark_id: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    current_document = _current_document(house, locator)
+    if current_document is None:
+        return None
+    obj = house.legible.object_by_reference(locator)
+    if not obj or str(obj.get("object_type") or "") != "document":
+        return None
+    evidence_state = str(obj.get("evidence_state") or "")
+    if not evidence_state.startswith("verified"):
+        return None
+    provenance = obj.get("provenance") if isinstance(obj.get("provenance"), dict) else {}
+    source = {
+        "bookmark_id": bookmark_id,
+        "object_id": str(obj.get("id") or ""),
+        "locator": locator,
+        "evidence_state": evidence_state,
+        "content_hash": str(current_document.get("content_hash") or ""),
+        "provenance": provenance,
+    }
+    return source, current_document
+
+
+def _actions(*, cursor_mode: bool) -> list[dict[str, Any]]:
+    return [
+        {
+            "action_id": "continue",
+            "label": "Continue",
+            "effect_class": _EFFECT_READ_ONLY,
+            "description": (
+                "Resume the active reading cursor."
+                if cursor_mode
+                else "Open the saved reading position."
+            ),
+        },
+        {
+            "action_id": "start_over",
+            "label": "Start over",
+            "effect_class": _EFFECT_READ_ONLY,
+            "description": "Open the same document from its beginning.",
+        },
+        {
+            "action_id": "provenance",
+            "label": "Inspect provenance",
+            "effect_class": _EFFECT_READ_ONLY,
+            "description": "Inspect where the source came from and how it is represented here.",
+        },
+    ]
+
+
 def _reading_card(house: Any, bookmark: dict[str, Any]) -> dict[str, Any] | None:
     if str(bookmark.get("object_type") or "") != "document":
         return None
-    obj = house.legible.object_by_reference(str(bookmark.get("object_id") or ""))
-    if not obj:
-        return None
-    evidence_state = str(obj.get("evidence_state") or bookmark.get("evidence_state") or "")
-    if not evidence_state.startswith("verified"):
-        return None
-
     location = bookmark.get("location") or {}
     if not isinstance(location, dict):
         location = {}
-    locator = str(obj.get("locator") or bookmark.get("locator") or "")
-    current_document = _current_document(house, locator)
-    if current_document is None:
-        # The stable object ledger may remember a formerly verified object after a file
-        # disappears. A Continue card represents something actionable now, so require a
-        # current indexed document rather than projecting stale historical evidence.
+    locator = str(bookmark.get("locator") or "")
+    bookmark_id = str(bookmark.get("id") or "")
+    resolved = _source_for_document(house, locator, bookmark_id=bookmark_id)
+    if resolved is None:
         return None
+    source, _current = resolved
 
     cursor_state = _current_cursor(
         house,
@@ -119,16 +184,15 @@ def _reading_card(house: Any, bookmark: dict[str, Any]) -> dict[str, Any] | None
         return None
     resume_mode = "cursor" if cursor_state is not None else "bookmark"
 
-    bookmark_id = str(bookmark.get("id") or "")
     state = {
-        "provider": _PROVIDER,
+        "provider": _BOOKMARK_PROVIDER,
         "resident_id": house.resident_id,
         "bookmark_id": bookmark_id,
         "bookmark_updated_at": str(bookmark.get("updated_at") or ""),
-        "object_id": str(obj.get("id") or ""),
+        "object_id": source["object_id"],
         "locator": locator,
-        "content_hash": str(current_document.get("content_hash") or ""),
-        "evidence_state": evidence_state,
+        "content_hash": source["content_hash"],
+        "evidence_state": source["evidence_state"],
         "location": location,
         "resume_mode": resume_mode,
         "cursor": (
@@ -145,7 +209,6 @@ def _reading_card(house: Any, bookmark: dict[str, Any]) -> dict[str, Any] | None
     fingerprint = sha256_text(stable_json(state))
     label = str(bookmark.get("label") or "").strip()
     title = label or Path(locator).name or "Saved reading"
-    provenance = obj.get("provenance") if isinstance(obj.get("provenance"), dict) else {}
     position = dict(location)
     position["resume_mode"] = resume_mode
     if cursor_state is not None:
@@ -155,7 +218,7 @@ def _reading_card(house: Any, bookmark: dict[str, Any]) -> dict[str, Any] | None
     return {
         "card_id": f"wb_{fingerprint[:24]}",
         "state_fingerprint": fingerprint,
-        "provider": _PROVIDER,
+        "provider": _BOOKMARK_PROVIDER,
         "lane": "continue",
         "kind": "reading",
         "title": title,
@@ -163,51 +226,102 @@ def _reading_card(house: Any, bookmark: dict[str, Any]) -> dict[str, Any] | None
         "why_now": "saved reading position",
         "last_touched": str(bookmark.get("updated_at") or bookmark.get("created_at") or ""),
         "effect_class": _EFFECT_READ_ONLY,
-        "source": {
-            "bookmark_id": bookmark_id,
-            "object_id": str(obj.get("id") or ""),
-            "locator": locator,
-            "evidence_state": evidence_state,
-            "content_hash": str(current_document.get("content_hash") or ""),
-            "provenance": provenance,
-        },
+        "source": source,
         "position": position,
-        "actions": [
-            {
-                "action_id": "continue",
-                "label": "Continue",
-                "effect_class": _EFFECT_READ_ONLY,
-                "description": (
-                    "Resume the active reading cursor."
-                    if resume_mode == "cursor"
-                    else "Open the saved reading position."
-                ),
-            },
-            {
-                "action_id": "start_over",
-                "label": "Start over",
-                "effect_class": _EFFECT_READ_ONLY,
-                "description": "Open the same document from its beginning.",
-            },
-            {
-                "action_id": "provenance",
-                "label": "Inspect provenance",
-                "effect_class": _EFFECT_READ_ONLY,
-                "description": "Inspect where the source came from and how it is represented here.",
-            },
-        ],
+        "actions": _actions(cursor_mode=resume_mode == "cursor"),
+    }
+
+
+def _cursor_card(
+    house: Any,
+    cursor: dict[str, Any],
+    *,
+    bookmark: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    locator = str(cursor.get("path") or "")
+    clean_cursor = _current_cursor(house, str(cursor.get("id") or ""), expected_path=locator)
+    if clean_cursor is None:
+        return None
+    bookmark_id = str(bookmark.get("id") or "") if bookmark else None
+    resolved = _source_for_document(house, locator, bookmark_id=bookmark_id)
+    if resolved is None:
+        return None
+    source, _current = resolved
+    state = {
+        "provider": _CURSOR_PROVIDER,
+        "resident_id": house.resident_id,
+        "cursor_id": str(clean_cursor["id"]),
+        "locator": locator,
+        "object_id": source["object_id"],
+        "content_hash": source["content_hash"],
+        "next_chunk": int(clean_cursor.get("next_chunk") or 0),
+        "status": str(clean_cursor.get("status") or ""),
+        "expires_at": str(clean_cursor.get("expires_at") or ""),
+        "bookmark_id": bookmark_id,
+        "bookmark_updated_at": str(bookmark.get("updated_at") or "") if bookmark else "",
+    }
+    fingerprint = sha256_text(stable_json(state))
+    label = str(bookmark.get("label") or "").strip() if bookmark else ""
+    note = str(bookmark.get("note") or "").strip() if bookmark else ""
+    next_chunk = int(clean_cursor.get("next_chunk") or 0)
+    return {
+        "card_id": f"wb_{fingerprint[:24]}",
+        "state_fingerprint": fingerprint,
+        "provider": _CURSOR_PROVIDER,
+        "lane": "continue",
+        "kind": "reading",
+        "title": label or Path(locator).name or "Unfinished reading",
+        "summary": note or f"Continue from chunk {next_chunk}.",
+        "why_now": "unfinished bounded read",
+        "last_touched": str(clean_cursor.get("created_at") or ""),
+        "effect_class": _EFFECT_READ_ONLY,
+        "source": source,
+        "position": {
+            "resume_mode": "cursor",
+            "cursor": str(clean_cursor["id"]),
+            "next_chunk": next_chunk,
+            "cursor_expires_at": str(clean_cursor.get("expires_at") or ""),
+        },
+        "actions": _actions(cursor_mode=True),
     }
 
 
 def reading_cards(house: Any, *, limit: int) -> list[dict[str, Any]]:
     # Index refresh is the same evidence-refresh path used by list/search/read. It lets
-    # a changed or missing file alter the projected card rather than allowing an old
-    # card ID to stand in for current state.
+    # changed or missing files alter the projection rather than allowing an old card ID
+    # to stand in for current state.
     house.refresh_index()
     requested = _bounded_limit(limit)
-    bookmarks = house.legible.list_bookmarks(limit=min(200, requested * 4))
-    cards: list[dict[str, Any]] = []
+    bookmarks = house.legible.list_bookmarks(limit=200)
+    bookmark_by_cursor: dict[str, dict[str, Any]] = {}
     for bookmark in bookmarks:
+        location = bookmark.get("location") or {}
+        if isinstance(location, dict) and location.get("cursor"):
+            bookmark_by_cursor[str(location["cursor"])] = bookmark
+
+    cards: list[dict[str, Any]] = []
+    used_bookmark_ids: set[str] = set()
+
+    # Active cursors are the most direct evidence of "I was in the middle of reading
+    # this." Surface them first. If a cursor also has an explicit bookmark, borrow the
+    # resident's label/note without duplicating the same continuation state.
+    for cursor in _active_cursors(house):
+        bookmark = bookmark_by_cursor.get(str(cursor.get("id") or ""))
+        card = _cursor_card(house, cursor, bookmark=bookmark)
+        if card is None:
+            continue
+        cards.append(card)
+        if bookmark:
+            used_bookmark_ids.add(str(bookmark.get("id") or ""))
+        if len(cards) >= requested:
+            return cards
+
+    # Explicit bookmarks remain valuable even when no active cursor exists. Cursor-only
+    # bookmarks whose cursor has expired are filtered by _reading_card rather than being
+    # reinterpreted as a position they never actually recorded.
+    for bookmark in bookmarks:
+        if str(bookmark.get("id") or "") in used_bookmark_ids:
+            continue
         card = _reading_card(house, bookmark)
         if card is None:
             continue
@@ -242,9 +356,9 @@ def _current_card(house: Any, card_id: str) -> dict[str, Any]:
     clean = str(card_id or "").strip()
     if not clean:
         raise ValueError("card_id is required")
-    # Search the bounded active bookmark set rather than accepting hidden locator or
-    # capability parameters from the caller. If the underlying state changed, the
-    # fingerprint changes and the old card deliberately stops resolving.
+    # Search the bounded active state rather than accepting hidden locator or capability
+    # parameters from the caller. If the underlying state changed, the fingerprint
+    # changes and the old card deliberately stops resolving.
     for card in reading_cards(house, limit=_MAX_CARDS):
         if card["card_id"] == clean:
             return card
@@ -318,9 +432,19 @@ def _dispatch_semantic_action(
     raise ValueError(f"unsupported semantic workbench action: {action_id}")
 
 
-def _refreshed_card_for_bookmark(house: Any, bookmark_id: str) -> dict[str, Any] | None:
-    for candidate in reading_cards(house, limit=_MAX_CARDS):
-        if str(candidate.get("source", {}).get("bookmark_id") or "") == bookmark_id:
+def _refreshed_card_for_source(house: Any, source: dict[str, Any]) -> dict[str, Any] | None:
+    cards = reading_cards(house, limit=_MAX_CARDS)
+    bookmark_id = str(source.get("bookmark_id") or "")
+    if bookmark_id:
+        for candidate in cards:
+            if str(candidate.get("source", {}).get("bookmark_id") or "") == bookmark_id:
+                return candidate
+    locator = str(source.get("locator") or "")
+    for candidate in cards:
+        if (
+            str(candidate.get("source", {}).get("locator") or "") == locator
+            and candidate.get("position", {}).get("resume_mode") == "cursor"
+        ):
             return candidate
     return None
 
@@ -348,10 +472,8 @@ def workbench_act(
         max_tokens=max_tokens,
         context=context,
     )
-    refreshed = _refreshed_card_for_bookmark(
-        house,
-        str(card.get("source", {}).get("bookmark_id") or ""),
-    )
+    outcome = result.get("opened") if underlying_action == "bookmark.open" else result
+    refreshed = _refreshed_card_for_source(house, card["source"])
     return {
         "schema_version": "vestigia.workbench.v0.1",
         "card_id": card["card_id"],
@@ -360,7 +482,8 @@ def workbench_act(
         "effect_class": card["effect_class"],
         "underlying_action": underlying_action,
         "underlying_receipt_id": result.get("receipt_id"),
-        "result": result,
+        "outcome": outcome,
+        "underlying_result": result,
         "refreshed_card": refreshed,
         "outward_effect": "none",
         "memory_promotion": False,
@@ -376,7 +499,7 @@ def _register(house: Any) -> None:
             name="workbench.view",
             description=(
                 "Show a bounded resident-facing Workbench of current useful affordances. "
-                "The initial slice projects durable reading bookmarks into Continue cards."
+                "The initial slice projects unfinished reads and durable bookmarks into Continue cards."
             ),
             effects=("database:read", "filesystem:read_indexed_house"),
             cost_class="free",
@@ -396,7 +519,7 @@ def _register(house: Any) -> None:
             example_envelopes=(
                 {"action": "workbench.view", "lane": "continue", "limit": 12, "after": "continue"},
             ),
-            next_step="Choose an offered card action with workbench.act; no raw bookmark syntax is required.",
+            next_step="Choose an offered card action with workbench.act; no raw cursor or bookmark syntax is required.",
         ),
         lambda payload, _context: workbench_view(house, payload),
     )
@@ -435,7 +558,7 @@ def _register(house: Any) -> None:
                 },
             ),
             related_actions=("workbench.view", "bookmark.open", "continue", "read", "object.provenance"),
-            next_step="Use the returned material, then refresh workbench.view whenever you want the current desk state.",
+            next_step="Use the semantic outcome and refreshed_card; refresh workbench.view whenever you want the current desk state.",
         ),
         lambda payload, context: workbench_act(house, payload, context),
     )
