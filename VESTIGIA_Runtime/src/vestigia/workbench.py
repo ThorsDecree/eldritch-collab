@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,8 +34,53 @@ def _reading_summary(locator: str, location: dict[str, Any], note: str) -> str:
     if chunk is not None:
         return f"Saved at chunk {chunk}."
     if location.get("cursor"):
-        return "Saved reading position."
+        return "Saved resumable reading position."
     return f"Saved reading bookmark for {Path(locator).name}."
+
+
+def _current_document(house: Any, locator: str) -> dict[str, Any] | None:
+    with house.db.connect() as connection:
+        row = connection.execute(
+            "SELECT path, content_hash, indexed_at FROM house_documents WHERE path=?",
+            (locator,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _current_cursor(
+    house: Any,
+    cursor_id: str,
+    *,
+    expected_path: str,
+) -> dict[str, Any] | None:
+    clean = str(cursor_id or "").strip()
+    if not clean:
+        return None
+    with house.db.connect() as connection:
+        row = connection.execute(
+            """
+            SELECT id, resident_id, path, next_chunk, status, created_at, expires_at
+            FROM house_cursors
+            WHERE id=? AND resident_id=?
+            """,
+            (clean, house.resident_id),
+        ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    if str(item.get("status") or "") != "active":
+        return None
+    if str(item.get("path") or "") != expected_path:
+        return None
+    try:
+        expires_at = datetime.fromisoformat(str(item.get("expires_at") or ""))
+    except ValueError:
+        return None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at <= datetime.now(UTC):
+        return None
+    return item
 
 
 def _reading_card(house: Any, bookmark: dict[str, Any]) -> dict[str, Any] | None:
@@ -51,6 +97,28 @@ def _reading_card(house: Any, bookmark: dict[str, Any]) -> dict[str, Any] | None
     if not isinstance(location, dict):
         location = {}
     locator = str(obj.get("locator") or bookmark.get("locator") or "")
+    current_document = _current_document(house, locator)
+    if current_document is None:
+        # The stable object ledger may remember a formerly verified object after a file
+        # disappears. A Continue card represents something actionable now, so require a
+        # current indexed document rather than projecting stale historical evidence.
+        return None
+
+    cursor_state = _current_cursor(
+        house,
+        str(location.get("cursor") or ""),
+        expected_path=locator,
+    )
+    has_direct_position = bool(str(location.get("heading") or "").strip()) or (
+        location.get("chunk") is not None
+    )
+    if location.get("cursor") and cursor_state is None and not has_direct_position:
+        # Cursor-only bookmarks that can no longer resume should not masquerade as a
+        # working Continue button. A later Review/Observe provider can surface them as
+        # stale housekeeping instead.
+        return None
+    resume_mode = "cursor" if cursor_state is not None else "bookmark"
+
     bookmark_id = str(bookmark.get("id") or "")
     state = {
         "provider": _PROVIDER,
@@ -59,14 +127,30 @@ def _reading_card(house: Any, bookmark: dict[str, Any]) -> dict[str, Any] | None
         "bookmark_updated_at": str(bookmark.get("updated_at") or ""),
         "object_id": str(obj.get("id") or ""),
         "locator": locator,
-        "content_hash": str(obj.get("content_hash") or ""),
+        "content_hash": str(current_document.get("content_hash") or ""),
         "evidence_state": evidence_state,
         "location": location,
+        "resume_mode": resume_mode,
+        "cursor": (
+            {
+                "id": str(cursor_state.get("id") or ""),
+                "next_chunk": int(cursor_state.get("next_chunk") or 0),
+                "status": str(cursor_state.get("status") or ""),
+                "expires_at": str(cursor_state.get("expires_at") or ""),
+            }
+            if cursor_state is not None
+            else None
+        ),
     }
     fingerprint = sha256_text(stable_json(state))
     label = str(bookmark.get("label") or "").strip()
     title = label or Path(locator).name or "Saved reading"
     provenance = obj.get("provenance") if isinstance(obj.get("provenance"), dict) else {}
+    position = dict(location)
+    position["resume_mode"] = resume_mode
+    if cursor_state is not None:
+        position["next_chunk"] = int(cursor_state.get("next_chunk") or 0)
+        position["cursor_expires_at"] = str(cursor_state.get("expires_at") or "")
 
     return {
         "card_id": f"wb_{fingerprint[:24]}",
@@ -84,16 +168,20 @@ def _reading_card(house: Any, bookmark: dict[str, Any]) -> dict[str, Any] | None
             "object_id": str(obj.get("id") or ""),
             "locator": locator,
             "evidence_state": evidence_state,
-            "content_hash": str(obj.get("content_hash") or ""),
+            "content_hash": str(current_document.get("content_hash") or ""),
             "provenance": provenance,
         },
-        "position": dict(location),
+        "position": position,
         "actions": [
             {
                 "action_id": "continue",
                 "label": "Continue",
                 "effect_class": _EFFECT_READ_ONLY,
-                "description": "Open the saved reading position.",
+                "description": (
+                    "Resume the active reading cursor."
+                    if resume_mode == "cursor"
+                    else "Open the saved reading position."
+                ),
             },
             {
                 "action_id": "start_over",
@@ -174,21 +262,34 @@ def _dispatch_semantic_action(
     context: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
     source = card["source"]
+    position = card["position"]
     inner_context = dict(context)
     inner_context["source_envelope"] = "WORKBENCH"
     turn_id = str(context.get("turn_id") or "") or None
 
     if action_id == "continue":
-        underlying_action = "bookmark.open"
-        result = house.dispatch(
-            {
-                "action": underlying_action,
-                "bookmark_id": source["bookmark_id"],
-                "max_tokens": max_tokens,
-            },
-            turn_id=turn_id,
-            context=inner_context,
-        )
+        if position.get("resume_mode") == "cursor":
+            underlying_action = "continue"
+            result = house.dispatch(
+                {
+                    "action": underlying_action,
+                    "cursor": position["cursor"],
+                    "max_tokens": max_tokens,
+                },
+                turn_id=turn_id,
+                context=inner_context,
+            )
+        else:
+            underlying_action = "bookmark.open"
+            result = house.dispatch(
+                {
+                    "action": underlying_action,
+                    "bookmark_id": source["bookmark_id"],
+                    "max_tokens": max_tokens,
+                },
+                turn_id=turn_id,
+                context=inner_context,
+            )
         return underlying_action, result
     if action_id == "start_over":
         underlying_action = "read"
@@ -217,6 +318,13 @@ def _dispatch_semantic_action(
     raise ValueError(f"unsupported semantic workbench action: {action_id}")
 
 
+def _refreshed_card_for_bookmark(house: Any, bookmark_id: str) -> dict[str, Any] | None:
+    for candidate in reading_cards(house, limit=_MAX_CARDS):
+        if str(candidate.get("source", {}).get("bookmark_id") or "") == bookmark_id:
+            return candidate
+    return None
+
+
 def workbench_act(
     house: Any,
     payload: dict[str, Any],
@@ -240,6 +348,10 @@ def workbench_act(
         max_tokens=max_tokens,
         context=context,
     )
+    refreshed = _refreshed_card_for_bookmark(
+        house,
+        str(card.get("source", {}).get("bookmark_id") or ""),
+    )
     return {
         "schema_version": "vestigia.workbench.v0.1",
         "card_id": card["card_id"],
@@ -249,6 +361,7 @@ def workbench_act(
         "underlying_action": underlying_action,
         "underlying_receipt_id": result.get("receipt_id"),
         "result": result,
+        "refreshed_card": refreshed,
         "outward_effect": "none",
         "memory_promotion": False,
         "identity_effect": False,
@@ -321,7 +434,7 @@ def _register(house: Any) -> None:
                     "after": "continue",
                 },
             ),
-            related_actions=("workbench.view", "bookmark.open", "read", "object.provenance"),
+            related_actions=("workbench.view", "bookmark.open", "continue", "read", "object.provenance"),
             next_step="Use the returned material, then refresh workbench.view whenever you want the current desk state.",
         ),
         lambda payload, context: workbench_act(house, payload, context),
