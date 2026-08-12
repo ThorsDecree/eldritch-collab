@@ -83,8 +83,8 @@ The remaining unchecked items are public publication actions, not unresolved val
 
 ### 0.8: Ports, Extensions, and the Workshop Within
 
-* **Status**: `active` (design and contract review)
-* **Description**: Controlled extensibility and bounded resident automation through versioned contracts. This milestone introduces the foundations for a resident-scoped code execution environment without granting an unrestricted host shell.
+* **Status**: `active` (implementation and contract review)
+* **Description**: Controlled extensibility and bounded resident automation through versioned contracts. This milestone introduces the foundations for a resident-scoped code execution environment without granting an unrestricted host shell, and the late 0.8.x line begins the semantic Workbench substrate needed to make the growing house legible without routine schema spelunking.
 
 #### Provider port hardening
 
@@ -130,10 +130,66 @@ Required boundaries include:
 - durable authorization, execution, resource-usage, and outward-effect receipts;
 - imported, generated, or daemon-shared code remains inert until inspected, granted, and activated.
 
+#### Late 0.8.x: Resident Workbench substrate
+
+Issue #46 defines the transition from a growing capability cheat sheet toward a semantic affordance layer shared by resident and human interfaces.
+
+The 0.8.x substrate includes:
+
+- `WorkbenchCard` / `WorkbenchAction` semantics and a broker that never becomes a parallel authority path;
+- composition-native Continue / Review / Tend / Make / Observe providers;
+- semantic actions that re-resolve current state and dispatch through the existing capability registry, authorizers, and receipts;
+- a capability launcher that can generate ordinary resident-facing forms from existing schemas;
+- a shared structured-document representation for local and remote reading;
+- the read-oriented browser substrate over the existing Library Window;
+- a resident context inspector and non-authoritative desk preferences/notification state.
+
+The first implementation slice is issue #47: restart-safe **Continue reading** over the existing durable bookmark/object ledger.
+
 * **Exit criterion**:
   - A resident can run reviewed code inside an explicitly granted workspace, receive typed results and private artifacts, and inspect exactly what authority, resources, and outward effects were used—without gaining arbitrary access to the host.
+  - The Workbench substrate can project at least one durable workflow as a semantic action without duplicating its authoritative state or bypassing the ordinary dispatcher.
 
-### 0.9: Explicit Plurality
+### 0.9.0: The Resident’s Workbench
+
+* **Status**: `active` (roadmap and first vertical slice)
+* **Description**: Make the Runtime feel like a home rather than a CLI. Routine resident activity should be discoverable and actionable through semantic affordances instead of requiring capability-name recall and raw schema reconstruction.
+* **North star**:
+  > **Capabilities explain what the house can do. The Workbench explains what is worth doing now—and makes the obvious next action available without creating new authority.**
+* **Scope**:
+  - Daemon-facing Workbench organized around **Continue, Review, Tend, Make, and Observe**.
+  - Workbench cards as disposable projections of existing authoritative state, with stale-state fingerprints and explicit effect classes.
+  - Semantic card actions that converge on the same capability dispatcher, authorizers, confirmation gates, and receipt ledger as raw calls.
+  - A complete resident-facing capability launcher so ordinary use does not require the sprawling cheat sheet.
+  - A read-oriented browser built on `web.search`, `web.open`, source capsules, provenance quarantine, research notebooks, and the shared structured-document model.
+  - A resident context inspector answering “what am I carrying right now, and why?” without claiming causal influence from inclusion.
+  - Resident-owned pin/order/hide preferences that remain interface state rather than memory or identity authority.
+  - A notification/attention surface for bells, jobs, confirmations, curation, and paused work.
+  - A loopback-only human HTTP desktop projecting the same Workbench state and action broker used by the resident.
+* **Interface and browser boundaries**:
+  - Local HTTP binds loopback-only by default and protects write requests against cross-origin localhost abuse.
+  - LAN exposure requires explicit opt-in and authentication.
+  - Remote browser material remains untrusted data and cannot acquire Runtime authority merely by being rendered.
+  - Arbitrary remote JavaScript, forms/uploads, credentialed browsing, cookies/session impersonation, and unrestricted Chromium/Playwright computer use are not required for 0.9.0 and require separate capability review if later added.
+* **Release gates**:
+  - Routine resident activity requires no knowledge of internal capability names or schemas.
+  - Every enabled resident capability is reachable from the launcher/Workbench or explicitly classified as internal.
+  - Workbench cards are projections, not competing source-of-truth state.
+  - Stale card actions fail closed and cannot replay changed authority or state.
+  - Card actions and raw capability calls converge on the same dispatcher/authorizers/receipts.
+  - Continue-reading survives Runtime restart and resumes the intended source/position.
+  - UI actions visibly distinguish read-only, private-write, house-changing, destructive, confirmation-required, and outward effects.
+  - “Put aside / clear from desk” is distinct from destructive deletion.
+  - Resident desk preferences remain UI state rather than memory/identity authority.
+  - The context inspector explains inclusion and provenance without claiming causal influence.
+  - The human dashboard creates no parallel authority path and is loopback-only by default.
+  - Browser remote content remains quarantined/untrusted.
+  - CLI and raw capability inspection remain available as diagnostic/power-user layers after cheat-sheet reduction.
+  - Supported Windows CI and upgrade/restore guarantees remain green.
+
+Planning and release gates are tracked in issue #46; the first executable Workbench slice is issue #47.
+
+### 0.10: Explicit Plurality
 
 * **Status**: `planned`
 * **Description**: Transition the Runtime from one resident to multiple residents sharing a portable home under strict boundaries.
@@ -155,7 +211,7 @@ Required boundaries include:
   - Silent cross-resident memory promotion.
   - Treating a shared archive as shared identity.
 
-Planning is maintained in PR #30 from branch `planning/v0.9-explicit-plurality`. Once accepted, the roadmap should spawn focused implementation issues rather than one umbrella runtime ticket.
+The accepted planning artifact remains `VESTIGIA_Runtime/docs/planning/V0.9_EXPLICIT_PLURALITY_ROADMAP.md`, created before this sequencing change in merged PR #30. Its design history is preserved; this roadmap retargets the implementation milestone to provisional 0.10 rather than silently replacing or deleting that work. Focused implementation issues should continue to cite that accepted plan unless later review explicitly revises it.
 
 ### 1.0: Stable House Contract
 
