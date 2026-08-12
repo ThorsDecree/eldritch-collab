@@ -58,6 +58,7 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
             self.assertEqual("read_only", card["effect_class"])
             self.assertEqual(bookmark_id, card["source"]["bookmark_id"])
             self.assertEqual("workspace/long-book.md", card["source"]["locator"])
+            self.assertEqual("bookmark", card["position"]["resume_mode"])
             self.assertTrue(card["state_fingerprint"])
             self.assertEqual(
                 {"continue", "start_over", "provenance"},
@@ -85,6 +86,105 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
             actions = {item["action"] for item in receipts}
             self.assertIn("bookmark.open", actions)
             self.assertIn("workbench.act", actions)
+
+    def test_cursor_backed_bookmark_resumes_cursor_and_refreshes_card_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = initialize_home(Path(temp) / "home", name="Test Resident", glyph="📖")
+            document = home / "workspace" / "cursor-book.md"
+            document.parent.mkdir(parents=True, exist_ok=True)
+            document.write_text(
+                "\n".join((f"PAGE-{index} " + (f"word-{index} " * 1000)) for index in range(6)),
+                encoding="utf-8",
+            )
+            port = self._port(home)
+            opened = port.dispatch(
+                {
+                    "action": "read",
+                    "path": "workspace/cursor-book.md",
+                    "chunk": 0,
+                    "max_tokens": 500,
+                },
+                turn_id="turn-open",
+                context={"interface": "cli"},
+            )
+            self.assertTrue(opened["cursor"])
+            obj = port.legible.object_by_reference("workspace/cursor-book.md")
+            self.assertIsNotNone(obj)
+            bookmark_id = port.legible.add_bookmark(
+                str(obj["id"]),
+                label="Cursor Book",
+                location={"cursor": opened["cursor"]},
+            )
+
+            # Restart before asking the Workbench to prove the cursor is durable state.
+            restarted = self._port(home)
+            view = restarted.dispatch(
+                {"action": "workbench.view", "lane": "continue"},
+                turn_id="turn-cursor-view",
+                context={"interface": "cli"},
+            )
+            card = next(
+                item for item in view["cards"] if item["source"]["bookmark_id"] == bookmark_id
+            )
+            self.assertEqual("cursor", card["position"]["resume_mode"])
+            old_card_id = card["card_id"]
+
+            acted = restarted.dispatch(
+                {
+                    "action": "workbench.act",
+                    "card_id": old_card_id,
+                    "action_id": "continue",
+                    "max_tokens": 500,
+                },
+                turn_id="turn-cursor-act",
+                context={"interface": "cli"},
+            )
+            self.assertEqual("continue", acted["underlying_action"])
+            self.assertTrue(acted["underlying_receipt_id"])
+            if acted["refreshed_card"] is not None:
+                # Cursor progress is part of the state fingerprint. Once reading moves,
+                # an earlier button cannot replay as though the position were unchanged.
+                self.assertNotEqual(old_card_id, acted["refreshed_card"]["card_id"])
+
+    def test_expired_cursor_only_bookmark_is_not_projected_as_working_continue(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = initialize_home(Path(temp) / "home", name="Test Resident", glyph="📖")
+            document = home / "workspace" / "expiring-book.md"
+            document.parent.mkdir(parents=True, exist_ok=True)
+            document.write_text(("old-page " * 2000) + "\nmore\n", encoding="utf-8")
+            port = self._port(home)
+            opened = port.dispatch(
+                {
+                    "action": "read",
+                    "path": "workspace/expiring-book.md",
+                    "max_tokens": 300,
+                },
+                turn_id="turn-expiring-open",
+                context={"interface": "cli"},
+            )
+            self.assertTrue(opened["cursor"])
+            obj = port.legible.object_by_reference("workspace/expiring-book.md")
+            bookmark_id = port.legible.add_bookmark(
+                str(obj["id"]),
+                label="Expired Cursor Book",
+                location={"cursor": opened["cursor"]},
+            )
+            with port.db.connect() as connection:
+                connection.execute(
+                    "UPDATE house_cursors SET expires_at='2020-01-01T00:00:00+00:00' WHERE id=?",
+                    (opened["cursor"],),
+                )
+
+            restarted = self._port(home)
+            view = restarted.dispatch(
+                {"action": "workbench.view", "lane": "continue"},
+                turn_id="turn-expired-view",
+                context={"interface": "cli"},
+            )
+            self.assertNotIn(
+                bookmark_id,
+                {item["source"]["bookmark_id"] for item in view["cards"]},
+            )
 
     def test_changed_document_invalidates_old_card(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
