@@ -132,12 +132,13 @@ def register_contract_contribution(
 
 
 def register_workbench_provider(name: str, callback: Callback, *, order: int) -> None:
-    """Register one bounded provider of resident-facing Workbench cards.
+    """Register one bounded provider of resident-facing Workbench affordances.
 
-    Provider callbacks receive ``(house, lane, limit)`` and return an object with
-    ``implemented_lanes`` plus ``cards``. The composition layer owns deterministic
-    ordering, collision rejection, freezing, shape validation, de-duplication, and
-    the global result ceiling so feature modules do not need to edit Workbench core.
+    Provider callbacks receive ``(house, request)``. ``request['mode']`` is either
+    ``view`` or ``act``. View responses declare ``implemented_lanes`` and ``cards``;
+    act responses are provider-owned semantic results. The composition layer owns
+    deterministic ordering, collision rejection, freezing, card-shape validation,
+    de-duplication, and the global result ceiling.
     """
 
     _workbench_providers.register(name, callback, order=order)
@@ -295,10 +296,11 @@ def render_workbench_cards(
     providers: list[str] = []
 
     for entry in _workbench_providers.entries():
-        remaining = requested - len(cards)
-        if remaining <= 0:
-            break
-        result = entry.callback(house, lane, remaining)
+        remaining = max(0, requested - len(cards))
+        result = entry.callback(
+            house,
+            {"mode": "view", "lane": lane, "limit": remaining},
+        )
         if not isinstance(result, dict):
             raise TypeError(f"workbench provider {entry.name} returned a non-object")
         raw_lanes = result.get("implemented_lanes", [])
@@ -321,6 +323,11 @@ def render_workbench_cards(
                 raise ValueError(
                     f"workbench provider {entry.name} emitted lane {card_lane!r} for request {lane!r}"
                 )
+            provider_name = str(card.get("provider") or "").strip().lower()
+            if provider_name != entry.name:
+                raise ValueError(
+                    f"workbench provider {entry.name} emitted mismatched provider {provider_name!r}"
+                )
             card_id = str(card.get("card_id") or "").strip()
             if not card_id:
                 raise ValueError(f"workbench provider {entry.name} emitted a card without card_id")
@@ -336,6 +343,36 @@ def render_workbench_cards(
         "implemented_lanes": sorted(implemented_lanes),
         "providers": providers,
     }
+
+
+def dispatch_workbench_action(
+    house: Any,
+    *,
+    card: dict[str, Any],
+    action_id: str,
+    max_tokens: int,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    provider_name = str(card.get("provider") or "").strip().lower()
+    entry = next(
+        (candidate for candidate in _workbench_providers.entries() if candidate.name == provider_name),
+        None,
+    )
+    if entry is None:
+        raise KeyError("workbench card provider is unavailable; refresh workbench.view")
+    result = entry.callback(
+        house,
+        {
+            "mode": "act",
+            "card": card,
+            "action_id": action_id,
+            "max_tokens": max_tokens,
+            "context": dict(context),
+        },
+    )
+    if not isinstance(result, dict):
+        raise TypeError(f"workbench provider {entry.name} returned a non-object action result")
+    return result
 
 
 def composition_plan() -> dict[str, Any]:
