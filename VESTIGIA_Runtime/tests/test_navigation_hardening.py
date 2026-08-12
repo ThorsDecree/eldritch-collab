@@ -164,6 +164,50 @@ def test_cursor_only_bookmark_resumes_cursor_instead_of_document_start(tmp_path:
     assert nav["bookmark"]["updated"] is False
 
 
+def test_legacy_read_bookmark_shortcut_uses_same_exact_chunk_semantics(tmp_path: Path) -> None:
+    house, home = _house(tmp_path)
+    relative, sketch_chunks, _other = _long_document(house, home)
+    target = sketch_chunks[-2]
+    bookmark_id = _bookmark(
+        house,
+        relative=relative,
+        heading="Sketch",
+        chunk=target,
+    )
+
+    reopened = house.dispatch(
+        {"action": "read", "bookmark_id": bookmark_id, "max_tokens": 140}
+    )
+
+    nav = reopened["navigation"]
+    assert nav["resolution_route"] == "chunk"
+    assert nav["requested"]["bookmark_id"] == bookmark_id
+    assert nav["returned"]["first_chunk"] == target
+    assert nav["proof"]["requested_chunk_honored"] is True
+    assert f"chunk {target}]" in reopened["text"]
+
+
+def test_legacy_read_cursor_bookmark_resumes_cursor_instead_of_chunk_zero(tmp_path: Path) -> None:
+    house, home = _house(tmp_path)
+    relative, _sketch_chunks, _other = _long_document(house, home)
+    first = house.dispatch(
+        {"action": "read", "path": relative, "chunk": 0, "max_tokens": 140}
+    )
+    cursor_id = str(first["cursor"])
+    expected = int(first["navigation"]["new_cursor"]["next_chunk"])
+    bookmark_id = _bookmark(house, relative=relative, cursor=cursor_id)
+
+    reopened = house.dispatch(
+        {"action": "read", "bookmark_id": bookmark_id, "max_tokens": 140}
+    )
+
+    nav = reopened["navigation"]
+    assert nav["resolution_route"] == "cursor"
+    assert nav["source_cursor"]["id"] == cursor_id
+    assert nav["returned"]["first_chunk"] == expected
+    assert nav["new_cursor"] is None or nav["new_cursor"]["provenance"]["bookmark_id"] == bookmark_id
+
+
 def test_continue_rejects_unbound_legacy_cursor(tmp_path: Path) -> None:
     house, home = _house(tmp_path)
     relative, _sketch_chunks, _other = _long_document(house, home)
