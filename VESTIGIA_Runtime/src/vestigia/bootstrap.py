@@ -19,6 +19,7 @@ _INSTALLATION_PLAN: Final[tuple[tuple[str, str], ...]] = (
     ("library_window", "register_composition"),
     ("library_window_lifecycle", "register_composition"),
     ("gaming_tools", "register_composition"),
+    ("workbench", "register_composition"),
 )
 
 _lock = RLock()
