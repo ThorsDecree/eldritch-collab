@@ -177,6 +177,40 @@ class CapabilityRegistry:
         self._specs[normalized] = updated
         return updated
 
+    def handler(self, name: str) -> CapabilityHandler:
+        """Return the registered executable handler for an existing capability.
+
+        This is an internal composition seam. It keeps startup contributions from
+        reaching into ``_handlers`` directly when they need to harden or adapt an
+        already-declared core action without changing that action's authority contract.
+        """
+
+        normalized = name.strip().lower()
+        self.spec(normalized)
+        if normalized not in self._handlers:
+            raise ValueError(f"capability is not TOOL_ACTION-dispatchable: {normalized}")
+        return self._handlers[normalized]
+
+    def replace_handler(
+        self,
+        name: str,
+        handler: CapabilityHandler,
+    ) -> CapabilityHandler:
+        """Replace one existing handler while preserving its CapabilitySpec.
+
+        Replacement is deliberately explicit and returns the prior handler so a
+        composition contribution can wrap existing behavior without private-registry
+        mutation. The capability name, schema, effects, authorizer, and confirmation
+        policy are untouched.
+        """
+
+        normalized = name.strip().lower()
+        previous = self.handler(normalized)
+        if not callable(handler):
+            raise TypeError("replacement capability handler must be callable")
+        self._handlers[normalized] = handler
+        return previous
+
     def spec(self, name: str) -> CapabilitySpec:
         normalized = name.strip().lower()
         if normalized not in self._specs:
