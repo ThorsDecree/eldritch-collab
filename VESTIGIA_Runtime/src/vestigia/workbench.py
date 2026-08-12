@@ -148,10 +148,7 @@ def _register(house: Any) -> None:
                 {
                     "action": {"type": "string", "const": "workbench.act"},
                     "card_id": {"type": "string", "minLength": 4, "maxLength": 80},
-                    "action_id": {
-                        "type": "string",
-                        "enum": ["continue", "start_over", "provenance"],
-                    },
+                    "action_id": {"type": "string", "minLength": 1, "maxLength": 80},
                     "max_tokens": {"type": "integer", "minimum": 100, "maximum": 4000},
                     "after": after,
                 },
