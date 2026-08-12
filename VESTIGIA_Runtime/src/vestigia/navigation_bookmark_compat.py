@@ -13,6 +13,37 @@ from .navigation_hardening import (
 
 def _install(house: Any) -> None:
     prior_read = house.registry.handler("read")
+    prior_continue = house.registry.handler("continue")
+
+    # Navigation hardening adds new falsifiability failures, but callers already
+    # rely on the established cursor lifecycle exception families. Preserve those
+    # public contracts for ordinary unknown/closed and expired cursors while
+    # leaving genuinely new navigation failures as NavigationStateError.
+    from .house_tools import HouseCursorError, HouseCursorExpiredError
+
+    def continue_with_cursor_error_compat(
+        payload: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            return prior_continue(payload, context)
+        except NavigationStateError as exc:
+            code = str(getattr(exc, "house_error_code", "") or "")
+            suggested_retry = getattr(exc, "house_suggested_retry", None)
+            message = str(exc.args[0]) if exc.args else str(exc)
+            if code == "cursor_unknown_or_closed":
+                raise HouseCursorError(
+                    message,
+                    code=code,
+                    suggested_retry=suggested_retry,
+                ) from exc
+            if code == "cursor_expired":
+                raise HouseCursorExpiredError(
+                    message,
+                    code=code,
+                    suggested_retry=suggested_retry,
+                ) from exc
+            raise
 
     def read_with_bookmark_compat(
         payload: dict[str, Any],
@@ -190,11 +221,12 @@ def _install(house: Any) -> None:
             **{key: value for key, value in result.items() if key != "navigation"},
         }
 
+    house.registry.replace_handler("continue", continue_with_cursor_error_compat)
     house.registry.replace_handler("read", read_with_bookmark_compat)
 
 
 def register_composition() -> None:
-    """Keep the established read(bookmark_id=...) doorway on one navigation contract."""
+    """Keep established bookmark and cursor lifecycle contracts on hardened navigation."""
 
     from .composition import register_capability_installer
 
