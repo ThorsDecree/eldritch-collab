@@ -17,6 +17,7 @@ _INSTALLATION_PLAN: Final[tuple[tuple[str, str], ...]] = (
     ("workshop_microscope", "register_composition"),
     ("document_formats", "register_composition"),
     ("navigation_hardening", "register_composition"),
+    ("navigation_bookmark_compat", "register_composition"),
     ("library_window", "register_composition"),
     ("library_window_lifecycle", "register_composition"),
     ("gaming_tools", "register_composition"),
