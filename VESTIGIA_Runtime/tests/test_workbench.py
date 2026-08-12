@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from vestigia.composition import composition_plan
 from vestigia.config import load_config
 from vestigia.db import ContinuityDB
 from vestigia.home import initialize_home
@@ -29,9 +30,6 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
         home = initialize_home(root / "home", name="Test Resident", glyph="📖")
         document = home / "workspace" / "long-book.md"
         document.parent.mkdir(parents=True, exist_ok=True)
-        # The first physical line is deliberately longer than the default house chunk,
-        # making the second marker land in a later indexed chunk without relying on
-        # test-only configuration changes.
         document.write_text(
             ("first-page " * 800) + "\nSECOND-PAGE-MARKER\nend\n",
             encoding="utf-8",
@@ -51,9 +49,6 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
     def test_continue_card_survives_restart_and_uses_normal_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             home, bookmark_id = self._home_with_saved_reading(Path(temp))
-
-            # A fresh HousePort models a Runtime restart: the Workbench must rediscover
-            # the card from durable bookmark/object state rather than an in-memory cache.
             port = self._port(home)
             view = port.dispatch(
                 {"action": "workbench.view", "lane": "continue", "limit": 10},
@@ -61,9 +56,12 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
                 context={"interface": "cli"},
             )
             self.assertEqual(1, view["card_count"])
+            self.assertEqual(["reading.continue"], view["providers"])
             card = view["cards"][0]
             self.assertEqual("continue", card["lane"])
             self.assertEqual("reading", card["kind"])
+            self.assertEqual("reading.continue", card["provider"])
+            self.assertEqual("reading.bookmark", card["projection_kind"])
             self.assertEqual("read_only", card["effect_class"])
             self.assertEqual(bookmark_id, card["source"]["bookmark_id"])
             self.assertEqual("workspace/long-book.md", card["source"]["locator"])
@@ -84,6 +82,7 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
                 turn_id="turn-act",
                 context={"interface": "cli"},
             )
+            self.assertEqual("reading.continue", acted["provider"])
             self.assertEqual("bookmark.open", acted["underlying_action"])
             self.assertTrue(acted["underlying_receipt_id"])
             self.assertIn("SECOND-PAGE-MARKER", acted["outcome"]["text"])
@@ -124,7 +123,8 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
                 for item in view["cards"]
                 if item["source"]["locator"] == "workspace/unfinished-book.md"
             )
-            self.assertEqual("reading.cursor", card["provider"])
+            self.assertEqual("reading.continue", card["provider"])
+            self.assertEqual("reading.cursor", card["projection_kind"])
             self.assertIsNone(card["source"]["bookmark_id"])
             self.assertEqual("cursor", card["position"]["resume_mode"])
 
@@ -167,7 +167,6 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
                 location={"cursor": opened["cursor"]},
             )
 
-            # Restart before asking the Workbench to prove the cursor is durable state.
             restarted = self._port(home)
             view = restarted.dispatch(
                 {"action": "workbench.view", "lane": "continue"},
@@ -193,8 +192,6 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
             self.assertEqual("continue", acted["underlying_action"])
             self.assertTrue(acted["underlying_receipt_id"])
             self.assertIsNotNone(acted["refreshed_card"])
-            # Cursor progress is part of the state fingerprint. Once reading moves, an
-            # earlier button cannot replay as though the position were unchanged.
             self.assertNotEqual(old_card_id, acted["refreshed_card"]["card_id"])
 
     def test_expired_cursor_only_bookmark_is_not_projected_as_working_continue(self) -> None:
@@ -284,7 +281,24 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
             )
             self.assertEqual([], result["cards"])
             self.assertEqual(["continue"], result["implemented_lanes"])
+            self.assertEqual(["reading.continue"], result["providers"])
             self.assertIn("review", result["planned_lanes"])
+
+    def test_provider_registry_is_frozen_and_core_is_provider_neutral(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = initialize_home(Path(temp) / "home", name="Test Resident", glyph="🪑")
+            self._port(home)
+            plan = composition_plan()
+            self.assertTrue(plan["frozen"])
+            self.assertEqual(["reading.continue"], plan["workbench_providers"])
+
+        root = Path(__file__).resolve().parents[1] / "src" / "vestigia"
+        core = (root / "workbench.py").read_text(encoding="utf-8")
+        reading = (root / "workbench_reading.py").read_text(encoding="utf-8")
+        self.assertNotIn("house_cursors", core)
+        self.assertNotIn("bookmark.open", core)
+        self.assertIn("house_cursors", reading)
+        self.assertIn("bookmark.open", reading)
 
 
 if __name__ == "__main__":
