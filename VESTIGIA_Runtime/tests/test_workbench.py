@@ -16,6 +16,15 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
         db = ContinuityDB(home / "memory" / "continuity.db")
         return HousePort(config, db)
 
+    def _write_multi_chunk_book(self, home: Path, name: str = "cursor-book.md") -> Path:
+        document = home / "workspace" / name
+        document.parent.mkdir(parents=True, exist_ok=True)
+        document.write_text(
+            "\n".join((f"PAGE-{index} " + (f"word-{index} " * 1000)) for index in range(6)),
+            encoding="utf-8",
+        )
+        return document
+
     def _home_with_saved_reading(self, root: Path) -> tuple[Path, str]:
         home = initialize_home(root / "home", name="Test Resident", glyph="📖")
         document = home / "workspace" / "long-book.md"
@@ -77,7 +86,7 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
             )
             self.assertEqual("bookmark.open", acted["underlying_action"])
             self.assertTrue(acted["underlying_receipt_id"])
-            self.assertIn("SECOND-PAGE-MARKER", acted["result"]["text"])
+            self.assertIn("SECOND-PAGE-MARKER", acted["outcome"]["text"])
             self.assertEqual("none", acted["outward_effect"])
             self.assertFalse(acted["memory_promotion"])
             self.assertFalse(acted["identity_effect"])
@@ -87,15 +96,57 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
             self.assertIn("bookmark.open", actions)
             self.assertIn("workbench.act", actions)
 
+    def test_unfinished_read_becomes_continue_card_without_manual_bookmark(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = initialize_home(Path(temp) / "home", name="Test Resident", glyph="📖")
+            self._write_multi_chunk_book(home, "unfinished-book.md")
+            port = self._port(home)
+            opened = port.dispatch(
+                {
+                    "action": "read",
+                    "path": "workspace/unfinished-book.md",
+                    "chunk": 0,
+                    "max_tokens": 500,
+                },
+                turn_id="turn-unfinished-open",
+                context={"interface": "cli"},
+            )
+            self.assertTrue(opened["cursor"])
+
+            restarted = self._port(home)
+            view = restarted.dispatch(
+                {"action": "workbench.view", "lane": "continue"},
+                turn_id="turn-unfinished-view",
+                context={"interface": "cli"},
+            )
+            card = next(
+                item
+                for item in view["cards"]
+                if item["source"]["locator"] == "workspace/unfinished-book.md"
+            )
+            self.assertEqual("reading.cursor", card["provider"])
+            self.assertIsNone(card["source"]["bookmark_id"])
+            self.assertEqual("cursor", card["position"]["resume_mode"])
+
+            acted = restarted.dispatch(
+                {
+                    "action": "workbench.act",
+                    "card_id": card["card_id"],
+                    "action_id": "continue",
+                    "max_tokens": 500,
+                },
+                turn_id="turn-unfinished-act",
+                context={"interface": "cli"},
+            )
+            self.assertEqual("continue", acted["underlying_action"])
+            self.assertTrue(acted["underlying_receipt_id"])
+            self.assertIsNotNone(acted["refreshed_card"])
+            self.assertNotEqual(card["card_id"], acted["refreshed_card"]["card_id"])
+
     def test_cursor_backed_bookmark_resumes_cursor_and_refreshes_card_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             home = initialize_home(Path(temp) / "home", name="Test Resident", glyph="📖")
-            document = home / "workspace" / "cursor-book.md"
-            document.parent.mkdir(parents=True, exist_ok=True)
-            document.write_text(
-                "\n".join((f"PAGE-{index} " + (f"word-{index} " * 1000)) for index in range(6)),
-                encoding="utf-8",
-            )
+            self._write_multi_chunk_book(home)
             port = self._port(home)
             opened = port.dispatch(
                 {
@@ -141,10 +192,10 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
             )
             self.assertEqual("continue", acted["underlying_action"])
             self.assertTrue(acted["underlying_receipt_id"])
-            if acted["refreshed_card"] is not None:
-                # Cursor progress is part of the state fingerprint. Once reading moves,
-                # an earlier button cannot replay as though the position were unchanged.
-                self.assertNotEqual(old_card_id, acted["refreshed_card"]["card_id"])
+            self.assertIsNotNone(acted["refreshed_card"])
+            # Cursor progress is part of the state fingerprint. Once reading moves, an
+            # earlier button cannot replay as though the position were unchanged.
+            self.assertNotEqual(old_card_id, acted["refreshed_card"]["card_id"])
 
     def test_expired_cursor_only_bookmark_is_not_projected_as_working_continue(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
