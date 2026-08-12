@@ -33,6 +33,7 @@ def test_runtime_bootstrap_plan_is_explicit_and_unique() -> None:
         ("workshop_microscope", "register_composition"),
         ("document_formats", "register_composition"),
         ("navigation_hardening", "register_composition"),
+        ("navigation_bookmark_compat", "register_composition"),
         ("library_window", "register_composition"),
         ("library_window_lifecycle", "register_composition"),
         ("gaming_tools", "register_composition"),
@@ -87,6 +88,7 @@ def test_production_feature_modules_do_not_assign_private_runtime_methods() -> N
         "library_window.py",
         "library_window_lifecycle.py",
         "navigation_hardening.py",
+        "navigation_bookmark_compat.py",
     )
     forbidden = (
         "HousePort._install_capabilities =",
