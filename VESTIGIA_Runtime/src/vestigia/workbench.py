@@ -333,7 +333,9 @@ def _register(house: Any) -> None:
 
 def register_composition() -> None:
     from .composition import register_capability_installer, register_workbench_provider
+    from .workbench_observe import PROVIDER_NAME as OBSERVE_PROVIDER_NAME, provider as observe_provider
     from .workbench_reading import PROVIDER_NAME, provider
 
     register_workbench_provider(PROVIDER_NAME, _declare_read_only_provider(provider), order=10)
+    register_workbench_provider(OBSERVE_PROVIDER_NAME, observe_provider, order=20)
     register_capability_installer("workbench.core", _register, order=80)

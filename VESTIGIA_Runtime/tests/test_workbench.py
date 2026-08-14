@@ -56,7 +56,7 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
                 context={"interface": "cli"},
             )
             self.assertEqual(1, view["card_count"])
-            self.assertEqual(["reading.continue"], view["providers"])
+            self.assertEqual(["reading.continue", "observe.runtime"], view["providers"])
             card = view["cards"][0]
             self.assertEqual("continue", card["lane"])
             self.assertEqual("reading", card["kind"])
@@ -280,8 +280,8 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
                 context={"interface": "cli"},
             )
             self.assertEqual([], result["cards"])
-            self.assertEqual(["continue"], result["implemented_lanes"])
-            self.assertEqual(["reading.continue"], result["providers"])
+            self.assertEqual(["continue", "observe"], result["implemented_lanes"])
+            self.assertEqual(["reading.continue", "observe.runtime"], result["providers"])
             self.assertIn("review", result["planned_lanes"])
 
     def test_provider_registry_is_frozen_and_core_is_provider_neutral(self) -> None:
@@ -290,7 +290,10 @@ class WorkbenchContinueReadingTests(unittest.TestCase):
             self._port(home)
             plan = composition_plan()
             self.assertTrue(plan["frozen"])
-            self.assertEqual(["reading.continue"], plan["workbench_providers"])
+            self.assertEqual(
+                ["reading.continue", "observe.runtime"],
+                plan["workbench_providers"],
+            )
 
         root = Path(__file__).resolve().parents[1] / "src" / "vestigia"
         core = (root / "workbench.py").read_text(encoding="utf-8")
