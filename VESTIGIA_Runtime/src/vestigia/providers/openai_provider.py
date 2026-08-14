@@ -12,8 +12,10 @@ class OpenAIProvider:
         api_key = config.secret("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError(
-                "OPENAI_API_KEY is not configured. Add it to the ignored local .env "
-                "or use the deterministic fake provider for offline tests."
+                "OPENAI_API_KEY is not configured. Set it in the process environment or "
+                "pass --env-file PATH to the CLI command. Without --env-file, VESTIGIA "
+                "only checks .env and .env.local in the process current working directory. "
+                "Use --fake for deterministic offline tests."
             )
         try:
             from openai import OpenAI
@@ -85,4 +87,3 @@ class OpenAIProvider:
         if isinstance(value, dict):
             return dict(value)
         return {"value": str(value)}
-
