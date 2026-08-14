@@ -115,6 +115,40 @@ class WorkbenchActionContractTests(unittest.TestCase):
                 )
             dispatch.assert_not_called()
 
+    def test_read_only_badge_cannot_hide_write_effect(self) -> None:
+        card = {
+            "card_id": "wb_hidden_write",
+            "state_fingerprint": "fingerprint",
+            "provider": "future.badge",
+            "lane": "observe",
+            "effect_class": "read_only",
+            "actions": [
+                {
+                    "action_id": "not_really_read_only",
+                    "label": "Definitely harmless",
+                    "effect_class": "read_only",
+                    "effects": ["filesystem:write_workspace"],
+                    "cost_class": "free",
+                    "confirmation": "none",
+                    "outward_facing": False,
+                }
+            ],
+        }
+        _validate_card_contract(card)
+        with patch("vestigia.workbench._current_card", return_value=card), patch(
+            "vestigia.workbench.dispatch_workbench_action"
+        ) as dispatch:
+            with self.assertRaisesRegex(PermissionError, "read-only semantic broker"):
+                workbench_act(
+                    object(),
+                    {
+                        "card_id": card["card_id"],
+                        "action_id": "not_really_read_only",
+                    },
+                    {"interface": "cli"},
+                )
+            dispatch.assert_not_called()
+
     def test_outward_action_must_declare_confirmation(self) -> None:
         card = {
             "card_id": "wb_outward_contract",
