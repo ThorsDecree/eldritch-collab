@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from .capabilities import CapabilitySpec, object_schema
@@ -17,6 +18,7 @@ _READ_ONLY_BROKER_CONTRACT = {
     "confirmation": "none",
     "outward_facing": False,
 }
+_READ_ONLY_EFFECTS = ["database:read", "filesystem:read_indexed_house"]
 
 
 def _bounded_limit(value: Any, *, default: int = 12) -> int:
@@ -25,6 +27,52 @@ def _bounded_limit(value: Any, *, default: int = 12) -> int:
     except (TypeError, ValueError):
         parsed = default
     return min(_MAX_CARDS, max(1, parsed))
+
+
+def _declare_read_only_provider(callback: Callable[..., Any]) -> Callable[..., Any]:
+    """Bind one explicitly read-only provider to the current read-only Workbench broker.
+
+    The first Continue Reading provider predates action-level contract metadata. Keep that
+    provider implementation focused on reading state while making its registered projection
+    explicit and falsifiable. Future providers are expected to emit their own complete action
+    contracts unless they are deliberately wrapped by a broker-specific adapter like this one.
+    """
+
+    def wrapped(house: Any, request: dict[str, Any]) -> dict[str, Any]:
+        result = callback(house, request)
+        if not isinstance(result, dict) or str(request.get("mode") or "view").lower() != "view":
+            return result
+        cards = result.get("cards")
+        if not isinstance(cards, list):
+            return result
+        normalized_cards: list[dict[str, Any]] = []
+        for raw_card in cards:
+            if not isinstance(raw_card, dict):
+                normalized_cards.append(raw_card)
+                continue
+            card = dict(raw_card)
+            actions = card.get("actions")
+            if isinstance(actions, list):
+                normalized_actions: list[Any] = []
+                for raw_action in actions:
+                    if not isinstance(raw_action, dict):
+                        normalized_actions.append(raw_action)
+                        continue
+                    action = dict(raw_action)
+                    if str(action.get("effect_class") or "").strip().lower() != "read_only":
+                        raise ValueError(
+                            "read-only Workbench provider adapter received a non-read-only semantic action"
+                        )
+                    action["effects"] = list(_READ_ONLY_EFFECTS)
+                    action["cost_class"] = "free"
+                    action["confirmation"] = "none"
+                    action["outward_facing"] = False
+                    normalized_actions.append(action)
+                card["actions"] = normalized_actions
+            normalized_cards.append(card)
+        return {**result, "cards": normalized_cards}
+
+    return wrapped
 
 
 def _validated_action(action: Any, *, provider: str, card_id: str) -> dict[str, Any]:
@@ -283,5 +331,5 @@ def register_composition() -> None:
     from .composition import register_capability_installer, register_workbench_provider
     from .workbench_reading import PROVIDER_NAME, provider
 
-    register_workbench_provider(PROVIDER_NAME, provider, order=10)
+    register_workbench_provider(PROVIDER_NAME, _declare_read_only_provider(provider), order=10)
     register_capability_installer("workbench.core", _register, order=80)
