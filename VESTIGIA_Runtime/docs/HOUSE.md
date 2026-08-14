@@ -1,31 +1,25 @@
 # Resident capabilities and the house port
 
-> v0.5 adds stable house objects, immutable receipts, true reading bookmarks, bounded
-> workspace edits, visible curation evidence, private-work chalkboards, and Cottage Commander.
-> The complete contract is in [LEGIBLE_HOUSE.md](LEGIBLE_HOUSE.md).
+The house port is the resident's bounded local interface to readable home material, structured memory views, notes, receipts, workspace operations, jobs, and other registered capabilities.
 
-v0.4 routes daemon-callable actions through one executable capability registry. The registry
-is both the dispatcher and the resident-facing source of truth: every entry declares its
-effects, cost, confirmation boundary, result visibility, default continuation, and live
-enabled state.
+The executable capability registry is authoritative: each live entry declares effects, cost, confirmation boundary, result visibility, continuation behavior, and enabled state. Historical prose does not enable a capability by itself.
 
 ## One outward turn, several private actions
 
 ```text
 provider response requests TOOL_ACTION
 → registry validates the live capability and performs it
-→ bounded result returns as private developer context
-→ glaring receipt shows private-turn number and remaining calls
+→ bounded result returns as private Runtime context
+→ receipt/budget plaque records the operation
 → resident may request another operation or finish
 → final resident speech reaches the interface
 ```
 
-Every action says either `after:"continue"` or `after:"finish"`. `continue` requests another
-private resident turn after the result. `finish` executes without another model call. The
-default ceiling is six total private resident turns, twelve total calls, and a
-separate result-token limit. Duplicate calls are refused within one invocation.
+Every action chooses `after:"continue"` or `after:"finish"`. `continue` asks for another bounded private resident turn after the result; `finish` executes without another model turn.
 
-`HOUSE_TOOL` remains accepted as a v0.3 compatibility alias and defaults to continuation.
+Private resident turns, tool calls, and result material have separate operator-configured ceilings. Inspect the live status/capability contract rather than assuming an old hard-coded number.
+
+`HOUSE_TOOL` remains accepted as a v0.3 compatibility alias, but `TOOL_ACTION` is the current envelope.
 
 ## Reading controls
 
@@ -35,55 +29,90 @@ separate result-token limit. Duplicate calls are refused within one invocation.
 [[TOOL_ACTION {"action":"stat","path":"imports/original-materials/scroll.md","after":"continue"}]]
 [[TOOL_ACTION {"action":"read","path":"imports/original-materials/scroll.md","heading":"Memory","max_tokens":3000,"after":"continue"}]]
 [[TOOL_ACTION {"action":"continue","cursor":"house_cursor_...","max_tokens":3000,"after":"continue"}]]
-[[TOOL_ACTION {"action":"bookmark","path":"imports/original-materials/scroll.md","heading":"Memory","after":"continue"}]]
 ```
 
-The legacy `bookmark` action creates a low-authority private note and places its excerpt in
-the curation queue. It does not create memory or identity. The v0.5 `bookmark.add`,
-`bookmark.open`, `bookmark.list`, and `bookmark.remove` actions are true reading-position
-bookmarks and never imply curation, memory, or adoption.
+### Reading bookmarks
 
-Every read includes:
+Current true reading-position actions are:
 
-- `house://` citation
-- stable relative path
-- file hash
-- heading and chunk position
-- bounded excerpt
-- optional one-use continuation cursor
+```text
+bookmark.add
+bookmark.open
+bookmark.list
+bookmark.remove
+```
 
-The index updates incrementally from local text, Markdown, JSON, JSONL, CSV, and YAML files.
+These preserve navigation state without implying curation, memory, adoption, or identity.
+
+The older generic `bookmark` action is a different historical low-authority note/curation behavior; do not confuse it with `bookmark.add`/`bookmark.open` reading bookmarks.
+
+### Navigation is falsifiable
+
+Current development `main` hardens bookmark/cursor navigation:
+
+- an exact saved chunk outranks a broad heading search;
+- heading + chunk disagreement fails closed instead of serving plausible text from another location;
+- cursor-only bookmarks resume the referenced cursor rather than silently reopening chunk zero;
+- newly created bookmarks/cursors are bound to verified source hashes;
+- read/resume results carry navigation proof describing requested position, resolved position, returned chunk range, cursor lineage, source hash, and next-step guidance;
+- unverifiable legacy cursors fail with a bounded recovery route rather than being guessed forward.
+
+A successful-looking label is therefore not the only evidence that the reader opened the requested place.
+
+## Readable formats
+
+The base text lane indexes:
+
+```text
+.txt  .md  .json  .jsonl  .csv  .yaml  .yml
+```
+
+Current development `main` also contributes:
+
+```text
+.html  .htm
+```
+
+HTML is converted to a visible Markdown-like text representation for indexing/reading. Script, style, template, SVG, and noscript bodies are excluded. The original HTML file and its original hash remain the source of record.
+
+Images use the separate image apparatus rather than being decoded as text. JavaScript/source-code files do not become readable merely because an HTML document references them.
 
 ## Shelves
 
-Readable by default:
+Readable roots by default include:
 
 ```text
 identity/
 imports/
 sessions/
 scrapbook/
-artifacts/       (text sidecars only)
+artifacts/       (supported readable sidecars only)
 exports/
-runtime_contract.md
-home.yaml        (redacted rendering)
+workspace/
 ```
 
-Not readable through this port:
+The port also exposes bounded special renderings such as the runtime contract and redacted home configuration where supported.
+
+Not readable through the ordinary house text port:
 
 ```text
-.env and credentials
+.env / credentials / secrets
 memory/continuity.db
 traces/
 application source
 paths outside the home
 hidden files
-binary files
+unsupported binary/code formats
 symlinks
 ```
 
-Absolute paths, `..`, symlink traversal, unsupported suffixes, and oversized files are
-rejected before reading.
+Absolute paths, `..`, symlink traversal, unsupported suffixes, inaccessible roots, and oversized files are rejected before reading.
+
+## Workspace
+
+`house://workspace/` is the normal bounded resident-writable text shelf. Workspace writes are low-authority working artifacts; writing a file there does not promote it into memory, identity, or canon.
+
+Current file operations provide exact/diff/hash protections and preserve prior workspace versions where the capability contract says so.
 
 ## Memory views
 
@@ -95,7 +124,7 @@ rejected before reading.
 [[TOOL_ACTION {"action":"memory.queue_for_review","memory_id":"mem_...","after":"continue"}]]
 ```
 
-These are structured views. Raw SQLite is not exposed.
+These are structured, resident-scoped views. Raw SQLite is not exposed as a resident capability.
 
 ## Private notebook
 
@@ -106,29 +135,23 @@ These are structured views. Raw SQLite is not exposed.
 [[TOOL_ACTION {"action":"note.release","note_id":"note_...","after":"continue"}]]
 ```
 
-Notebook writes are immediate because they are private, reversible, resident-owned, and
-explicitly low-authority. Releasing a note changes its notebook state; it does not promote the
-note into memory or identity.
+Notebook writes are private, reversible resident working state. Releasing a note changes notebook state; it does not promote the note into memory or identity.
 
 ## Inspection and jobs
 
+Use focused capability lookup when one operation matters:
+
 ```text
-[[TOOL_ACTION {"action":"capabilities","after":"continue"}]]
-[[TOOL_ACTION {"action":"help","topic":"read","after":"continue"}]]
-[[TOOL_ACTION {"action":"pending","after":"continue"}]]
-[[TOOL_ACTION {"action":"status","after":"continue"}]]
-[[TOOL_ACTION {"action":"jobs.list","after":"continue"}]]
-[[TOOL_ACTION {"action":"jobs.pause","kind":"curation","after":"continue"}]]
-[[TOOL_ACTION {"action":"jobs.resume","kind":"curation","after":"continue"}]]
-[[TOOL_ACTION {"action":"curation.configure","cadence_exchanges":3,"after":"continue"}]]
-[[TOOL_ACTION {"action":"curation.review_now","after":"continue"}]]
+[[TOOL_ACTION {"action":"capabilities","target":"bookmark.open","after":"continue"}]]
 ```
 
-Pausing does not erase job state or prior receipts.
+Broad navigation/status surfaces include capabilities/help, pending work, receipts, jobs, curation state, objects, and Runtime status. Current v0.8.x development also includes a provider-neutral Workbench substrate that projects authoritative state into semantic resident-facing cards; the complete dashboard/launcher is roadmap work, not a replacement for the live registry yet.
 
 ## Declarative Forge
 
-The first Forge composes only already-granted operations:
+The Forge may compose only powers already granted by the Runtime. A declarative tool cannot mint shell, arbitrary filesystem, credentials, network, raw-database, or outward authority simply by naming those things in a manifest.
+
+Example:
 
 ```text
 [[TOOL_DRAFT {
@@ -145,29 +168,13 @@ The first Forge composes only already-granted operations:
 }]]
 ```
 
-The runtime returns an exact manifest and hash. A later response may claim it:
+The Runtime returns an exact manifest/hash; claiming the draft remains a separate later boundary. A draft and claim in the same response are rejected.
 
-```text
-[[TOOL_CONTROL {
-  "draft_id":"tool_draft_...",
-  "action":"claim",
-  "expected_hash":"..."
-}]]
-```
+Image, Library Window, Workshop, gaming, and Workbench capabilities use the same general executable-registry boundary. Inspect their focused contracts for current schemas/effects rather than copying historical examples blindly.
 
-Run it:
+See also:
 
-```text
-[[TOOL_ACTION {
-  "action":"tool.run",
-  "name":"find-scrolls",
-  "arguments":{"query":"mutual witnessing"},
-  "after":"continue"
-}]]
-```
-
-Forge steps may use `$input.<field>` and `$previous.<field>` substitutions. They cannot add
-shell, arbitrary filesystem, network, credential, raw-database, or outward-message authority.
-A draft and claim in the same response are rejected.
-
-Image capabilities use this same loop. See [IMAGES.md](IMAGES.md).
+- [LEGIBLE_HOUSE.md](LEGIBLE_HOUSE.md)
+- [IMAGES.md](IMAGES.md)
+- [CONTEXT_CONTROLS.md](CONTEXT_CONTROLS.md)
+- [CONFIGURATION.md](CONFIGURATION.md)
