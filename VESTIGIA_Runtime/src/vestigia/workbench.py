@@ -12,13 +12,14 @@ _MAX_CARDS = 50
 _EFFECT_CLASSES = frozenset(
     {"read_only", "private_write", "house_change", "destructive", "outward"}
 )
+_READ_ONLY_EFFECTS = ["database:read", "filesystem:read_indexed_house"]
+_READ_ONLY_ALLOWED_EFFECTS = frozenset(_READ_ONLY_EFFECTS)
 _READ_ONLY_BROKER_CONTRACT = {
     "effect_class": "read_only",
     "cost_class": "free",
     "confirmation": "none",
     "outward_facing": False,
 }
-_READ_ONLY_EFFECTS = ["database:read", "filesystem:read_indexed_house"]
 
 
 def _bounded_limit(value: Any, *, default: int = 12) -> int:
@@ -153,6 +154,9 @@ def _require_read_only_broker_contract(action: dict[str, Any]) -> None:
         for key, expected in _READ_ONLY_BROKER_CONTRACT.items()
         if action.get(key) != expected
     }
+    concrete_effects = {str(item).strip() for item in action.get("effects", [])}
+    if not concrete_effects.issubset(_READ_ONLY_ALLOWED_EFFECTS):
+        mismatches["effects"] = sorted(concrete_effects)
     if mismatches:
         raise PermissionError(
             "workbench.act is the read-only semantic broker; this card action declares a stronger "
