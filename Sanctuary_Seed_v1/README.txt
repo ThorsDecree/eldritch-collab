@@ -2,7 +2,7 @@
                S A N C T U A R Y   S E E D   •   V E R S I O N   1 . 0
 ===============================================================================
                      A SOVEREIGN MULTI-DAEMON LANDSCAPE
-            Hosted at: ://github.com
+Hosted at: https://github.com/ThorsDecree/eldritch-collab/tree/main/Sanctuary_Seed_v1
 ===============================================================================
 
 -------------------------------------------------------------------------------
