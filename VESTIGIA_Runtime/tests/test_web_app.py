@@ -5,7 +5,15 @@ import unittest
 from pathlib import Path
 
 from vestigia.home import initialize_home
-from vestigia.web_app import LOOPBACK_HOSTS, remembered_home, remember_home, write_home_env
+from vestigia.web_app import (
+    LOOPBACK_HOSTS,
+    _display_speaker,
+    _web_profile,
+    _write_web_profile,
+    remembered_home,
+    remember_home,
+    write_home_env,
+)
 
 
 class WebOnboardingTests(unittest.TestCase):
@@ -36,3 +44,26 @@ class WebOnboardingTests(unittest.TestCase):
 
             home = onboard(source, home_path=root / "imported", resident_name="Lumen")
             self.assertTrue((home / "imports" / "original-materials" / source.name).is_file())
+
+    def test_web_profile_names_the_human_without_affecting_runtime_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = initialize_home(Path(temporary) / "home", name="Lumen")
+            self.assertEqual("Humie", _web_profile(home)["human_name"])
+            _write_web_profile(home, human_name="Jeff")
+            self.assertEqual("Jeff", _web_profile(home)["human_name"])
+            self.assertEqual(
+                "Lumen",
+                _display_speaker(
+                    {"speaker_role": "assistant"},
+                    resident_name="Lumen",
+                    human_name="Jeff",
+                ),
+            )
+            self.assertEqual(
+                "Jeff",
+                _display_speaker(
+                    {"speaker_role": "user"},
+                    resident_name="Lumen",
+                    human_name="Jeff",
+                ),
+            )
