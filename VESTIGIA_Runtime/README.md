@@ -37,7 +37,8 @@ interface
 
 The resident home is local. It keeps identity anchors, preserved sources, reviewed continuity, transcripts, artifacts, workspace state, receipts, and other resident-owned records under operator custody. The inference provider may be remote or local.
 
-CLI and Discord are doors, not vaults. A future HTTP/UI doorway should obey the same rule.
+CLI, Discord, and the private localhost web doorway are doors, not vaults. They use the same
+continuity core; none is a second memory store.
 
 ## Current status
 
@@ -62,7 +63,7 @@ The active development line includes, among other things:
 - bounded Tool Forge and workshop/sandbox tooling;
 - gaming dice;
 - Workbench Continue-Reading provider and provider-neutral Workbench substrate;
-- CLI and Discord doorways;
+- CLI, Discord, and private localhost web doorways;
 - pack/restore, doctor, support bundle, and deterministic fake-provider testing.
 
 The executable capability registry is authoritative about what a deployed Runtime may actually do. Documentation is explanatory and can lag; if prose and the live capability contract disagree, inspect the live contract.
@@ -80,6 +81,7 @@ Depending on how you run it:
 - **OpenAI service text:** a real OpenAI API key;
 - **local/third-party OpenAI-compatible text:** a compatible HTTP endpoint plus the current client's required nonempty `OPENAI_API_KEY` string;
 - **Discord:** Discord bot token and the `discord` package extra;
+- **local browser UI:** the `web-ui` package extra; it binds only to localhost;
 - **local OCR:** Tesseract 5;
 - **OpenAI-backed images/vision:** compatible image/Responses endpoints and credentials.
 
@@ -95,6 +97,23 @@ Run these commands from the `VESTIGIA_Runtime` directory.
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .
 Copy-Item .env.example .env
+```
+
+### Windows easiest path: Open the House
+
+If you have Python 3.11+ installed, double-click **`Start VESTIGIA.cmd`** from this directory.
+On its first run it creates a local virtual environment, installs the small browser-UI extra,
+and opens `http://127.0.0.1:8765/`.
+
+The welcome page creates or imports a Home, writes credentials only to that Home's uncommitted
+`.env`, runs in **ORIENTATION**, and leaves Discord optional. Later launches reopen the last
+local Home. The browser server is deliberately loopback-only; it does not accept network peers.
+
+To start the same doorway from a terminal:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[web-ui]"
+.\.venv\Scripts\vestigia.exe web
 ```
 
 For Discord:

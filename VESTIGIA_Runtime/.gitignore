@@ -11,3 +11,4 @@ dist/
 *.egg-info/
 *.db
 *.log
+.vestigia-last-home
