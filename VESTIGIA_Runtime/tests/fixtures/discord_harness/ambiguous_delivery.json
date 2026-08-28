@@ -1,0 +1,27 @@
+{
+  "name": "expected ambiguous external effect",
+  "config": {"allowed_users": ["1001"]},
+  "steps": [
+    {
+      "op": "message",
+      "message_id": 400,
+      "user_id": 1001,
+      "channel_id": 3001,
+      "content": "ping",
+      "expect": {"accepted": true, "trigger_kind": "direct"}
+    },
+    {
+      "op": "runtime_commit",
+      "message_id": 400,
+      "operation_id": "turn-400",
+      "text": "pong"
+    },
+    {"op": "delivery", "channel_id": 3001, "outcome": "ambiguous"},
+    {
+      "op": "deliver_text",
+      "message_id": 400,
+      "operation_id": "turn-400",
+      "text": "pong"
+    }
+  ]
+}
