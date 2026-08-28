@@ -10,6 +10,12 @@ where py >nul 2>nul || (
   exit /b 1
 )
 
+py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>nul || (
+  echo VESTIGIA needs Python 3.11 or newer. Install it from https://www.python.org/downloads/
+  pause
+  exit /b 1
+)
+
 if not exist "%VENV%\Scripts\python.exe" (
   echo Preparing your local VESTIGIA doorway. This happens once.
   py -3 -m venv "%VENV%" || goto :failed
