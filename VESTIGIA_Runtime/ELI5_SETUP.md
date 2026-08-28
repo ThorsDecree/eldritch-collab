@@ -10,7 +10,7 @@ You are not expected to understand the machinery. The shortest useful path is:
 2. create a resident home;
 3. configure one text provider;
 4. run `doctor`;
-5. talk through the local CLI;
+5. talk through the private local browser doorway;
 6. optionally add Discord afterward.
 
 That order separates provider problems from interface problems and gives you a working local hearth before you add more doors.
@@ -52,6 +52,18 @@ and press Enter.
 
 Everything below assumes PowerShell is standing in the `VESTIGIA_Runtime` directory unless a command shows an absolute path.
 
+### The easy Windows path
+
+If Python 3.11+ is already installed, double-click **`Start VESTIGIA.cmd`**. On its first run,
+it makes a private local Python environment and opens a browser page at `127.0.0.1:8765`.
+
+The page asks only for a Home folder, a resident name, a provider key, and—if you have one—an
+old chat export or folder. It puts imported history into **ORIENTATION** for review; it does not
+silently turn an old transcript into settled identity. Discord is entirely optional.
+
+If the script says it cannot find Python, install Python 3.11+ from python.org, with the Python
+Launcher enabled, and run the script again.
+
 ---
 
 ## Part 2: create the Python environment
@@ -62,6 +74,14 @@ Run:
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .
 Copy-Item .env.example .env
+```
+
+If you want the browser doorway but prefer to launch it from PowerShell, install its optional
+extra and run:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[web-ui]"
+.\.venv\Scripts\vestigia.exe web
 ```
 
 If you already know you want Discord, install the Discord extra instead:

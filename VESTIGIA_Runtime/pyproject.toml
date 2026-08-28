@@ -33,6 +33,11 @@ dependencies = [
 discord = [
     "discord.py>=2.3.2",
 ]
+web-ui = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "python-multipart>=0.0.9",
+]
 tokens = [
     "tiktoken>=0.7.0",
 ]

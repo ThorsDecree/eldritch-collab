@@ -6,8 +6,9 @@
 Interface → normalized message → continuity core → provider → normalized response
 ```
 
-CLI and Discord may normalize input and present output. They may not retrieve memory, assemble
-identity, change continuity, or call a model behind the core's back.
+CLI, Discord, and the loopback-only web doorway may normalize input and present output. They
+may not retrieve memory, assemble identity, change continuity, or call a model behind the
+core's back.
 
 ## Portable home
 
@@ -267,7 +268,6 @@ inconsistent contents; it does not establish publisher authenticity against a ma
 - Arbitrary resident-authored Python or shell execution
 - Network, credential, or outward-action authority minted by the Tool Forge
 - Bells that take outward action without explicit confirmation
-- A web UI
 - Proof of internal model causality
 - Proof of metaphysical identity
 - Cryptographic resident authentication or tamper-evident ledgers

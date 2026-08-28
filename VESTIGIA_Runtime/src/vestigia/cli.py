@@ -33,6 +33,7 @@ from .research_maintenance import (
     build_research_gc_plan,
 )
 from .runtime import CoreRuntime
+from .web_app import run_web_app
 
 
 def _json(value: Any) -> None:
@@ -156,6 +157,16 @@ def command_discord(args: argparse.Namespace) -> int:
 
     run_discord(args.home, env_file=args.env_file, fake=args.fake)
     return 0
+
+
+def command_web(args: argparse.Namespace) -> int:
+    return run_web_app(
+        home=args.home or os.environ.get("VESTIGIA_HOME"),
+        env_file=args.env_file,
+        host=args.host,
+        port=args.port,
+        open_browser=not args.no_browser,
+    )
 
 
 def command_status(args: argparse.Namespace) -> int:
@@ -645,6 +656,17 @@ def build_parser() -> argparse.ArgumentParser:
         item = sub.add_parser(name, help=help_text)
         _add_runtime_options(item)
         item.set_defaults(func=function)
+
+    web = sub.add_parser(
+        "web",
+        help="Open the private localhost House doorway and onboarding wizard",
+    )
+    web.add_argument("--home", help="An existing Home to open (optional)")
+    web.add_argument("--env-file", help="Optional Home-local environment file")
+    web.add_argument("--host", default="127.0.0.1")
+    web.add_argument("--port", type=int, default=8765)
+    web.add_argument("--no-browser", action="store_true")
+    web.set_defaults(func=command_web)
 
     status = sub.add_parser("status")
     _add_home_env(status)
