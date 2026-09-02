@@ -56,8 +56,12 @@ python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-Set the environment variables in `.env` or in your shell. The package itself reads normal
-environment variables and does not require dotenv at runtime.
+Fill in `.env` with the local live Archive, snapshot, state directory, and deployment ID.
+
+The production package itself reads only normal process environment variables and does not
+search the filesystem for `.env` files. The checked-in `dev_server.py` development entrypoint
+loads the project-local `.env` before importing the MCP server so Inspector-launched stdio
+processes receive the intended configuration.
 
 For an MCP host that launches local stdio servers:
 
@@ -69,8 +73,11 @@ For development with the official MCP CLI/Inspector, install the SDK CLI extra s
 
 ```powershell
 python -m pip install "mcp[cli]>=2,<3"
-mcp dev src/vestigia_mcp/server.py:mcp
+mcp dev dev_server.py --with-editable .
 ```
+
+The Inspector itself uses Node/npm/npx as development tooling; Node is not a runtime dependency
+of the VESTIGIA MCP server.
 
 ## Safety properties in the scaffold
 
