@@ -4,12 +4,17 @@ import hashlib
 import json
 import threading
 import uuid
+from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .policy import Capability, Decision
+
+
+class AuditError(RuntimeError):
+    pass
 
 
 def hash_arguments(arguments: dict[str, Any]) -> str:
@@ -76,3 +81,96 @@ class AuditLedger:
                 handle.write(line)
                 handle.write("\n")
         return event
+
+    def recent(
+        self,
+        *,
+        limit: int = 25,
+        capability: str | None = None,
+        outcome: str | None = None,
+    ) -> dict[str, object]:
+        """Return newest matching receipts without exposing raw tool arguments."""
+        if limit <= 0 or limit > 200:
+            raise AuditError("Receipt limit must be between 1 and 200")
+        capability_filter = capability.strip() if capability else None
+        outcome_filter = outcome.strip() if outcome else None
+        if capability is not None and not capability_filter:
+            raise AuditError("Capability filter must not be blank")
+        if outcome is not None and not outcome_filter:
+            raise AuditError("Outcome filter must not be blank")
+
+        matching: deque[dict[str, object]] = deque(maxlen=limit)
+        matched_total = 0
+        malformed_lines = 0
+
+        with self._lock:
+            if not self._path.exists():
+                return {
+                    "events": [],
+                    "matched_total": 0,
+                    "malformed_lines": 0,
+                    "filters": {
+                        "capability": capability_filter,
+                        "outcome": outcome_filter,
+                    },
+                    "excludes_current_call": True,
+                }
+            with self._path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        malformed_lines += 1
+                        continue
+                    if not isinstance(event, dict):
+                        malformed_lines += 1
+                        continue
+                    if capability_filter and event.get("capability") != capability_filter:
+                        continue
+                    if outcome_filter and event.get("outcome") != outcome_filter:
+                        continue
+                    matched_total += 1
+                    matching.append(event)
+
+        return {
+            "events": list(reversed(matching)),
+            "matched_total": matched_total,
+            "malformed_lines": malformed_lines,
+            "filters": {
+                "capability": capability_filter,
+                "outcome": outcome_filter,
+            },
+            "excludes_current_call": True,
+        }
+
+    def summary(self) -> dict[str, object]:
+        """Return bounded ledger health information without returning receipt contents."""
+        event_count = 0
+        malformed_lines = 0
+        with self._lock:
+            if not self._path.exists():
+                return {
+                    "exists": False,
+                    "event_count": 0,
+                    "malformed_lines": 0,
+                }
+            with self._path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        malformed_lines += 1
+                        continue
+                    if isinstance(event, dict):
+                        event_count += 1
+                    else:
+                        malformed_lines += 1
+        return {
+            "exists": True,
+            "event_count": event_count,
+            "malformed_lines": malformed_lines,
+        }
