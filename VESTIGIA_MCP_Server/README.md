@@ -21,10 +21,16 @@ The capability vocabulary is deliberately split into three effect classes:
 - **PREPARE** - create a draft, staged action, crop, queue item, or other reversible working state.
 - **ACT** - cause an externally consequential or canonical mutation.
 
-Version `0.2.0.dev0` ("Lantern & Red Thread") remains PERCEIVE-only while the Archive surface
-is hardened before adding hands.
+Version `0.2.0.dev0` ("Lantern & Red Thread") remains PERCEIVE-only while the Archive and
+provenance surfaces are hardened before adding hands.
 
-## Archive surface: live house vs. snapshot witness
+All current tools also advertise MCP read-only/non-destructive/non-open-world annotations so
+hosts can frame them accurately. Those annotations are descriptive hints only; executable
+server policy remains authoritative.
+
+## Sensory surface
+
+### Archive: live house vs. snapshot witness
 
 The server can be pointed at:
 
@@ -36,12 +42,23 @@ Tools:
 - `archive.status`
 - `archive.list`
 - `archive.read_text`
+- `archive.search_text`
 - `archive.diff`
 - `archive.diff_detail`
+- `archive.registry_status`
+
+`archive.search_text` performs literal, line-oriented search across configured UTF-8 text-like
+files. It is deliberately not fuzzy or semantic search. Results include path, line number, a
+bounded excerpt, total matching lines, and explicit counts for oversized/non-UTF-8 files that
+were skipped.
 
 `archive.diff_detail(path)` hashes only the requested path on each side and reports whether it
 is added, removed, changed, unchanged, or absent. It is intended for seam inspection after a
 broad diff without re-hashing unrelated files.
+
+`archive.registry_status(source)` reads the canonical `00_Bootloader/house_index.json`, resolves
+its anchor/resident/Garden targets against the selected Archive source, and reports missing or
+duplicate registered targets without repairing anything.
 
 When the configured snapshot itself lives inside the live Archive root, the server excludes
 that snapshot path from the live view automatically. The witness is not counted as house
@@ -53,7 +70,23 @@ Resources:
 - `vestigia://archive/live/manifest`
 - `vestigia://archive/snapshot/manifest`
 
-No tool in the current slice modifies either Archive source.
+### Receipts and proprioception
+
+Additional read-only tools:
+
+- `receipts.recent`
+- `vestigia.status`
+
+`receipts.recent` exposes recent capability receipts for provenance/debugging. Receipts contain
+the SHA-256 of canonicalized tool arguments rather than raw arguments. Filters are available for
+capability and outcome.
+
+`vestigia.status` reports the running server version, deployment ID, current executable policy
+surface, whether live/snapshot Archive sources are configured, and bounded audit-ledger health.
+It is intended to make host/schema/deployment mismatches easier to diagnose.
+
+No tool in the current slice modifies either Archive source or any external system. Read tools do
+append MCP-owned audit receipts outside the Archive roots.
 
 ## Setup
 
@@ -127,10 +160,13 @@ batch file. An alternate tunnel profile may be supplied as the first argument.
 - Symlink files are not enumerated.
 - ZIP members are never extracted and unsafe/duplicate member paths are rejected.
 - Arbitrary binary files are not returned through `archive.read_text`.
-- UTF-8 text reads have a configured byte ceiling.
+- Literal search only scans configured text-like suffixes and enforces the same per-file byte ceiling.
+- Non-UTF-8 and oversized search candidates are reported as skipped rather than silently coerced.
+- Canonical registry diagnostics report discrepancies without modifying the Archive.
 - Unknown capabilities are denied by default.
 - Audit receipts store an argument hash rather than raw tool arguments.
 - MCP-owned state is kept outside the Archive roots.
+- Current MCP tool annotations explicitly advertise read-only, non-destructive, closed-world behavior.
 
 See `docs/ARCHITECTURE.md` and `docs/THREAT_MODEL.md`.
 
@@ -140,11 +176,12 @@ Current / near-term work:
 
 1. Exclude snapshot witnesses from nested live roots. **Done.**
 2. Add one-path diff detail for fast seam inspection. **Done.**
-3. Add Archive text search and bounded recent-change views.
-4. Inspect the canonical `00_Bootloader/house_index.json` registry against the live filesystem.
-5. Add orphan/unindexed and broken-link diagnostics without repairing canonical content.
-6. Make audit receipts queryable through read-only MCP tools.
-7. Add top-level VESTIGIA status/diagnostics resources.
+3. Add bounded literal Archive text search with explicit skip accounting. **Done.**
+4. Inspect canonical `00_Bootloader/house_index.json` targets against Archive contents. **Done.**
+5. Make audit receipts queryable through read-only MCP tools. **Done.**
+6. Add top-level VESTIGIA status/proprioception. **Done.**
+7. Add orphan/unindexed and broken-link diagnostics without repairing canonical content.
+8. Add bounded recent-change views without turning the snapshot witness into a hidden mutable cache.
 
 After the perception layer is strong, the next load-bearing phase is the deployment Keyring:
 explicit scoped grants and hash-bound confirmations for PREPARE/ACT capabilities. Runtime and
