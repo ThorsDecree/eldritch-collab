@@ -1,18 +1,39 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ResourceError, ToolError
 
-from .adapters.archive import ArchiveError, ArchiveSource
+from .adapters.archive import ArchiveError, ArchiveSource, normalize_relative_path
 from .audit import AuditLedger
 from .config import Settings
 from .policy import PolicyDenied, PolicyEngine
 
 
 T = TypeVar("T")
+
+
+def _live_archive_exclusions(settings: Settings) -> tuple[str, ...]:
+    """Exclude a configured snapshot witness when it lives inside the live root."""
+    if settings.live_archive_root is None or settings.snapshot_archive_root is None:
+        return ()
+    try:
+        live_root = settings.live_archive_root.resolve(strict=True)
+        snapshot_root = settings.snapshot_archive_root.resolve(strict=True)
+    except OSError:
+        return ()
+    if not live_root.is_dir():
+        return ()
+    try:
+        relative = snapshot_root.relative_to(live_root)
+    except ValueError:
+        return ()
+    if relative == Path("."):
+        return ()
+    return (relative.as_posix(),)
 
 
 def create_server(settings: Settings | None = None) -> MCPServer:
@@ -30,13 +51,15 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     def source_for(name: str) -> ArchiveSource:
         if name == "live":
             path = settings.live_archive_root
+            exclusions = _live_archive_exclusions(settings)
         elif name == "snapshot":
             path = settings.snapshot_archive_root
+            exclusions = ()
         else:
             raise ArchiveError("source must be 'live' or 'snapshot'")
         if path is None:
             raise ArchiveError(f"Archive source is not configured: {name}")
-        return ArchiveSource(path)
+        return ArchiveSource(path, exclude_paths=exclusions)
 
     def guarded(
         capability_name: str,
@@ -130,6 +153,36 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             return live.compare(snapshot).limited(limit)
 
         return guarded("archive.diff", arguments, operation)
+
+    @server.tool(name="archive.diff_detail")
+    def archive_diff_detail(path: str) -> dict[str, object]:
+        """Compare one path across live and snapshot without hashing unrelated files."""
+        arguments = {"path": path}
+
+        def operation() -> dict[str, object]:
+            normalized = normalize_relative_path(path)
+            live_entry = source_for("live").entry(normalized)
+            snapshot_entry = source_for("snapshot").entry(normalized)
+            if live_entry is None and snapshot_entry is None:
+                status = "absent"
+            elif live_entry is None:
+                status = "removed"
+            elif snapshot_entry is None:
+                status = "added"
+            elif live_entry.sha256 == snapshot_entry.sha256:
+                status = "unchanged"
+            else:
+                status = "changed"
+            return {
+                "path": normalized,
+                "status": status,
+                "live": asdict(live_entry) if live_entry is not None else None,
+                "snapshot": (
+                    asdict(snapshot_entry) if snapshot_entry is not None else None
+                ),
+            }
+
+        return guarded("archive.diff_detail", arguments, operation)
 
     def manifest_resource(source_name: str) -> str:
         try:
