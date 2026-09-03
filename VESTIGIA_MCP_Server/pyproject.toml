@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vestigia-mcp-server"
-version = "0.1.0.dev0"
+version = "0.2.0.dev0"
 description = "A local-first, consent-gated MCP capability broker for VESTIGIA."
 readme = "README.md"
 license = "MPL-2.0"
