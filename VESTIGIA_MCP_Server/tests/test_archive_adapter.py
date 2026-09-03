@@ -60,6 +60,43 @@ def test_diff_reports_added_removed_changed_and_unchanged(tmp_path: Path) -> Non
     assert diff.unchanged_count == 1
 
 
+def test_exclusion_hides_snapshot_witness_from_live_view(tmp_path: Path) -> None:
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "manifest.md").write_text("same", encoding="utf-8")
+    snapshot = live / "Anima.zip"
+    write_zip(snapshot, {"manifest.md": "same"})
+
+    live_source = ArchiveSource(live, exclude_paths=("Anima.zip",))
+    snapshot_source = ArchiveSource(snapshot)
+
+    stats = live_source.stats()
+    assert stats.file_count == 1
+    assert stats.excluded_paths == ("Anima.zip",)
+    assert live_source.list_paths()["paths"] == ["manifest.md"]
+    assert live_source.entry("Anima.zip") is None
+
+    diff = live_source.compare(snapshot_source)
+    assert diff.added == ()
+    assert diff.removed == ()
+    assert diff.changed == ()
+    assert diff.unchanged_count == 1
+
+
+def test_entry_hashes_only_requested_path(tmp_path: Path) -> None:
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "note.md").write_text("red thread", encoding="utf-8")
+    source = ArchiveSource(live)
+
+    entry = source.entry("note.md")
+    assert entry is not None
+    assert entry.path == "note.md"
+    assert entry.size == len("red thread".encode("utf-8"))
+    assert len(entry.sha256) == 64
+    assert source.entry("missing.md") is None
+
+
 def test_zip_rejects_unsafe_member_path(tmp_path: Path) -> None:
     snapshot = tmp_path / "unsafe.zip"
     write_zip(snapshot, {"../escape.md": "nope"})
