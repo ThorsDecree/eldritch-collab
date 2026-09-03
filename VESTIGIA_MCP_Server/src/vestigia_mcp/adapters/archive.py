@@ -55,6 +55,14 @@ class ArchiveStats:
     kind: ArchiveKind
     file_count: int
     total_bytes: int
+    excluded_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ArchiveEntry:
+    path: str
+    size: int
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -87,8 +95,21 @@ class ArchiveDiff:
 class ArchiveSource:
     """Read-only view over an unpacked Archive directory or ZIP snapshot."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, exclude_paths: tuple[str, ...] = ()):
         self.root = root.expanduser()
+        self._exclude_paths = frozenset(
+            normalize_relative_path(path) for path in exclude_paths
+        )
+
+    @property
+    def excluded_paths(self) -> tuple[str, ...]:
+        return tuple(sorted(self._exclude_paths))
+
+    def _is_excluded(self, relative: str) -> bool:
+        return any(
+            relative == excluded or relative.startswith(excluded.rstrip("/") + "/")
+            for excluded in self._exclude_paths
+        )
 
     @property
     def kind(self) -> ArchiveKind:
@@ -110,13 +131,20 @@ class ArchiveSource:
         for current, dirnames, filenames in os.walk(root, followlinks=False):
             current_path = Path(current)
             dirnames[:] = [
-                name for name in dirnames if not (current_path / name).is_symlink()
+                name
+                for name in dirnames
+                if not (current_path / name).is_symlink()
+                and not self._is_excluded(
+                    (current_path / name).relative_to(root).as_posix()
+                )
             ]
             for filename in filenames:
                 path = current_path / filename
                 if path.is_symlink() or not path.is_file():
                     continue
                 relative = path.relative_to(root).as_posix()
+                if self._is_excluded(relative):
+                    continue
                 yield relative, path, path.stat().st_size
 
     def _zip_members(self) -> list[tuple[str, zipfile.ZipInfo]]:
@@ -130,6 +158,8 @@ class ArchiveSource:
             if info.is_dir():
                 continue
             normalized = normalize_relative_path(info.filename)
+            if self._is_excluded(normalized):
+                continue
             if normalized in seen:
                 raise ArchiveError(
                     f"Duplicate normalized ZIP member path: {normalized}"
@@ -146,6 +176,7 @@ class ArchiveSource:
                 kind="directory",
                 file_count=len(files),
                 total_bytes=sum(size for _, _, size in files),
+                excluded_paths=self.excluded_paths,
             )
         members = self._zip_members()
         return ArchiveStats(
@@ -153,6 +184,7 @@ class ArchiveSource:
             kind="zip",
             file_count=len(members),
             total_bytes=sum(info.file_size for _, info in members),
+            excluded_paths=self.excluded_paths,
         )
 
     def list_paths(self, prefix: str = "", limit: int = 500) -> dict[str, object]:
@@ -177,6 +209,8 @@ class ArchiveSource:
         }
 
     def _resolve_directory_file(self, relative: str) -> Path:
+        if self._is_excluded(relative):
+            raise ArchiveError(f"Archive file is excluded from this source: {relative}")
         root = self._directory_root()
         parts = PurePosixPath(relative).parts
         unresolved = root.joinpath(*parts)
@@ -227,6 +261,39 @@ class ArchiveSource:
             raise ArchiveError(
                 f"Archive text is not valid UTF-8: {normalized}"
             ) from exc
+
+    def entry(self, relative: str) -> ArchiveEntry | None:
+        """Return size/hash metadata for one path without reading unrelated files."""
+        normalized = normalize_relative_path(relative)
+        if self._is_excluded(normalized):
+            return None
+
+        if self.kind == "directory":
+            root = self._directory_root()
+            unresolved = root.joinpath(*PurePosixPath(normalized).parts)
+            if unresolved.is_symlink():
+                raise ArchiveError("Symlink files are not readable")
+            try:
+                resolved = unresolved.resolve(strict=True)
+            except FileNotFoundError:
+                return None
+            if resolved == root or root not in resolved.parents:
+                raise ArchiveError("Resolved path escaped the Archive root")
+            if not resolved.is_file():
+                return None
+            size = resolved.stat().st_size
+            with resolved.open("rb") as handle:
+                digest = _sha256_stream(handle)
+            return ArchiveEntry(path=normalized, size=size, sha256=digest)
+
+        members = dict(self._zip_members())
+        info = members.get(normalized)
+        if info is None:
+            return None
+        with zipfile.ZipFile(self.root, "r") as archive:
+            with archive.open(info, "r") as handle:
+                digest = _sha256_stream(handle)
+        return ArchiveEntry(path=normalized, size=info.file_size, sha256=digest)
 
     def fingerprints(self) -> dict[str, str]:
         fingerprints: dict[str, str] = {}
