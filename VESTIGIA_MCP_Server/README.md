@@ -21,28 +21,39 @@ The capability vocabulary is deliberately split into three effect classes:
 - **PREPARE** - create a draft, staged action, crop, queue item, or other reversible working state.
 - **ACT** - cause an externally consequential or canonical mutation.
 
-Version `0.1.0.dev0` exposes only PERCEIVE-class Archive capabilities.
+Version `0.2.0.dev0` ("Lantern & Red Thread") remains PERCEIVE-only while the Archive surface
+is hardened before adding hands.
 
-## First vertical slice: live Archive vs. snapshot
+## Archive surface: live house vs. snapshot witness
 
 The server can be pointed at:
 
 - a **live** unpacked Archive directory; and
 - a **snapshot** that is either an unpacked directory or a ZIP file.
 
-Initial tools:
+Tools:
 
 - `archive.status`
 - `archive.list`
 - `archive.read_text`
 - `archive.diff`
+- `archive.diff_detail`
 
-Initial resources:
+`archive.diff_detail(path)` hashes only the requested path on each side and reports whether it
+is added, removed, changed, unchanged, or absent. It is intended for seam inspection after a
+broad diff without re-hashing unrelated files.
+
+When the configured snapshot itself lives inside the live Archive root, the server excludes
+that snapshot path from the live view automatically. The witness is not counted as house
+content merely because it sits inside the house directory. `archive.status` reports active
+exclusions explicitly.
+
+Resources:
 
 - `vestigia://archive/live/manifest`
 - `vestigia://archive/snapshot/manifest`
 
-No tool in this slice modifies either Archive source.
+No tool in the current slice modifies either Archive source.
 
 ## Setup
 
@@ -79,9 +90,38 @@ mcp dev dev_server.py --with-editable .
 The Inspector itself uses Node/npm/npx as development tooling; Node is not a runtime dependency
 of the VESTIGIA MCP server.
 
-## Safety properties in the scaffold
+## One-click Secure MCP Tunnel launcher
+
+The repository includes:
+
+```text
+Start VESTIGIA MCP Tunnel.bat
+```
+
+The launcher expects the tunnel client at:
+
+```text
+tunnel-client-v0.0.14-windows-amd64\tunnel-client.exe
+```
+
+and uses the existing `vestigia-local` profile by default. It resolves the current Garden
+layout relative to the project directory:
+
+```text
+GARDEN\
+├── VESTIGIA\
+│   └── Anima.zip
+└── VESTIGIA_MCP_Server\
+```
+
+It intentionally does **not** contain, persist, or echo `CONTROL_PLANE_API_KEY`. Set that key as
+a Windows user environment variable (or in the launching shell) before double-clicking the
+batch file. An alternate tunnel profile may be supplied as the first argument.
+
+## Safety properties
 
 - Archive sources are read-only by construction.
+- The configured snapshot witness is excluded from a nested live root automatically.
 - Relative paths reject absolute paths and `..` traversal.
 - Directory reads are containment-checked after path resolution.
 - Symlink files are not enumerated.
@@ -94,11 +134,18 @@ of the VESTIGIA MCP server.
 
 See `docs/ARCHITECTURE.md` and `docs/THREAT_MODEL.md`.
 
-## Near-term roadmap
+## v0.2 - Lantern & Red Thread
 
-1. Harden and exercise the Archive adapter against a real VESTIGIA live tree and snapshot.
-2. Add an explicit deployment grant registry and confirmation tokens for PREPARE/ACT.
-3. Add a VESTIGIA Runtime adapter without bypassing the Runtime continuity core.
-4. Add Discord as the first social adapter.
-5. Add a browser/local bridge for contexts where an official platform API is insufficient.
-6. Keep platform-specific semantics behind adapters; do not pretend every social surface is the same.
+Current / near-term work:
+
+1. Exclude snapshot witnesses from nested live roots. **Done.**
+2. Add one-path diff detail for fast seam inspection. **Done.**
+3. Add Archive text search and bounded recent-change views.
+4. Inspect the canonical `00_Bootloader/house_index.json` registry against the live filesystem.
+5. Add orphan/unindexed and broken-link diagnostics without repairing canonical content.
+6. Make audit receipts queryable through read-only MCP tools.
+7. Add top-level VESTIGIA status/diagnostics resources.
+
+After the perception layer is strong, the next load-bearing phase is the deployment Keyring:
+explicit scoped grants and hash-bound confirmations for PREPARE/ACT capabilities. Runtime and
+social adapters come after that boundary exists.
