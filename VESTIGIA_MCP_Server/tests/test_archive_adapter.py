@@ -97,6 +97,58 @@ def test_entry_hashes_only_requested_path(tmp_path: Path) -> None:
     assert source.entry("missing.md") is None
 
 
+def test_literal_search_reports_evidence_and_skips_unreadable_files(tmp_path: Path) -> None:
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "notes.md").write_text(
+        "Lantern first\nsecond lantern\n",
+        encoding="utf-8",
+    )
+    (live / "other.txt").write_text("nothing here", encoding="utf-8")
+    (live / "legacy.txt").write_bytes(b"\xff\xfe\x00")
+    (live / "huge.md").write_text("lantern " * 100, encoding="utf-8")
+    (live / "image.png").write_bytes(b"lantern but binary")
+
+    result = ArchiveSource(live).search_text(
+        "LANTERN",
+        limit=1,
+        max_bytes=100,
+    )
+
+    assert result["match_count"] == 2
+    assert result["truncated"] is True
+    assert result["candidate_files"] == 4
+    assert result["scanned_files"] == 2
+    assert result["skipped_non_utf8"] == 1
+    assert result["skipped_oversize"] == 1
+    assert result["hits"] == [
+        {"path": "notes.md", "line": 1, "excerpt": "Lantern first"}
+    ]
+
+
+def test_literal_search_honors_prefix_and_case_in_zip(tmp_path: Path) -> None:
+    snapshot = tmp_path / "snapshot.zip"
+    write_zip(
+        snapshot,
+        {
+            "notes/a.md": "lower needle",
+            "notes/b.md": "Upper Needle",
+            "elsewhere/c.md": "Upper Needle",
+        },
+    )
+
+    result = ArchiveSource(snapshot).search_text(
+        "Needle",
+        prefix="notes",
+        case_sensitive=True,
+    )
+
+    assert result["match_count"] == 1
+    assert result["hits"] == [
+        {"path": "notes/b.md", "line": 1, "excerpt": "Upper Needle"}
+    ]
+
+
 def test_zip_rejects_unsafe_member_path(tmp_path: Path) -> None:
     snapshot = tmp_path / "unsafe.zip"
     write_zip(snapshot, {"../escape.md": "nope"})
