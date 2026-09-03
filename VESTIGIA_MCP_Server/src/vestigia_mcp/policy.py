@@ -49,6 +49,12 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         Decision.ALLOW,
         "Compare live and snapshot Archive content by relative path and SHA-256.",
     ),
+    Capability(
+        "archive.diff_detail",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Compare one live/snapshot Archive path by size and SHA-256 without hashing unrelated files.",
+    ),
 )
 
 
