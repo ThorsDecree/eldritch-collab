@@ -42,6 +42,13 @@ def normalize_prefix(value: str) -> str:
     return normalize_relative_path(candidate)
 
 
+def _matches_prefix(path: str, prefix: str) -> bool:
+    if not prefix:
+        return True
+    boundary = prefix.rstrip("/") + "/"
+    return path == prefix or path.startswith(boundary)
+
+
 def _sha256_stream(handle: BinaryIO) -> str:
     digest = hashlib.sha256()
     while chunk := handle.read(1024 * 1024):
@@ -168,6 +175,11 @@ class ArchiveSource:
             members.append((normalized, info))
         return members
 
+    def all_paths(self) -> tuple[str, ...]:
+        if self.kind == "directory":
+            return tuple(sorted(relative for relative, _, _ in self._iter_directory_files()))
+        return tuple(sorted(relative for relative, _ in self._zip_members()))
+
     def stats(self) -> ArchiveStats:
         if self.kind == "directory":
             files = list(self._iter_directory_files())
@@ -191,17 +203,9 @@ class ArchiveSource:
         if limit <= 0:
             raise ArchiveError("List limit must be positive")
         normalized_prefix = normalize_prefix(prefix)
-        if self.kind == "directory":
-            paths = sorted(relative for relative, _, _ in self._iter_directory_files())
-        else:
-            paths = sorted(relative for relative, _ in self._zip_members())
+        paths = list(self.all_paths())
         if normalized_prefix:
-            boundary = normalized_prefix.rstrip("/") + "/"
-            paths = [
-                path
-                for path in paths
-                if path == normalized_prefix or path.startswith(boundary)
-            ]
+            paths = [path for path in paths if _matches_prefix(path, normalized_prefix)]
         return {
             "paths": paths[:limit],
             "total": len(paths),
@@ -261,6 +265,102 @@ class ArchiveSource:
             raise ArchiveError(
                 f"Archive text is not valid UTF-8: {normalized}"
             ) from exc
+
+    def search_text(
+        self,
+        query: str,
+        *,
+        prefix: str = "",
+        limit: int = 50,
+        max_bytes: int = 1_000_000,
+        case_sensitive: bool = False,
+        excerpt_chars: int = 240,
+    ) -> dict[str, object]:
+        """Literal line-oriented search over bounded UTF-8 text-like files."""
+        needle = query.strip()
+        if not needle:
+            raise ArchiveError("Search query must not be empty")
+        if len(needle) > 500:
+            raise ArchiveError("Search query must be at most 500 characters")
+        if limit <= 0 or limit > 500:
+            raise ArchiveError("Search limit must be between 1 and 500")
+        if max_bytes <= 0:
+            raise ArchiveError("Search byte ceiling must be positive")
+        if excerpt_chars < 40 or excerpt_chars > 1000:
+            raise ArchiveError("Search excerpt size must be between 40 and 1000 characters")
+
+        normalized_prefix = normalize_prefix(prefix)
+        comparable_needle = needle if case_sensitive else needle.casefold()
+        hits: list[dict[str, object]] = []
+        match_count = 0
+        candidate_files = 0
+        scanned_files = 0
+        skipped_oversize = 0
+        skipped_non_utf8 = 0
+
+        def scan(relative: str, data: bytes) -> None:
+            nonlocal match_count, scanned_files, skipped_non_utf8
+            try:
+                text = data.decode("utf-8", errors="strict")
+            except UnicodeDecodeError:
+                skipped_non_utf8 += 1
+                return
+            scanned_files += 1
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                comparable_line = line if case_sensitive else line.casefold()
+                if comparable_needle not in comparable_line:
+                    continue
+                match_count += 1
+                if len(hits) >= limit:
+                    continue
+                excerpt = line.strip()
+                if len(excerpt) > excerpt_chars:
+                    excerpt = excerpt[: excerpt_chars - 1] + "…"
+                hits.append(
+                    {
+                        "path": relative,
+                        "line": line_number,
+                        "excerpt": excerpt,
+                    }
+                )
+
+        if self.kind == "directory":
+            for relative, path, size in self._iter_directory_files():
+                if not _matches_prefix(relative, normalized_prefix):
+                    continue
+                if PurePosixPath(relative).suffix.lower() not in TEXT_SUFFIXES:
+                    continue
+                candidate_files += 1
+                if size > max_bytes:
+                    skipped_oversize += 1
+                    continue
+                scan(relative, path.read_bytes())
+        else:
+            members = self._zip_members()
+            with zipfile.ZipFile(self.root, "r") as archive:
+                for relative, info in members:
+                    if not _matches_prefix(relative, normalized_prefix):
+                        continue
+                    if PurePosixPath(relative).suffix.lower() not in TEXT_SUFFIXES:
+                        continue
+                    candidate_files += 1
+                    if info.file_size > max_bytes:
+                        skipped_oversize += 1
+                        continue
+                    scan(relative, archive.read(info))
+
+        return {
+            "query": needle,
+            "prefix": normalized_prefix,
+            "case_sensitive": case_sensitive,
+            "hits": hits,
+            "match_count": match_count,
+            "candidate_files": candidate_files,
+            "scanned_files": scanned_files,
+            "skipped_oversize": skipped_oversize,
+            "skipped_non_utf8": skipped_non_utf8,
+            "truncated": match_count > len(hits),
+        }
 
     def entry(self, relative: str) -> ArchiveEntry | None:
         """Return size/hash metadata for one path without reading unrelated files."""
