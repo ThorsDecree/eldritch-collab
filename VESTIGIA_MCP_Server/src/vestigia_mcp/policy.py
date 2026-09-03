@@ -44,6 +44,12 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Read one bounded UTF-8 text file from a configured Archive source.",
     ),
     Capability(
+        "archive.search_text",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Search bounded UTF-8 Archive text literally and return line-level evidence.",
+    ),
+    Capability(
         "archive.diff",
         EffectClass.PERCEIVE,
         Decision.ALLOW,
@@ -54,6 +60,24 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         EffectClass.PERCEIVE,
         Decision.ALLOW,
         "Compare one live/snapshot Archive path by size and SHA-256 without hashing unrelated files.",
+    ),
+    Capability(
+        "archive.registry_status",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect canonical house_index registry targets against the selected Archive source.",
+    ),
+    Capability(
+        "receipts.recent",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Read recent capability receipts without exposing raw tool arguments.",
+    ),
+    Capability(
+        "vestigia.status",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect this deployment's version, policy surface, Archive configuration, and audit health.",
     ),
 )
 
@@ -70,6 +94,9 @@ class PolicyEngine:
 
     def capability(self, name: str) -> Capability | None:
         return self._capabilities.get(name)
+
+    def capabilities(self) -> tuple[Capability, ...]:
+        return tuple(self._capabilities[name] for name in sorted(self._capabilities))
 
     def require_allowed(self, name: str) -> Capability:
         capability = self.capability(name)
