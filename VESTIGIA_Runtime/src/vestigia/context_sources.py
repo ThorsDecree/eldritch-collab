@@ -9,6 +9,21 @@ from .models import MemoryRecord, RetrievedMemory
 from .retrieval import Retriever
 
 
+PROTECTED_RUNTIME_LAYER_NAMES = frozenset(
+    {
+        "runtime_contract",
+        "identity_core",
+        "relationship_overlay",
+        "commitments_and_tensions",
+        "retrieved_continuity",
+        "unresolved_action_breadcrumbs",
+        "attention_tray",
+        "compressed_transcript",
+        "verbatim_tail",
+    }
+)
+
+
 class ContextSourceError(RuntimeError):
     """Raised when a context source cannot satisfy its declared contract."""
 
@@ -60,6 +75,39 @@ class ContextSourceResult:
     truncation_reason: str | None = None
     warnings: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        source_name = str(self.source_name).strip()
+        layer_name = str(self.layer_name).strip()
+        if not source_name or source_name != source_name.lower():
+            raise ValueError("context source result names must be non-empty and normalized")
+        if not layer_name or layer_name != layer_name.lower():
+            raise ValueError("context source layer names must be non-empty and normalized")
+        if self.budget_tokens < 0:
+            raise ValueError("context source token budgets must not be negative")
+        if (
+            source_name != "runtime_memory"
+            and layer_name in PROTECTED_RUNTIME_LAYER_NAMES
+        ):
+            raise ValueError(
+                f"context source {source_name} may not impersonate protected Runtime layer "
+                f"{layer_name}"
+            )
+        if source_name == "runtime_memory" and layer_name != "retrieved_continuity":
+            raise ValueError(
+                "runtime_memory must retain the retrieved_continuity compatibility layer"
+            )
+
+        item_ids: set[str] = set()
+        for item in self.items:
+            if not isinstance(item, ContextSourceItem):
+                raise TypeError("context source results may contain only ContextSourceItem values")
+            item_id = str(item.item_id).strip()
+            if not item_id:
+                raise ValueError("context source items require a non-empty item_id")
+            if item_id in item_ids:
+                raise ValueError(f"duplicate context source item_id: {item_id}")
+            item_ids.add(item_id)
 
 
 @runtime_checkable
