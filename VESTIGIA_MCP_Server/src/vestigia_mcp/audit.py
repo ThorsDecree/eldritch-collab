@@ -39,6 +39,7 @@ class AuditEvent:
     arguments_sha256: str
     outcome: str
     request_id: str | None = None
+    authority: str = "mcp_policy"
     detail: str | None = None
 
 
@@ -63,6 +64,7 @@ class AuditLedger:
         *,
         decision: Decision = Decision.ALLOW,
         request_id: str | None = None,
+        authority: str = "mcp_policy",
         detail: str | None = None,
     ) -> AuditEvent:
         event = AuditEvent(
@@ -75,6 +77,7 @@ class AuditLedger:
             arguments_sha256=hash_arguments(arguments),
             outcome=outcome,
             request_id=request_id,
+            authority=authority,
             detail=detail,
         )
         line = json.dumps(asdict(event), ensure_ascii=False, sort_keys=True)
@@ -155,6 +158,36 @@ class AuditLedger:
             },
             "excludes_current_call": True,
         }
+
+    def show(self, event_id: str) -> dict[str, object]:
+        """Inspect one MCP audit receipt by its durable event ID."""
+        wanted = event_id.strip()
+        if not wanted:
+            raise AuditError("Audit event ID must not be blank")
+        malformed_lines = 0
+        with self._lock:
+            if not self._path.exists():
+                raise AuditError(f"Audit receipt not found: {wanted}")
+            with self._path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        malformed_lines += 1
+                        continue
+                    if not isinstance(event, dict):
+                        malformed_lines += 1
+                        continue
+                    if str(event.get("event_id") or "") != wanted:
+                        continue
+                    return {
+                        "event": event,
+                        "malformed_lines_observed": malformed_lines,
+                        "receipt_is_memory": False,
+                    }
+        raise AuditError(f"Audit receipt not found: {wanted}")
 
     def summary(self) -> dict[str, object]:
         """Return bounded ledger health information without returning receipt contents."""
