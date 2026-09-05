@@ -38,6 +38,8 @@ def test_runtime_bootstrap_plan_is_explicit_and_unique() -> None:
         ("library_window_lifecycle", "register_composition"),
         ("gaming_tools", "register_composition"),
         ("workbench", "register_composition"),
+        ("mcp_context_source", "register_composition"),
+        ("context_introspection", "register_composition"),
     )
     assert len(plan) == len(set(plan))
 
