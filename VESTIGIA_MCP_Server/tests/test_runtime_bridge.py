@@ -34,7 +34,12 @@ def test_configured_runtime_bridge_projects_and_dispatches_reads(tmp_path: Path)
     capabilities = bridge.capabilities()
     names = {item["name"] for item in capabilities["capabilities"]}
     assert "status" in names
+    assert "fs.patch_list" in names
+    assert "fs.patch_preview" in names
+    assert "fs.patch_validate" in names
     assert "file.write" not in names
+    assert "fs.stage_patch" not in names
+    assert "fs.patch_discard" not in names
     assert "discord.react" not in names
 
     result = bridge.call(
@@ -52,4 +57,14 @@ def test_configured_runtime_bridge_projects_and_dispatches_reads(tmp_path: Path)
             action="file.write",
             arguments={"path": "workspace/nope.md", "content": "nope"},
             request_id="req_denied",
+        )
+    with pytest.raises(RuntimeBridgeError):
+        bridge.call(
+            action="fs.stage_patch",
+            arguments={
+                "operation": "create",
+                "path": "workspace/nope.md",
+                "content": "nope",
+            },
+            request_id="req_prepare_denied",
         )
