@@ -55,16 +55,29 @@ jobs:
 
       - name: Install Runtime and MCP development packages
         run: |
-          python -m pip install -e "..\VESTIGIA_Runtime"
+          python -m pip install -e "..\VESTIGIA_Runtime[dev,discord,tokens,mcp-context]"
           python -m pip install -e ".[dev]"
+          python -m pip check
+
+      - name: Compile Runtime and MCP source
+        shell: pwsh
+        run: |
+          python -m compileall -q ..\VESTIGIA_Runtime\src
+          python -m compileall -q src
 
       - name: Run MCP test suite
         run: pytest
 
-      - name: Run Runtime MCP integration boundary tests
+      - name: Run focused Runtime MCP integration boundary tests
         shell: pwsh
         run: |
           $env:PYTHONPATH = "..\VESTIGIA_Runtime\src"
           python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_mcp_projection.py -v
           python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_context_sources.py -v
           python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_mcp_context_source.py -v
+
+      - name: Run complete Runtime compatibility suite
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "..\VESTIGIA_Runtime\src"
+          python -m pytest -q ..\VESTIGIA_Runtime\tests
