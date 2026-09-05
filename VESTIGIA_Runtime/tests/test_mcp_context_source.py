@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import tempfile
@@ -12,6 +13,13 @@ from vestigia.config import load_config
 from vestigia.context import ContextAssembler
 from vestigia.db import ContinuityDB
 from vestigia.models import NormalizedMessage, RuntimeState
+
+
+def _mcp_integration_available() -> bool:
+    return (
+        importlib.util.find_spec("mcp") is not None
+        and importlib.util.find_spec("vestigia_mcp") is not None
+    )
 
 
 class McpContextSourceTests(unittest.TestCase):
@@ -66,6 +74,10 @@ class McpContextSourceTests(unittest.TestCase):
         db.initialize()
         return archive, home, db
 
+    @unittest.skipUnless(
+        _mcp_integration_available(),
+        "requires optional mcp-context dependency and installed VESTIGIA MCP server",
+    )
     def test_stdio_mcp_source_brings_archive_evidence_into_separate_layer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive, home, db = self._fixture(Path(tmp))
