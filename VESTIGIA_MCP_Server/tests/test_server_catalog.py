@@ -16,6 +16,9 @@ EXPECTED_TOOLS = {
     "archive.diff",
     "archive.diff_detail",
     "archive.registry_status",
+    "runtime.status",
+    "runtime.capabilities",
+    "runtime.call",
     "receipts.recent",
     "vestigia.status",
 }
@@ -86,11 +89,18 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert search_result.structured_content["match_count"] == 1
             assert search_result.structured_content["hits"][0]["path"] == "manifest.md"
 
+            runtime_result = await client.call_tool("runtime.status", {})
+            assert runtime_result.is_error is False
+            assert runtime_result.structured_content is not None
+            assert runtime_result.structured_content["configured"] is False
+            assert runtime_result.structured_content["available"] is False
+
             status_result = await client.call_tool("vestigia.status", {})
             assert status_result.is_error is False
             assert status_result.structured_content is not None
             assert status_result.structured_content["server"]["version"] == "0.2.0.dev0"
-            assert status_result.structured_content["policy"]["capability_count"] == 9
+            assert status_result.structured_content["policy"]["capability_count"] == 12
+            assert status_result.structured_content["runtime"]["configured"] is False
 
             receipt_result = await client.call_tool(
                 "receipts.recent",
@@ -104,6 +114,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             }
             assert "archive.registry_status" in capabilities
             assert "archive.search_text" in capabilities
+            assert "runtime.status" in capabilities
             assert "vestigia.status" in capabilities
 
     asyncio.run(exercise())
