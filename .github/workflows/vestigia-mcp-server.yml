@@ -4,22 +4,30 @@ on:
   push:
     paths:
       - "VESTIGIA_MCP_Server/**"
+      - "VESTIGIA_Runtime/pyproject.toml"
+      - "VESTIGIA_Runtime/src/vestigia/bootstrap.py"
       - "VESTIGIA_Runtime/src/vestigia/mcp_projection.py"
       - "VESTIGIA_Runtime/src/vestigia/context.py"
       - "VESTIGIA_Runtime/src/vestigia/context_sources.py"
+      - "VESTIGIA_Runtime/src/vestigia/mcp_context_source.py"
       - "VESTIGIA_Runtime/src/vestigia/composition.py"
       - "VESTIGIA_Runtime/tests/test_mcp_projection.py"
       - "VESTIGIA_Runtime/tests/test_context_sources.py"
+      - "VESTIGIA_Runtime/tests/test_mcp_context_source.py"
       - ".github/workflows/vestigia-mcp-server.yml"
   pull_request:
     paths:
       - "VESTIGIA_MCP_Server/**"
+      - "VESTIGIA_Runtime/pyproject.toml"
+      - "VESTIGIA_Runtime/src/vestigia/bootstrap.py"
       - "VESTIGIA_Runtime/src/vestigia/mcp_projection.py"
       - "VESTIGIA_Runtime/src/vestigia/context.py"
       - "VESTIGIA_Runtime/src/vestigia/context_sources.py"
+      - "VESTIGIA_Runtime/src/vestigia/mcp_context_source.py"
       - "VESTIGIA_Runtime/src/vestigia/composition.py"
       - "VESTIGIA_Runtime/tests/test_mcp_projection.py"
       - "VESTIGIA_Runtime/tests/test_context_sources.py"
+      - "VESTIGIA_Runtime/tests/test_mcp_context_source.py"
       - ".github/workflows/vestigia-mcp-server.yml"
 
 permissions:
@@ -59,3 +67,4 @@ jobs:
           $env:PYTHONPATH = "..\VESTIGIA_Runtime\src"
           python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_mcp_projection.py -v
           python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_context_sources.py -v
+          python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_mcp_context_source.py -v
