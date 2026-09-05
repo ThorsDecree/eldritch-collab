@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import sys
 import threading
@@ -62,25 +61,6 @@ _STOPWORDS = {
     "would",
     "your",
 }
-
-
-def _as_bool(raw: str | None) -> bool:
-    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _positive_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
-    raw = os.getenv(name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise ContextSourceError(f"{name} must be an integer") from exc
-    if value < minimum or value > maximum:
-        raise ContextSourceError(
-            f"{name} must be between {minimum} and {maximum}"
-        )
-    return value
 
 
 def _query_terms(query: str, limit: int) -> tuple[str, ...]:
@@ -149,6 +129,7 @@ class _McpContextConfig:
     max_chars_per_anchor: int
     budget_tokens: int
     timeout_seconds: int
+    archive_text_max_bytes: int
 
 
 class VestigiaArchiveMcpSource:
@@ -193,14 +174,14 @@ class VestigiaArchiveMcpSource:
                 self.home / "traces" / "mcp-context-source"
             ),
             "VESTIGIA_MCP_DEPLOYMENT_ID": f"{self.resident_id}-runtime-context",
+            "VESTIGIA_MCP_ARCHIVE_TEXT_MAX_BYTES": str(
+                self.source_config.archive_text_max_bytes
+            ),
         }
         if self.source_config.snapshot_root is not None:
             env["VESTIGIA_MCP_SNAPSHOT_ARCHIVE_ROOT"] = str(
                 self.source_config.snapshot_root
             )
-        max_bytes = os.getenv("VESTIGIA_CONTEXT_MCP_ARCHIVE_TEXT_MAX_BYTES", "").strip()
-        if max_bytes:
-            env["VESTIGIA_MCP_ARCHIVE_TEXT_MAX_BYTES"] = max_bytes
         return env
 
     async def _retrieve_async(
@@ -241,17 +222,27 @@ class VestigiaArchiveMcpSource:
                     self.source_config.resident_key,
                 )
                 warnings.extend(anchor_warnings)
+                if any(
+                    warning.startswith("resident_anchor_char_ceiling:")
+                    for warning in anchor_warnings
+                ):
+                    source_truncated = True
                 for item in anchor_items:
                     if item.item_id in item_keys:
                         continue
                     item_keys.add(item.item_id)
                     items.append(item)
+                if len(items) > self.source_config.max_items:
+                    source_truncated = True
 
             per_term_limit = max(
                 1,
                 min(5, self.source_config.max_items),
             )
             for term_index, term in enumerate(terms):
+                if len(items) >= self.source_config.max_items:
+                    source_truncated = True
+                    break
                 result = await client.call_tool(
                     "archive.search_text",
                     {
@@ -325,6 +316,8 @@ class VestigiaArchiveMcpSource:
                 if len(items) >= self.source_config.max_items:
                     break
 
+        if len(items) > self.source_config.max_items:
+            source_truncated = True
         items = items[: self.source_config.max_items]
         if not terms and not self.source_config.resident_key:
             warnings.append("no_search_terms_or_resident_anchor")
@@ -341,7 +334,7 @@ class VestigiaArchiveMcpSource:
             available=True,
             truncated=source_truncated,
             truncation_reason=(
-                "mcp_search_or_item_ceiling" if source_truncated else None
+                "mcp_search_anchor_or_item_ceiling" if source_truncated else None
             ),
             warnings=tuple(dict.fromkeys(warnings)),
             metadata={
@@ -357,6 +350,7 @@ class VestigiaArchiveMcpSource:
                 "runtime_home_forwarded_to_child": False,
                 "provider_credentials_forwarded_to_child": False,
                 "memory_write_requested": False,
+                "configuration_authority": "Runtime ResolvedConfig",
             },
         )
 
@@ -464,68 +458,39 @@ def _factory(
     config: ResolvedConfig,
     db: ContinuityDB,
 ) -> VestigiaArchiveMcpSource | None:
-    if not _as_bool(os.getenv("VESTIGIA_CONTEXT_MCP_ENABLED")):
+    prefix = "context_sources.mcp_archive"
+    if not bool(config.get(f"{prefix}.enabled", False)):
         return None
 
-    live_raw = (
-        os.getenv("VESTIGIA_CONTEXT_MCP_LIVE_ARCHIVE_ROOT", "").strip()
-        or os.getenv("VESTIGIA_MCP_LIVE_ARCHIVE_ROOT", "").strip()
-    )
+    live_raw = str(config.get(f"{prefix}.live_archive_root", "")).strip()
     if not live_raw:
         raise ContextSourceError(
-            "VESTIGIA_CONTEXT_MCP_ENABLED requires VESTIGIA_CONTEXT_MCP_LIVE_ARCHIVE_ROOT "
-            "or VESTIGIA_MCP_LIVE_ARCHIVE_ROOT"
+            "context_sources.mcp_archive.live_archive_root is required when enabled"
         )
     live_root = Path(live_raw).expanduser()
     if not live_root.exists():
         raise ContextSourceError(f"MCP context live Archive root not found: {live_root}")
 
-    snapshot_raw = (
-        os.getenv("VESTIGIA_CONTEXT_MCP_SNAPSHOT_ARCHIVE_ROOT", "").strip()
-        or os.getenv("VESTIGIA_MCP_SNAPSHOT_ARCHIVE_ROOT", "").strip()
-    )
+    snapshot_raw = str(config.get(f"{prefix}.snapshot_archive_root", "")).strip()
     snapshot_root = Path(snapshot_raw).expanduser() if snapshot_raw else None
     if snapshot_root is not None and not snapshot_root.exists():
         raise ContextSourceError(
             f"MCP context snapshot Archive root not found: {snapshot_root}"
         )
 
+    resident_key = str(config.get(f"{prefix}.resident_key", "")).strip() or None
     source_config = _McpContextConfig(
         live_root=live_root,
         snapshot_root=snapshot_root,
-        prefix=os.getenv("VESTIGIA_CONTEXT_MCP_PREFIX", "").strip(),
-        resident_key=(
-            os.getenv("VESTIGIA_CONTEXT_MCP_RESIDENT_KEY", "").strip() or None
-        ),
-        max_items=_positive_int(
-            "VESTIGIA_CONTEXT_MCP_MAX_ITEMS",
-            8,
-            minimum=1,
-            maximum=50,
-        ),
-        max_terms=_positive_int(
-            "VESTIGIA_CONTEXT_MCP_MAX_TERMS",
-            5,
-            minimum=1,
-            maximum=12,
-        ),
-        max_chars_per_anchor=_positive_int(
-            "VESTIGIA_CONTEXT_MCP_ANCHOR_CHARS",
-            12_000,
-            minimum=500,
-            maximum=100_000,
-        ),
-        budget_tokens=_positive_int(
-            "VESTIGIA_CONTEXT_MCP_TOKENS",
-            2200,
-            minimum=100,
-            maximum=12_000,
-        ),
-        timeout_seconds=_positive_int(
-            "VESTIGIA_CONTEXT_MCP_TIMEOUT_SECONDS",
-            30,
-            minimum=5,
-            maximum=180,
+        prefix=str(config.get(f"{prefix}.prefix", "")).strip(),
+        resident_key=resident_key,
+        max_items=int(config.get(f"{prefix}.max_items", 8)),
+        max_terms=int(config.get(f"{prefix}.max_terms", 5)),
+        max_chars_per_anchor=int(config.get(f"{prefix}.anchor_chars", 12_000)),
+        budget_tokens=int(config.get(f"{prefix}.tokens", 2200)),
+        timeout_seconds=int(config.get(f"{prefix}.timeout_seconds", 30)),
+        archive_text_max_bytes=int(
+            config.get(f"{prefix}.archive_text_max_bytes", 1_000_000)
         ),
     )
     return VestigiaArchiveMcpSource(config, db, source_config)
