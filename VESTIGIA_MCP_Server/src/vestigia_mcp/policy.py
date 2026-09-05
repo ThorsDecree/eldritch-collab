@@ -68,6 +68,12 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Inspect canonical house_index registry targets against the selected Archive source.",
     ),
     Capability(
+        "archive.health",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect mechanical Archive health, local links, normalization ambiguity, and routing coverage candidates.",
+    ),
+    Capability(
         "runtime.status",
         EffectClass.PERCEIVE,
         Decision.ALLOW,
@@ -90,6 +96,24 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         EffectClass.PERCEIVE,
         Decision.ALLOW,
         "Read recent capability receipts without exposing raw tool arguments.",
+    ),
+    Capability(
+        "audit.show",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect one MCP audit receipt by durable event ID without treating it as memory.",
+    ),
+    Capability(
+        "system.identity",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect the exact MCP deployment identity, fingerprints, Archive witnesses, Runtime linkage, and qualification limits.",
+    ),
+    Capability(
+        "house.glance",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Return a compact descriptive house-state digest for bells and autonomous orientation.",
     ),
     Capability(
         "vestigia.status",
