@@ -16,10 +16,14 @@ EXPECTED_TOOLS = {
     "archive.diff",
     "archive.diff_detail",
     "archive.registry_status",
+    "archive.health",
     "runtime.status",
     "runtime.capabilities",
     "runtime.call",
     "receipts.recent",
+    "audit.show",
+    "system.identity",
+    "house.glance",
     "vestigia.status",
 }
 
@@ -80,6 +84,15 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert registry_result.structured_content["summary"]["missing"] == 0
             assert registry_result.structured_content["summary"]["registered_targets"] == 3
 
+            health_result = await client.call_tool(
+                "archive.health",
+                {"source": "live", "check_links": False},
+            )
+            assert health_result.is_error is False
+            assert health_result.structured_content is not None
+            assert health_result.structured_content["summary"]["issue_count"] == 0
+            assert health_result.structured_content["coverage"]["claim"] == "descriptive_projection_only"
+
             search_result = await client.call_tool(
                 "archive.search_text",
                 {"source": "live", "query": "LANTERN"},
@@ -95,26 +108,52 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert runtime_result.structured_content["configured"] is False
             assert runtime_result.structured_content["available"] is False
 
+            identity_result = await client.call_tool("system.identity", {})
+            assert identity_result.is_error is False
+            assert identity_result.structured_content is not None
+            assert identity_result.structured_content["schema_version"] == "vestigia.system-identity.v0.1"
+            assert identity_result.structured_content["archive"]["live"]["available"] is True
+            assert identity_result.structured_content["capability_registry"]["capability_count"] == 16
+
+            glance_result = await client.call_tool("house.glance", {})
+            assert glance_result.is_error is False
+            assert glance_result.structured_content is not None
+            assert glance_result.structured_content["schema_version"] == "vestigia.house-glance.v0.1"
+            assert glance_result.structured_content["meaningful_diff"]["computed"] is False
+            assert glance_result.structured_content["authority"] == "descriptive_projection_only"
+
             status_result = await client.call_tool("vestigia.status", {})
             assert status_result.is_error is False
             assert status_result.structured_content is not None
             assert status_result.structured_content["server"]["version"] == "0.2.0.dev0"
-            assert status_result.structured_content["policy"]["capability_count"] == 12
+            assert status_result.structured_content["policy"]["capability_count"] == 16
             assert status_result.structured_content["runtime"]["configured"] is False
+            assert "archive.health" in status_result.structured_content["proprioception"]["new_native_tools"]
 
             receipt_result = await client.call_tool(
                 "receipts.recent",
-                {"limit": 10},
+                {"limit": 20},
             )
             assert receipt_result.is_error is False
             assert receipt_result.structured_content is not None
-            capabilities = {
-                event["capability"]
-                for event in receipt_result.structured_content["events"]
-            }
+            events = receipt_result.structured_content["events"]
+            capabilities = {event["capability"] for event in events}
             assert "archive.registry_status" in capabilities
+            assert "archive.health" in capabilities
             assert "archive.search_text" in capabilities
             assert "runtime.status" in capabilities
+            assert "system.identity" in capabilities
+            assert "house.glance" in capabilities
             assert "vestigia.status" in capabilities
+
+            target_event_id = events[0]["event_id"]
+            show_result = await client.call_tool(
+                "audit.show",
+                {"event_id": target_event_id},
+            )
+            assert show_result.is_error is False
+            assert show_result.structured_content is not None
+            assert show_result.structured_content["event"]["event_id"] == target_event_id
+            assert show_result.structured_content["receipt_is_memory"] is False
 
     asyncio.run(exercise())
