@@ -32,6 +32,30 @@ class FakeRegistry:
                 "group": "workspace",
                 "input_schema": {"type": "object"},
             },
+            "fs.stage_patch": {
+                "name": "fs.stage_patch",
+                "description": "Stage a private workspace proposal.",
+                "effects": ["database:write_pending_draft"],
+                "confirmation": "none",
+                "outward_facing": False,
+                "callable_now": True,
+                "dispatchable_via_tool_action": True,
+                "schema_version": "v1",
+                "group": "editing",
+                "input_schema": {"type": "object"},
+            },
+            "fs.patch_validate": {
+                "name": "fs.patch_validate",
+                "description": "Validate a staged proposal without changing it.",
+                "effects": ["database:read", "filesystem:read"],
+                "confirmation": "none",
+                "outward_facing": False,
+                "callable_now": True,
+                "dispatchable_via_tool_action": True,
+                "schema_version": "v1",
+                "group": "editing",
+                "input_schema": {"type": "object"},
+            },
             "discord.react": {
                 "name": "discord.react",
                 "description": "React outwardly.",
@@ -69,12 +93,17 @@ class McpProjectionTests(unittest.TestCase):
         house = FakeHouse()
         projected = read_projection(house)
         self.assertEqual(projected["authority"], "runtime_capability_registry")
-        self.assertEqual(projected["capability_count"], 1)
-        self.assertEqual(projected["capabilities"][0]["name"], "status")
+        self.assertEqual(projected["capability_count"], 2)
+        self.assertEqual(
+            {item["name"] for item in projected["capabilities"]},
+            {"status", "fs.patch_validate"},
+        )
         self.assertEqual(len(projected["capability_digest_sha256"]), 64)
 
         with self.assertRaises(PermissionError):
             read_projection(house, "file.write")
+        with self.assertRaises(PermissionError):
+            read_projection(house, "fs.stage_patch")
         with self.assertRaises(PermissionError):
             read_projection(house, "discord.react")
 
