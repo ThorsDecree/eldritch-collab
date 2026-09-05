@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -11,6 +12,7 @@ from mcp.types import ToolAnnotations
 
 from . import __version__
 from .adapters.archive import ArchiveError, ArchiveSource, normalize_relative_path
+from .adapters.runtime import RuntimeBridge, RuntimeBridgeError
 from .audit import AuditError, AuditLedger
 from .config import Settings
 from .policy import PolicyDenied, PolicyEngine
@@ -138,13 +140,20 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     settings = settings or Settings.from_env()
     policy = PolicyEngine()
     ledger = AuditLedger(settings.state_dir, settings.deployment_id)
+    runtime_bridge = RuntimeBridge(
+        settings.runtime_home,
+        settings.runtime_env_file,
+        deployment_id=settings.deployment_id,
+    )
     server = MCPServer(
         "VESTIGIA MCP",
         instructions=(
             "Local-first VESTIGIA capability broker. Tool descriptions are not authority; "
-            "the live policy is. The current surface is PERCEIVE-only. Prefer diff_detail for "
-            "one known path and diff for whole-tree comparison. Text search is literal evidence "
-            "retrieval, not semantic similarity."
+            "live policy is. Archive tools are native PERCEIVE capabilities. Runtime tools are "
+            "a read-only projection of Runtime's own executable CapabilityRegistry through "
+            "HousePort; MCP does not define a parallel Runtime capability ontology. Prefer "
+            "diff_detail for one known Archive path and diff for whole-tree comparison. Text "
+            "search is literal evidence retrieval, not semantic similarity."
         ),
     )
 
@@ -165,6 +174,8 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         capability_name: str,
         arguments: dict[str, Any],
         operation: Callable[[], T],
+        *,
+        request_id: str | None = None,
     ) -> T:
         try:
             capability = policy.require_allowed(capability_name)
@@ -172,11 +183,12 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             raise ToolError(str(exc)) from exc
         try:
             result = operation()
-        except (ArchiveError, AuditError) as exc:
+        except (ArchiveError, AuditError, RuntimeBridgeError) as exc:
             ledger.record(
                 capability,
                 arguments,
                 "error",
+                request_id=request_id,
                 detail=type(exc).__name__,
             )
             raise ToolError(str(exc)) from exc
@@ -185,10 +197,16 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 capability,
                 arguments,
                 "error",
+                request_id=request_id,
                 detail="unexpected_exception",
             )
             raise
-        ledger.record(capability, arguments, "ok")
+        ledger.record(
+            capability,
+            arguments,
+            "ok",
+            request_id=request_id,
+        )
         return result
 
     @server.tool(
@@ -380,11 +398,70 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         )
 
     @server.tool(
+        name="runtime.status",
+        title="Inspect Runtime linkage",
+        description=(
+            "Use this when you need to know whether a VESTIGIA Runtime home is linked, which "
+            "resident/room it belongs to, and the digest/count of its currently projectable "
+            "read-only capability surface."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def runtime_status() -> dict[str, object]:
+        return guarded("runtime.status", {}, runtime_bridge.status)
+
+    @server.tool(
+        name="runtime.capabilities",
+        title="Inspect projected Runtime capabilities",
+        description=(
+            "Use this when you need the Runtime-owned read-only MCP projection. With no target, "
+            "returns a compact index; with target, returns that Runtime capability's full live "
+            "contract and input schema. Runtime CapabilityRegistry remains authoritative."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def runtime_capabilities(target: str | None = None) -> dict[str, object]:
+        arguments = {"target": target}
+        return guarded(
+            "runtime.capabilities",
+            arguments,
+            lambda: runtime_bridge.capabilities(target),
+        )
+
+    @server.tool(
+        name="runtime.call",
+        title="Call one projected Runtime read",
+        description=(
+            "Use this after inspecting runtime.capabilities when you need to execute one Runtime "
+            "capability through Runtime's own HousePort. The bridge rejects anything not already "
+            "classified by Runtime as callable, confirmation-free, non-outward read behavior."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def runtime_call(
+        action: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        audit_arguments = {"action": action, "arguments": arguments or {}}
+        return guarded(
+            "runtime.call",
+            audit_arguments,
+            lambda: runtime_bridge.call(
+                action=action,
+                arguments=arguments,
+                request_id=request_id,
+            ),
+            request_id=request_id,
+        )
+
+    @server.tool(
         name="receipts.recent",
         title="Read recent VESTIGIA receipts",
         description=(
             "Use this when you need recent MCP capability receipts for provenance or debugging. "
-            "Results contain argument hashes, not raw tool arguments."
+            "Results contain argument hashes, not raw tool arguments; request_id can join a "
+            "cross-layer Runtime projected call to its MCP witness."
         ),
         annotations=READ_ONLY_ANNOTATIONS,
     )
@@ -392,11 +469,13 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         limit: int = 25,
         capability: str | None = None,
         outcome: str | None = None,
+        request_id: str | None = None,
     ) -> dict[str, object]:
         arguments = {
             "limit": limit,
             "capability": capability,
             "outcome": outcome,
+            "request_id": request_id,
         }
         return guarded(
             "receipts.recent",
@@ -405,6 +484,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 limit=limit,
                 capability=capability,
                 outcome=outcome,
+                request_id=request_id,
             ),
         )
 
@@ -413,7 +493,8 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         title="Inspect VESTIGIA MCP deployment",
         description=(
             "Use this when you need this deployment's server version, deployment identity, "
-            "executable policy surface, Archive configuration state, and audit-ledger health."
+            "executable MCP policy surface, Archive configuration, optional Runtime linkage, "
+            "and audit-ledger health."
         ),
         annotations=READ_ONLY_ANNOTATIONS,
     )
@@ -431,6 +512,12 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 "archive": {
                     "live_configured": settings.live_archive_root is not None,
                     "snapshot_configured": settings.snapshot_archive_root is not None,
+                },
+                "runtime": {
+                    "configured": runtime_bridge.configured,
+                    "home": runtime_bridge.configured_home,
+                    "env_file": runtime_bridge.configured_env_file,
+                    "projection": "runtime_owned_read_only",
                 },
                 "policy": {
                     "capability_count": len(capabilities),
