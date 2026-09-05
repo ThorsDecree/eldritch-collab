@@ -514,6 +514,14 @@ def _register(house: Any) -> None:
                 },
                 required=("action",),
             ),
+            example_envelopes=(
+                {
+                    "action": "fs.patch_list",
+                    "status": "staged",
+                    "limit": 25,
+                    "after": "continue",
+                },
+            ),
         ),
         lambda payload, _context: _list(house, payload),
     )
@@ -538,6 +546,13 @@ def _register(house: Any) -> None:
                     "after": after,
                 },
                 required=("action", "patch_id"),
+            ),
+            example_envelopes=(
+                {
+                    "action": "fs.patch_preview",
+                    "patch_id": "patch_example",
+                    "after": "continue",
+                },
             ),
         ),
         lambda payload, _context: _preview(house, payload),
@@ -564,6 +579,13 @@ def _register(house: Any) -> None:
                 },
                 required=("action", "patch_id"),
             ),
+            example_envelopes=(
+                {
+                    "action": "fs.patch_validate",
+                    "patch_id": "patch_example",
+                    "after": "continue",
+                },
+            ),
         ),
         lambda payload, _context: _validate(house, payload),
     )
@@ -589,6 +611,14 @@ def _register(house: Any) -> None:
                     "after": after,
                 },
                 required=("action", "patch_id"),
+            ),
+            example_envelopes=(
+                {
+                    "action": "fs.patch_discard",
+                    "patch_id": "patch_example",
+                    "reason": "proposal no longer wanted",
+                    "after": "continue",
+                },
             ),
         ),
         lambda payload, _context: _discard(house, payload),
