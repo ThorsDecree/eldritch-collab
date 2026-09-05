@@ -24,14 +24,18 @@ rather than clone its policy, schema, or semantics.
 5. **Transport is not authority.**
    MCP, Discord, browser, CLI, and web UI are routes. A route does not grant a capability.
 
-6. **Final dispatch is a real boundary.**
+6. **Preview is not approval.**
+   A schema-valid candidate and its hash are evidence about what was previewed. They do not mint
+   authority to execute it.
+
+7. **Final dispatch is a real boundary.**
    Consequential actions re-check live authority at the last reversible point. A valid old
    approval does not survive an authority epoch change merely because its TTL has not expired.
 
-7. **Derived indexes are projections.**
+8. **Derived indexes are projections.**
    A generated map summarizes source records; it does not outrank them.
 
-8. **Evidence layers stay distinct.**
+9. **Evidence layers stay distinct.**
    Shared request IDs make layers joinable without treating one layer's receipt as proof of
    another layer's admission or external success.
 
@@ -41,88 +45,33 @@ rather than clone its policy, schema, or semantics.
 
 **Goal:** high-fidelity perception and provenance.
 
-Already present or underway:
+Implemented:
 
 - live Archive and snapshot witness status;
 - bounded Archive list/read/literal search;
 - whole-tree diff and one-path diff detail;
 - configured snapshot exclusion from live semantic view;
 - canonical registry validation;
-- queryable MCP receipts;
-- top-level MCP deployment status;
+- mechanical `archive.health` diagnostics and coverage canaries;
+- queryable recent MCP receipts and `audit.show`;
+- `system.identity` and top-level MCP deployment status;
+- compact `house.glance` orientation;
 - accurate read-only MCP annotations;
 - optional Runtime read projection through Runtime's own `CapabilityRegistry` / `HousePort`;
 - shared request IDs across MCP -> Runtime projected calls;
 - Windows CI for MCP and Runtime projection boundaries.
 
-Next:
+Still worth deepening:
 
-### `archive.health`
-
-Separate mechanical health from existence and change. Candidate families:
-
-- dead registered routes;
-- missing referenced files;
-- stale generated indexes;
-- normalization / case collisions;
-- broken Markdown links;
-- skill-contract integrity;
-- version/path drift;
-- snapshot freshness;
-- duplicate resident-routing anomalies.
+- stale generated-index diagnostics;
+- skill-contract integrity checks;
+- stronger snapshot-freshness evidence;
+- more complete orphan/unindexed routing diagnostics;
+- teach `house.glance` to report newly merged Runtime staged-patch state instead of its older
+  hard-coded unsupported marker;
+- bounded recent-change views that do not require whole-tree rehashing.
 
 Health reports discrepancies. It does not silently repair them.
-
-### Coverage canary
-
-Registry validation answers:
-
-```text
-registry -> filesystem
-```
-
-Coverage should also answer:
-
-```text
-filesystem -> routing furniture
-```
-
-A map can contain no invalid roads while leaving important collections invisible.
-
-### `system.identity`
-
-Return a bounded identity packet such as:
-
-- MCP package/version;
-- Runtime package/version when linked;
-- source commit and dirty/clean state when honestly knowable;
-- deployment label;
-- configuration fingerprint with secrets excluded;
-- MCP native policy digest;
-- Runtime projected capability digest;
-- Archive witness/fingerprint summary;
-- qualification / test state.
-
-Identity is not qualification. Qualification is not authority.
-
-### `audit.show`
-
-Inspect one MCP receipt by ID and expose the cross-layer request ID without turning operational
-provenance into autobiographical memory.
-
-### `house.glance`
-
-A compact, bounded current-state digest suitable for bells/autonomous turns:
-
-- Archive health/status;
-- meaningful recent changes;
-- Runtime linkage/version/health;
-- unresolved warnings;
-- recent external-effect receipts;
-- staged objects;
-- snapshot freshness.
-
-This is a projection of structured evidence, not authoritative prose.
 
 ---
 
@@ -130,34 +79,30 @@ This is a projection of structured evidence, not authoritative prose.
 
 **Goal:** make context provenance inspectable and context backends replaceable.
 
-### Runtime context-source composition seam
+Implemented:
 
-Do not special-case MCP inside `ContextAssembler`. Add a proper context-source interface and keep
-local-folder/local-ledger sources available.
+- a proper Runtime `ContextSource` composition seam rather than an MCP special case inside
+  `ContextAssembler`;
+- Runtime memory represented as the required compatibility ContextSource;
+- optional `VestigiaArchiveMcpSource` over a local stdio MCP child;
+- allowlisted child environment that does not inherit Runtime/provider/Discord/tunnel secrets;
+- bounded Archive resident-anchor reads and literal search;
+- Runtime-owned external-source item/token ceilings;
+- source-neutral context receipt v0.2 with availability, query, provenance/authority class,
+  truncation, warnings, included/omitted evidence, and explicit no-adoption/no-memory-write flags;
+- resident-facing source introspection through the existing `retrieval.inspect` capability.
 
-Then implement an optional `VestigiaArchiveMcpSource` capable of:
+Important invariant:
 
-- Archive search/read;
-- health/status;
-- continuity retrieval;
-- provenance receipts;
-- explicit truncation reporting.
+```text
+source evidence -> attributed prompt layer -> context receipt
 
-MCP remains optional. Resident memory writes remain separate from Archive writes.
+not
 
-### Resident-facing context introspection
+source evidence -> automatic Runtime memory / identity / canon
+```
 
-Let the resident ask:
-
-- which sources were loaded;
-- what was retrieved;
-- what query was used;
-- what was truncated;
-- which records came from Archive, Runtime memory, conversation, or another source;
-- which records are authoritative, evidentiary, advisory, inferred, or unknown.
-
-This reports supplied context and routing decisions. It does not claim to expose hidden model
-causality.
+Remaining major instrument:
 
 ### Continuity capsules
 
@@ -172,7 +117,7 @@ Suggested evidence classes:
 - inference;
 - unknown.
 
-Companion operations:
+Potential operations:
 
 - `continuity.preview`;
 - `continuity.explain`;
@@ -187,31 +132,48 @@ No complete-continuity claim. No canonical write merely because a capsule was ge
 
 **Goal:** make consequence explicitly governable before adding more power.
 
-Needed primitives:
+### v0.1 — descriptive preflight
 
-- deployment / resident / principal identity;
-- capability grants scoped to targets/workspaces/accounts;
-- ALLOW / CONFIRM / DENY;
-- expiry / TTL;
-- authority epochs and revocation;
+Initial Runtime-owned slice implemented on the Keyring feature branch:
+
+- resident principal identity with route/deployment evidence when available;
+- durable per-resident `authority_epoch`, seeded to `1`;
 - `policy.whoami`;
 - `policy.can`;
 - `policy.explain`;
-- `capability.preview` / dry-run;
-- hash-bound staged objects;
-- final-dispatch recheck.
+- `capability.preview`;
+- coarse `perceive` / `prepare` / `act` / `unknown` classification derived from the existing
+  `CapabilitySpec.effects` records;
+- exact candidate validation through Runtime's existing JSON-schema validator;
+- canonical SHA-256 over previewed candidate payloads without echoing arbitrary candidate content;
+- bounded target/scope summaries;
+- explicit `legacy_unkeyed_authority` findings for ACT-class capabilities that current Runtime
+  contracts still admit with `confirmation=none`;
+- read-only projection of all four Keyring senses through the existing generic MCP Runtime bridge.
 
-A preview should return:
+v0.1 is intentionally **descriptive**. It does not execute a target capability's focused
+authorizer or handler, create an approval, mutate the epoch, or change existing Runtime dispatch
+semantics.
 
-- resolved authority;
-- target;
-- expected effect;
-- approval requirement;
-- reversible/irreversible boundary;
-- likely receipt chain;
-- current policy decision.
+### Next enforcing slice
 
-Approval binds the exact object/target/action being approved, not merely the action verb.
+Needed primitives:
+
+- durable grants scoped by principal/deployment and target/workspace/account;
+- ALLOW / CONFIRM / DENY policy rules over those grants;
+- grant expiry / TTL;
+- authority-epoch increment on grant/revocation changes;
+- hash-bound approvals that include payload + action + destination/account + authority epoch;
+- an approval/introspection surface that never exposes secret material;
+- final-dispatch recheck at the last reversible boundary;
+- explicit migration of existing ACT capabilities behind the general Keyring gate.
+
+A future approval must bind the exact object/target/action being approved, not merely the action
+verb. Preview remains evidence, not approval.
+
+The staged-patch system is the preferred first enforcement guinea pig because PREPARE state is
+reversible and Runtime-private. Do not introduce `fs.patch_apply` until the enforcing Keyring
+boundary is real and tested.
 
 ---
 
@@ -219,10 +181,26 @@ Approval binds the exact object/target/action being approved, not merely the act
 
 **Goal:** let curiosity become bounded local computation without creating a raw god-shell.
 
-Extend Runtime's existing Workshop / sandbox / resident script shelf. MCP should project the
-resulting Runtime capabilities.
+Already present:
 
-Candidate execution profiles:
+- Runtime Workshop/script shelf;
+- static inspection and lifecycle evidence;
+- bounded sandbox/process-runner substrate;
+- Resident Workbench;
+- staged workspace patch objects:
+  - `fs.stage_patch`;
+  - `fs.patch_list`;
+  - `fs.patch_preview`;
+  - `fs.patch_validate`;
+  - `fs.patch_discard`;
+- no `fs.patch_apply` authority yet.
+
+The current read-only MCP Runtime projection exposes patch inspection but not staging/discarding.
+
+Next execution-profile work should extend Runtime's existing Workshop rather than add raw MCP
+shell access.
+
+Candidate profiles:
 
 - `code.inspect`;
 - `code.test`;
@@ -260,18 +238,6 @@ canonical repo
 
 Experimentation should not imply canonical mutation.
 
-### Filesystem staging
-
-Candidate primitives:
-
-- `fs.stage_patch`;
-- `fs.patch_preview`;
-- `fs.patch_validate`;
-- `fs.patch_apply`.
-
-Stage create/edit/move/delete operations as inspectable patch objects. Applying them is a
-separate authority boundary.
-
 ---
 
 ## 0.6 — House Bus
@@ -285,6 +251,7 @@ Normalize events such as:
 - experiment artifact appeared in a watched lab;
 - Runtime version changed;
 - capability surface/digest changed;
+- authority epoch changed;
 - snapshot became stale;
 - Workshop job completed;
 - external adapter produced a receipt.
