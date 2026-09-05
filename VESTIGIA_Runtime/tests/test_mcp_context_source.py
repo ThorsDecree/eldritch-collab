@@ -62,14 +62,13 @@ class McpContextSourceTests(unittest.TestCase):
             encoding="utf-8",
         )
         (home / "traces").mkdir()
-        config = load_config(home)
         db = ContinuityDB(home / "memory" / "continuity.db")
         db.initialize()
-        return archive, home, config, db
+        return archive, home, db
 
     def test_stdio_mcp_source_brings_archive_evidence_into_separate_layer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            archive, home, config, db = self._fixture(Path(tmp))
+            archive, home, db = self._fixture(Path(tmp))
             env = {
                 "VESTIGIA_CONTEXT_MCP_ENABLED": "true",
                 "VESTIGIA_CONTEXT_MCP_LIVE_ARCHIVE_ROOT": str(archive),
@@ -77,6 +76,7 @@ class McpContextSourceTests(unittest.TestCase):
                 "VESTIGIA_CONTEXT_MCP_MAX_TERMS": "2",
                 "VESTIGIA_CONTEXT_MCP_MAX_ITEMS": "8",
                 "VESTIGIA_CONTEXT_MCP_TIMEOUT_SECONDS": "30",
+                "VESTIGIA_CONTEXT_MCP_ARCHIVE_TEXT_MAX_BYTES": "777777",
                 # Deliberately set parent-only values that must not be forwarded to
                 # the Archive child transport.
                 "VESTIGIA_MCP_RUNTIME_HOME": str(home),
@@ -84,6 +84,18 @@ class McpContextSourceTests(unittest.TestCase):
                 "DISCORD_BOT_TOKEN": "must-not-cross-context-child",
             }
             with patch.dict(os.environ, env, clear=False):
+                # The source configuration must enter through Runtime's normal
+                # built-in -> home.yaml -> env-file -> process-env resolver.
+                config = load_config(home)
+                self.assertTrue(config.get("context_sources.mcp_archive.enabled"))
+                self.assertEqual(
+                    config.sources["context_sources.mcp_archive.enabled"],
+                    "environment:VESTIGIA_CONTEXT_MCP_ENABLED",
+                )
+                self.assertEqual(
+                    config.sources["context_sources.mcp_archive.live_archive_root"],
+                    "environment:VESTIGIA_CONTEXT_MCP_LIVE_ARCHIVE_ROOT",
+                )
                 bootstrap_runtime()
                 assembler = ContextAssembler(config, db)
                 names = [source.name for source in assembler.context_sources]
@@ -97,6 +109,10 @@ class McpContextSourceTests(unittest.TestCase):
                 self.assertNotIn("VESTIGIA_MCP_RUNTIME_HOME", child_env)
                 self.assertNotIn("OPENAI_API_KEY", child_env)
                 self.assertNotIn("DISCORD_BOT_TOKEN", child_env)
+                self.assertEqual(
+                    child_env["VESTIGIA_MCP_ARCHIVE_TEXT_MAX_BYTES"],
+                    "777777",
+                )
 
                 before = db.list_memories(
                     resident_id="tester",
@@ -131,6 +147,10 @@ class McpContextSourceTests(unittest.TestCase):
             self.assertTrue(source["available"])
             self.assertTrue(source["advisory"])
             self.assertEqual(source["metadata"]["transport"], "stdio_child")
+            self.assertEqual(
+                source["metadata"]["configuration_authority"],
+                "Runtime ResolvedConfig",
+            )
             self.assertFalse(source["metadata"]["runtime_home_forwarded_to_child"])
             self.assertFalse(source["metadata"]["provider_credentials_forwarded_to_child"])
             self.assertFalse(source["adoption_or_canon_change"])
