@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
 import uuid
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -15,11 +15,16 @@ from .adapters.archive import ArchiveError, ArchiveSource, normalize_relative_pa
 from .adapters.runtime import RuntimeBridge, RuntimeBridgeError
 from .audit import AuditError, AuditLedger
 from .config import Settings
+from .health import (
+    archive_health as inspect_archive_health,
+    registry_status as inspect_registry_status,
+    source_clock,
+)
+from .identity import system_identity as build_system_identity
 from .policy import PolicyDenied, PolicyEngine
 
 
 T = TypeVar("T")
-CANONICAL_REGISTRY_PATH = "00_Bootloader/house_index.json"
 READ_ONLY_ANNOTATIONS = ToolAnnotations(
     read_only_hint=True,
     destructive_hint=False,
@@ -48,94 +53,6 @@ def _live_archive_exclusions(settings: Settings) -> tuple[str, ...]:
     return (relative.as_posix(),)
 
 
-def _registry_status(source: ArchiveSource, max_bytes: int) -> dict[str, object]:
-    try:
-        registry = json.loads(source.read_text(CANONICAL_REGISTRY_PATH, max_bytes=max_bytes))
-    except json.JSONDecodeError as exc:
-        raise ArchiveError("Canonical house registry is not valid JSON") from exc
-    if not isinstance(registry, dict):
-        raise ArchiveError("Canonical house registry must be a JSON object")
-
-    paths = source.all_paths()
-    file_paths = set(paths)
-    checks: list[dict[str, object]] = []
-    labels_by_path: dict[str, list[str]] = {}
-
-    def add_check(label: str, raw_path: object, kind: str) -> None:
-        if not isinstance(raw_path, str):
-            raise ArchiveError(f"Registry target is not a string: {label}")
-        normalized = normalize_relative_path(raw_path)
-        if kind == "directory":
-            boundary = normalized.rstrip("/") + "/"
-            present = normalized in file_paths or any(
-                path.startswith(boundary) for path in paths
-            )
-        else:
-            present = normalized in file_paths
-        checks.append(
-            {
-                "label": label,
-                "path": normalized,
-                "kind": kind,
-                "present": present,
-            }
-        )
-        labels_by_path.setdefault(normalized, []).append(label)
-
-    anchors = registry.get("anchors", {})
-    if not isinstance(anchors, dict):
-        raise ArchiveError("Registry anchors must be an object")
-    for name, path in sorted(anchors.items()):
-        add_check(f"anchor:{name}", path, "file")
-
-    residents = registry.get("residents", {})
-    if not isinstance(residents, dict):
-        raise ArchiveError("Registry residents must be an object")
-    for resident_name, record in sorted(residents.items()):
-        if not isinstance(record, dict):
-            raise ArchiveError(f"Resident registry entry must be an object: {resident_name}")
-        if "shell" in record:
-            add_check(f"resident:{resident_name}:shell", record["shell"], "directory")
-        if "breathprint" in record:
-            add_check(
-                f"resident:{resident_name}:breathprint",
-                record["breathprint"],
-                "file",
-            )
-        if "index" in record:
-            add_check(f"resident:{resident_name}:index", record["index"], "file")
-
-    garden = registry.get("garden_breathprints", {})
-    if not isinstance(garden, dict):
-        raise ArchiveError("Registry garden_breathprints must be an object")
-    for name, path in sorted(garden.items()):
-        add_check(f"garden_breathprint:{name}", path, "file")
-
-    missing = [check for check in checks if not check["present"]]
-    duplicates = [
-        {"path": path, "labels": labels}
-        for path, labels in sorted(labels_by_path.items())
-        if len(labels) > 1
-    ]
-    return {
-        "registry_path": CANONICAL_REGISTRY_PATH,
-        "schema_version": registry.get("schema_version"),
-        "generated": registry.get("generated"),
-        "archive_root": registry.get("archive_root"),
-        "summary": {
-            "anchors": len(anchors),
-            "residents": len(residents),
-            "garden_breathprints": len(garden),
-            "registered_targets": len(checks),
-            "present": len(checks) - len(missing),
-            "missing": len(missing),
-            "duplicate_targets": len(duplicates),
-        },
-        "missing": missing,
-        "duplicate_targets": duplicates,
-    }
-
-
 def create_server(settings: Settings | None = None) -> MCPServer:
     settings = settings or Settings.from_env()
     policy = PolicyEngine()
@@ -151,9 +68,11 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             "Local-first VESTIGIA capability broker. Tool descriptions are not authority; "
             "live policy is. Archive tools are native PERCEIVE capabilities. Runtime tools are "
             "a read-only projection of Runtime's own executable CapabilityRegistry through "
-            "HousePort; MCP does not define a parallel Runtime capability ontology. Prefer "
-            "diff_detail for one known Archive path and diff for whole-tree comparison. Text "
-            "search is literal evidence retrieval, not semantic similarity."
+            "HousePort; MCP does not define a parallel Runtime capability ontology. Health, "
+            "identity, receipts, and house.glance are descriptive evidence surfaces, not memory "
+            "or canonical authority. Prefer diff_detail for one known Archive path and diff for "
+            "whole-tree comparison. Text search is literal evidence retrieval, not semantic "
+            "similarity."
         ),
     )
 
@@ -390,9 +309,43 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             arguments,
             lambda: {
                 "source": source,
-                **_registry_status(
+                **inspect_registry_status(
                     source_for(source),
                     settings.archive_text_max_bytes,
+                ),
+            },
+        )
+
+    @server.tool(
+        name="archive.health",
+        title="Inspect Archive mechanical health",
+        description=(
+            "Use this when you need mechanical health evidence: missing registered targets, "
+            "routing aliases, coverage canaries, case-fold collisions, and bounded local "
+            "Markdown link checks. Findings are descriptive and never repair the Archive."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def archive_health(
+        source: str = "live",
+        issue_limit: int = 100,
+        check_links: bool = True,
+    ) -> dict[str, object]:
+        arguments = {
+            "source": source,
+            "issue_limit": issue_limit,
+            "check_links": check_links,
+        }
+        return guarded(
+            "archive.health",
+            arguments,
+            lambda: {
+                "source_name": source,
+                **inspect_archive_health(
+                    source_for(source),
+                    max_bytes=settings.archive_text_max_bytes,
+                    issue_limit=issue_limit,
+                    check_links=check_links,
                 ),
             },
         )
@@ -489,12 +442,174 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         )
 
     @server.tool(
+        name="audit.show",
+        title="Inspect one MCP audit receipt",
+        description=(
+            "Use this when you have an MCP audit event_id and need its exact evidence record, "
+            "including request_id and deciding authority when present. A receipt remains "
+            "operational evidence; inspecting it does not make it autobiographical memory."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def audit_show(event_id: str) -> dict[str, object]:
+        arguments = {"event_id": event_id}
+        return guarded(
+            "audit.show",
+            arguments,
+            lambda: ledger.show(event_id),
+        )
+
+    @server.tool(
+        name="system.identity",
+        title="Inspect exact house identity",
+        description=(
+            "Use this before trusting provenance-sensitive results to locate the exact MCP "
+            "deployment: package/deployment identity, non-secret config fingerprint, executable "
+            "policy digest, bounded Archive witnesses, Runtime linkage, and qualification limits."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def system_identity() -> dict[str, object]:
+        return guarded(
+            "system.identity",
+            {},
+            lambda: build_system_identity(
+                server_version=__version__,
+                settings=settings,
+                policy=policy,
+                source_for=source_for,
+                runtime_status=runtime_bridge.status,
+            ),
+        )
+
+    @server.tool(
+        name="house.glance",
+        title="Glance around the current house",
+        description=(
+            "Use this as a compact first orientation call for a bell or autonomous turn. It "
+            "summarizes live/snapshot presence, quick Archive health, Runtime linkage, recent MCP "
+            "receipts/errors, and explicitly names proprioceptive surfaces not yet implemented."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def house_glance() -> dict[str, object]:
+        def operation() -> dict[str, object]:
+            archive_view: dict[str, object] = {}
+            warnings: list[dict[str, object]] = []
+            for name in ("live", "snapshot"):
+                try:
+                    source = source_for(name)
+                    archive_view[name] = {
+                        "available": True,
+                        **asdict(source.stats()),
+                        "clock": source_clock(source),
+                    }
+                except ArchiveError as exc:
+                    configured = (
+                        settings.live_archive_root is not None
+                        if name == "live"
+                        else settings.snapshot_archive_root is not None
+                    )
+                    archive_view[name] = {
+                        "available": False,
+                        "configured": configured,
+                        "error": str(exc),
+                    }
+                    if configured:
+                        warnings.append(
+                            {
+                                "family": "archive",
+                                "source": name,
+                                "detail": str(exc),
+                            }
+                        )
+
+            quick_health: dict[str, object] | None = None
+            try:
+                quick_health = inspect_archive_health(
+                    source_for("live"),
+                    max_bytes=settings.archive_text_max_bytes,
+                    issue_limit=12,
+                    check_links=False,
+                )
+                health_summary = quick_health.get("summary", {})
+                if isinstance(health_summary, dict) and int(
+                    health_summary.get("issue_count", 0)
+                ):
+                    warnings.append(
+                        {
+                            "family": "archive_health",
+                            "issue_count": health_summary.get("issue_count"),
+                            "detail": "Call archive.health with link checks for full diagnostics.",
+                        }
+                    )
+            except ArchiveError as exc:
+                warnings.append({"family": "archive_health", "detail": str(exc)})
+
+            runtime = runtime_bridge.status()
+            if runtime.get("configured") and not runtime.get("available"):
+                warnings.append(
+                    {
+                        "family": "runtime",
+                        "detail": runtime.get("error", "Runtime linkage unavailable"),
+                    }
+                )
+
+            recent = ledger.recent(limit=5)
+            recent_errors = ledger.recent(limit=5, outcome="error")
+            malformed = max(
+                int(recent.get("malformed_lines", 0)),
+                int(recent_errors.get("malformed_lines", 0)),
+            )
+            if malformed:
+                warnings.append(
+                    {
+                        "family": "audit",
+                        "malformed_lines": malformed,
+                        "detail": "MCP audit ledger contains malformed lines.",
+                    }
+                )
+
+            return {
+                "schema_version": "vestigia.house-glance.v0.1",
+                "generated_at": datetime.now(UTC).isoformat(),
+                "authority": "descriptive_projection_only",
+                "archive": archive_view,
+                "archive_health": quick_health,
+                "runtime": runtime,
+                "audit": {
+                    "recent_events": recent.get("events", []),
+                    "recent_errors": recent_errors.get("events", []),
+                    "receipt_is_memory": False,
+                },
+                "meaningful_diff": {
+                    "computed": False,
+                    "reason": (
+                        "house.glance avoids whole-tree rehashing; call archive.diff or "
+                        "archive.diff_detail when change evidence is needed."
+                    ),
+                },
+                "staged_patches": {
+                    "supported": False,
+                    "open_count": None,
+                    "roadmap_surface": "fs.stage_patch / fs.patch_preview / fs.patch_apply",
+                },
+                "watch_subscriptions": {
+                    "supported": False,
+                    "roadmap_surface": "durable watch spec with cursor/last-seen receipt",
+                },
+                "warnings": warnings,
+            }
+
+        return guarded("house.glance", {}, operation)
+
+    @server.tool(
         name="vestigia.status",
         title="Inspect VESTIGIA MCP deployment",
         description=(
             "Use this when you need this deployment's server version, deployment identity, "
             "executable MCP policy surface, Archive configuration, optional Runtime linkage, "
-            "and audit-ledger health."
+            "audit-ledger health, and a cache-membrane canary for newly deployed capabilities."
         ),
         annotations=READ_ONLY_ANNOTATIONS,
     )
@@ -531,6 +646,19 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     ],
                 },
                 "audit": ledger.summary(),
+                "proprioception": {
+                    "surface_version": "v0.1",
+                    "new_native_tools": [
+                        "archive.health",
+                        "audit.show",
+                        "system.identity",
+                        "house.glance",
+                    ],
+                    "tool_catalog_cache_note": (
+                        "This live policy surface may be newer than a host/thread's cached MCP "
+                        "tool catalog. Compare this list/count to host-visible descriptors."
+                    ),
+                },
             }
 
         return guarded("vestigia.status", {}, operation)
