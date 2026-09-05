@@ -12,9 +12,11 @@ on:
       - "VESTIGIA_Runtime/src/vestigia/mcp_context_source.py"
       - "VESTIGIA_Runtime/src/vestigia/composition.py"
       - "VESTIGIA_Runtime/src/vestigia/workspace_patch_staging.py"
+      - "VESTIGIA_Runtime/src/vestigia/capability_keyring.py"
       - "VESTIGIA_Runtime/tests/test_mcp_projection.py"
       - "VESTIGIA_Runtime/tests/test_context*.py"
       - "VESTIGIA_Runtime/tests/test_workspace_patch_staging.py"
+      - "VESTIGIA_Runtime/tests/test_capability_keyring.py"
       - ".github/workflows/vestigia-mcp-server.yml"
   pull_request:
     paths:
@@ -27,9 +29,11 @@ on:
       - "VESTIGIA_Runtime/src/vestigia/mcp_context_source.py"
       - "VESTIGIA_Runtime/src/vestigia/composition.py"
       - "VESTIGIA_Runtime/src/vestigia/workspace_patch_staging.py"
+      - "VESTIGIA_Runtime/src/vestigia/capability_keyring.py"
       - "VESTIGIA_Runtime/tests/test_mcp_projection.py"
       - "VESTIGIA_Runtime/tests/test_context*.py"
       - "VESTIGIA_Runtime/tests/test_workspace_patch_staging.py"
+      - "VESTIGIA_Runtime/tests/test_capability_keyring.py"
       - ".github/workflows/vestigia-mcp-server.yml"
 
 permissions:
@@ -80,6 +84,7 @@ jobs:
           python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_mcp_context_source.py -v
           python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_context_introspection.py -v
           python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_workspace_patch_staging.py -v
+          python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_capability_keyring.py -v
 
       - name: Run complete Runtime compatibility suite
         shell: pwsh
