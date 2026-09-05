@@ -53,7 +53,12 @@ class McpContextSourceTests(unittest.TestCase):
             "  name: Tester\n"
             "room:\n"
             "  id: hearth\n"
-            "  name: Hearth\n",
+            "  name: Hearth\n"
+            "  active_resident_ids:\n"
+            "    - tester\n"
+            "  participant_ids:\n"
+            "    - tester\n"
+            "    - local-user\n",
             encoding="utf-8",
         )
         (home / "traces").mkdir()
