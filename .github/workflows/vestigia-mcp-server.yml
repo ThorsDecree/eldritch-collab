@@ -1,0 +1,52 @@
+name: VESTIGIA MCP Server
+
+on:
+  push:
+    paths:
+      - "VESTIGIA_MCP_Server/**"
+      - "VESTIGIA_Runtime/src/vestigia/mcp_projection.py"
+      - "VESTIGIA_Runtime/tests/test_mcp_projection.py"
+      - ".github/workflows/vestigia-mcp-server.yml"
+  pull_request:
+    paths:
+      - "VESTIGIA_MCP_Server/**"
+      - "VESTIGIA_Runtime/src/vestigia/mcp_projection.py"
+      - "VESTIGIA_Runtime/tests/test_mcp_projection.py"
+      - ".github/workflows/vestigia-mcp-server.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: VESTIGIA_MCP_Server
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            VESTIGIA_MCP_Server/pyproject.toml
+            VESTIGIA_Runtime/pyproject.toml
+
+      - name: Install Runtime and MCP development packages
+        run: |
+          python -m pip install -e "..\VESTIGIA_Runtime"
+          python -m pip install -e ".[dev]"
+
+      - name: Run MCP test suite
+        run: pytest
+
+      - name: Run Runtime projection boundary tests
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "..\VESTIGIA_Runtime\src"
+          python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_mcp_projection.py -v
