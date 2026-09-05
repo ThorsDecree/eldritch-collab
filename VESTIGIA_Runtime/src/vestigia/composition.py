@@ -47,7 +47,9 @@ class OrderedRegistry:
 
     def entries(self) -> tuple[CompositionEntry, ...]:
         with self._lock:
-            return tuple(sorted(self._entries.values(), key=lambda item: (item.order, item.name)))
+            return tuple(
+                sorted(self._entries.values(), key=lambda item: (item.order, item.name))
+            )
 
     def names(self) -> tuple[str, ...]:
         return tuple(item.name for item in self.entries())
@@ -63,6 +65,7 @@ _receipt_filter = OrderedRegistry("receipt filter")
 _drawer_modes = OrderedRegistry("drawer mode")
 _contracts = OrderedRegistry("contract contribution")
 _workbench_providers = OrderedRegistry("workbench provider")
+_context_sources = OrderedRegistry("context source factory")
 
 _REGISTRIES = (
     _capabilities,
@@ -75,6 +78,7 @@ _REGISTRIES = (
     _drawer_modes,
     _contracts,
     _workbench_providers,
+    _context_sources,
 )
 
 
@@ -144,6 +148,18 @@ def register_workbench_provider(name: str, callback: Callback, *, order: int) ->
     _workbench_providers.register(name, callback, order=order)
 
 
+def register_context_source_factory(name: str, callback: Callback, *, order: int) -> None:
+    """Register a deployment-time constructor for an optional context source.
+
+    Factory callbacks receive ``(config, db)`` and return either one ContextSource or
+    ``None`` when that source is not configured for the deployment. Factories are
+    composition-time declarations only; they do not receive a turn or perform retrieval
+    until ContextAssembler asks the returned source for bounded evidence.
+    """
+
+    _context_sources.register(name, callback, order=order)
+
+
 def freeze_composition() -> None:
     for registry in _REGISTRIES:
         registry.freeze()
@@ -152,6 +168,30 @@ def freeze_composition() -> None:
 def install_capability_contributions(house: Any) -> None:
     for entry in _capabilities.entries():
         entry.callback(house)
+
+
+def build_context_sources(config: Any, db: Any) -> list[Any]:
+    """Construct configured optional context sources in deterministic order."""
+    sources: list[Any] = []
+    names: set[str] = set()
+    for entry in _context_sources.entries():
+        source = entry.callback(config, db)
+        if source is None:
+            continue
+        source_name = str(getattr(source, "name", "")).strip().lower()
+        if not source_name or source_name != getattr(source, "name", None):
+            raise ValueError(
+                f"context source factory {entry.name} returned an invalid normalized name"
+            )
+        if source_name in names:
+            raise ValueError(f"duplicate constructed context source: {source_name}")
+        if not callable(getattr(source, "retrieve", None)):
+            raise TypeError(
+                f"context source factory {entry.name} returned an object without retrieve()"
+            )
+        names.add(source_name)
+        sources.append(source)
+    return sources
 
 
 def render_observatory(
@@ -232,7 +272,9 @@ def filter_receipts(receipts: list[str], *, compact: bool) -> list[str]:
     current = list(receipts)
     for entry in _receipt_filter.entries():
         updated = entry.callback(current, compact=compact)
-        if not isinstance(updated, list) or any(not isinstance(item, str) for item in updated):
+        if not isinstance(updated, list) or any(
+            not isinstance(item, str) for item in updated
+        ):
             raise TypeError(f"receipt filter {entry.name} returned an invalid list")
         current = updated
     return current
@@ -277,7 +319,9 @@ def apply_contract_contributions(
             continue
         current = entry.callback(*current)
         if not isinstance(current, tuple) or len(current) != 5:
-            raise TypeError(f"contract contribution {entry.name} returned an invalid contract")
+            raise TypeError(
+                f"contract contribution {entry.name} returned an invalid contract"
+            )
     return current
 
 
@@ -304,13 +348,19 @@ def render_workbench_cards(
         if not isinstance(result, dict):
             raise TypeError(f"workbench provider {entry.name} returned a non-object")
         raw_lanes = result.get("implemented_lanes", [])
-        if not isinstance(raw_lanes, list) or any(not isinstance(item, str) for item in raw_lanes):
-            raise TypeError(f"workbench provider {entry.name} returned invalid implemented_lanes")
+        if not isinstance(raw_lanes, list) or any(
+            not isinstance(item, str) for item in raw_lanes
+        ):
+            raise TypeError(
+                f"workbench provider {entry.name} returned invalid implemented_lanes"
+            )
         provider_lanes = {item.strip().lower() for item in raw_lanes if item.strip()}
         implemented_lanes.update(provider_lanes)
 
         raw_cards = result.get("cards", [])
-        if not isinstance(raw_cards, list) or any(not isinstance(item, dict) for item in raw_cards):
+        if not isinstance(raw_cards, list) or any(
+            not isinstance(item, dict) for item in raw_cards
+        ):
             raise TypeError(f"workbench provider {entry.name} returned invalid cards")
         providers.append(entry.name)
         for card in raw_cards:
@@ -330,7 +380,9 @@ def render_workbench_cards(
                 )
             card_id = str(card.get("card_id") or "").strip()
             if not card_id:
-                raise ValueError(f"workbench provider {entry.name} emitted a card without card_id")
+                raise ValueError(
+                    f"workbench provider {entry.name} emitted a card without card_id"
+                )
             if card_id in card_ids:
                 raise ValueError(f"duplicate workbench card_id from providers: {card_id}")
             card_ids.add(card_id)
@@ -355,11 +407,17 @@ def dispatch_workbench_action(
 ) -> dict[str, Any]:
     provider_name = str(card.get("provider") or "").strip().lower()
     entry = next(
-        (candidate for candidate in _workbench_providers.entries() if candidate.name == provider_name),
+        (
+            candidate
+            for candidate in _workbench_providers.entries()
+            if candidate.name == provider_name
+        ),
         None,
     )
     if entry is None:
-        raise KeyError("workbench card provider is unavailable; refresh workbench.view")
+        raise KeyError(
+            "workbench card provider is unavailable; refresh workbench.view"
+        )
     result = entry.callback(
         house,
         {
@@ -371,7 +429,9 @@ def dispatch_workbench_action(
         },
     )
     if not isinstance(result, dict):
-        raise TypeError(f"workbench provider {entry.name} returned a non-object action result")
+        raise TypeError(
+            f"workbench provider {entry.name} returned a non-object action result"
+        )
     return result
 
 
@@ -388,4 +448,5 @@ def composition_plan() -> dict[str, Any]:
         "drawer_modes": list(_drawer_modes.names()),
         "contract_contributions": list(_contracts.names()),
         "workbench_providers": list(_workbench_providers.names()),
+        "context_source_factories": list(_context_sources.names()),
     }

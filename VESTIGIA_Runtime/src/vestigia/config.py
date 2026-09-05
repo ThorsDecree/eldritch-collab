@@ -63,10 +63,27 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "current_message_tokens": 2000,
         "image_context_tokens": 3000,
         "capability_panel_tokens": 2200,
+        "external_source_tokens": 2400,
+        "external_source_max_items": 8,
         "resident_max_total_tokens": 20000,
         "resident_max_verbatim_turns": 100,
         "resident_max_compression_source_turns": 2000,
         "resident_max_compressed_transcript_tokens": 20000,
+    },
+    "context_sources": {
+        "mcp_archive": {
+            "enabled": False,
+            "live_archive_root": "",
+            "snapshot_archive_root": "",
+            "prefix": "",
+            "resident_key": "",
+            "max_items": 8,
+            "max_terms": 5,
+            "tokens": 2200,
+            "anchor_chars": 12000,
+            "timeout_seconds": 30,
+            "archive_text_max_bytes": 1000000,
+        },
     },
     "retrieval": {
         "limit": 18,
@@ -239,10 +256,23 @@ ENV_MAP: dict[str, tuple[str, Callable[[str], Any]]] = {
     "VESTIGIA_CURRENT_MESSAGE_TOKENS": ("context.current_message_tokens", _as_int),
     "VESTIGIA_IMAGE_CONTEXT_TOKENS": ("context.image_context_tokens", _as_int),
     "VESTIGIA_CAPABILITY_PANEL_TOKENS": ("context.capability_panel_tokens", _as_int),
+    "VESTIGIA_CONTEXT_EXTERNAL_SOURCE_TOKENS": ("context.external_source_tokens", _as_int),
+    "VESTIGIA_CONTEXT_EXTERNAL_SOURCE_MAX_ITEMS": ("context.external_source_max_items", _as_int),
     "VESTIGIA_RESIDENT_MAX_TOTAL_TOKENS": ("context.resident_max_total_tokens", _as_int),
     "VESTIGIA_RESIDENT_MAX_VERBATIM_TURNS": ("context.resident_max_verbatim_turns", _as_int),
     "VESTIGIA_RESIDENT_MAX_COMPRESSION_SOURCE_TURNS": ("context.resident_max_compression_source_turns", _as_int),
     "VESTIGIA_RESIDENT_MAX_COMPRESSED_TRANSCRIPT_TOKENS": ("context.resident_max_compressed_transcript_tokens", _as_int),
+    "VESTIGIA_CONTEXT_MCP_ENABLED": ("context_sources.mcp_archive.enabled", _as_bool),
+    "VESTIGIA_CONTEXT_MCP_LIVE_ARCHIVE_ROOT": ("context_sources.mcp_archive.live_archive_root", str),
+    "VESTIGIA_CONTEXT_MCP_SNAPSHOT_ARCHIVE_ROOT": ("context_sources.mcp_archive.snapshot_archive_root", str),
+    "VESTIGIA_CONTEXT_MCP_PREFIX": ("context_sources.mcp_archive.prefix", str),
+    "VESTIGIA_CONTEXT_MCP_RESIDENT_KEY": ("context_sources.mcp_archive.resident_key", str),
+    "VESTIGIA_CONTEXT_MCP_MAX_ITEMS": ("context_sources.mcp_archive.max_items", _as_int),
+    "VESTIGIA_CONTEXT_MCP_MAX_TERMS": ("context_sources.mcp_archive.max_terms", _as_int),
+    "VESTIGIA_CONTEXT_MCP_TOKENS": ("context_sources.mcp_archive.tokens", _as_int),
+    "VESTIGIA_CONTEXT_MCP_ANCHOR_CHARS": ("context_sources.mcp_archive.anchor_chars", _as_int),
+    "VESTIGIA_CONTEXT_MCP_TIMEOUT_SECONDS": ("context_sources.mcp_archive.timeout_seconds", _as_int),
+    "VESTIGIA_CONTEXT_MCP_ARCHIVE_TEXT_MAX_BYTES": ("context_sources.mcp_archive.archive_text_max_bytes", _as_int),
     "VESTIGIA_RETRIEVAL_LIMIT": ("retrieval.limit", _as_int),
     "VESTIGIA_TRANSCRIPT_TAIL_MESSAGES": ("retrieval.transcript_tail_messages", _as_int),
     "VESTIGIA_AUTO_EXTRACT_MEMORY": ("memory.auto_extract_conservative_candidates", _as_bool),
@@ -442,6 +472,29 @@ def load_config(home_path: str | Path, env_file: str | Path | None = None) -> Re
 
     if int(data["context"]["total_tokens"]) < 1000:
         raise ValueError("context.total_tokens must be at least 1000")
+    if int(data["context"].get("external_source_tokens", 2400)) < 0:
+        raise ValueError("context.external_source_tokens must not be negative")
+    if int(data["context"].get("external_source_max_items", 8)) < 1:
+        raise ValueError("context.external_source_max_items must be at least 1")
+    mcp_context = data.get("context_sources", {}).get("mcp_archive", {})
+    if bool(mcp_context.get("enabled", False)):
+        if not str(mcp_context.get("live_archive_root", "")).strip():
+            raise ValueError(
+                "context_sources.mcp_archive.live_archive_root is required when enabled"
+            )
+        for key, minimum, maximum in (
+            ("max_items", 1, 50),
+            ("max_terms", 1, 12),
+            ("tokens", 100, 12000),
+            ("anchor_chars", 500, 100000),
+            ("timeout_seconds", 5, 180),
+            ("archive_text_max_bytes", 1000, 100000000),
+        ):
+            value = int(mcp_context.get(key, 0))
+            if value < minimum or value > maximum:
+                raise ValueError(
+                    f"context_sources.mcp_archive.{key} must be between {minimum} and {maximum}"
+                )
     if str(data["discord"].get("ambient_visibility", "allowlisted_only")) not in {
         "allowlisted_only",
         "all_channel",
