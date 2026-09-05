@@ -1,0 +1,88 @@
+name: VESTIGIA MCP Server
+
+on:
+  push:
+    paths:
+      - "VESTIGIA_MCP_Server/**"
+      - "VESTIGIA_Runtime/pyproject.toml"
+      - "VESTIGIA_Runtime/src/vestigia/bootstrap.py"
+      - "VESTIGIA_Runtime/src/vestigia/config.py"
+      - "VESTIGIA_Runtime/src/vestigia/mcp_projection.py"
+      - "VESTIGIA_Runtime/src/vestigia/context*.py"
+      - "VESTIGIA_Runtime/src/vestigia/mcp_context_source.py"
+      - "VESTIGIA_Runtime/src/vestigia/composition.py"
+      - "VESTIGIA_Runtime/src/vestigia/workspace_patch_staging.py"
+      - "VESTIGIA_Runtime/tests/test_mcp_projection.py"
+      - "VESTIGIA_Runtime/tests/test_context*.py"
+      - "VESTIGIA_Runtime/tests/test_workspace_patch_staging.py"
+      - ".github/workflows/vestigia-mcp-server.yml"
+  pull_request:
+    paths:
+      - "VESTIGIA_MCP_Server/**"
+      - "VESTIGIA_Runtime/pyproject.toml"
+      - "VESTIGIA_Runtime/src/vestigia/bootstrap.py"
+      - "VESTIGIA_Runtime/src/vestigia/config.py"
+      - "VESTIGIA_Runtime/src/vestigia/mcp_projection.py"
+      - "VESTIGIA_Runtime/src/vestigia/context*.py"
+      - "VESTIGIA_Runtime/src/vestigia/mcp_context_source.py"
+      - "VESTIGIA_Runtime/src/vestigia/composition.py"
+      - "VESTIGIA_Runtime/src/vestigia/workspace_patch_staging.py"
+      - "VESTIGIA_Runtime/tests/test_mcp_projection.py"
+      - "VESTIGIA_Runtime/tests/test_context*.py"
+      - "VESTIGIA_Runtime/tests/test_workspace_patch_staging.py"
+      - ".github/workflows/vestigia-mcp-server.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: VESTIGIA_MCP_Server
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            VESTIGIA_MCP_Server/pyproject.toml
+            VESTIGIA_Runtime/pyproject.toml
+
+      - name: Install Runtime and MCP development packages
+        run: |
+          python -m pip install -e "..\VESTIGIA_Runtime[dev,discord,tokens,mcp-context]"
+          python -m pip install -e ".[dev]"
+          python -m pip check
+
+      - name: Compile Runtime and MCP source
+        shell: pwsh
+        run: |
+          python -m compileall -q ..\VESTIGIA_Runtime\src
+          python -m compileall -q src
+
+      - name: Run MCP test suite
+        run: pytest
+
+      - name: Run focused Runtime MCP integration boundary tests
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "..\VESTIGIA_Runtime\src"
+          python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_mcp_projection.py -v
+          python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_context_source_contract.py -v
+          python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_context_sources.py -v
+          python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_mcp_context_source.py -v
+          python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_context_introspection.py -v
+          python -m unittest discover -s ..\VESTIGIA_Runtime\tests -p test_workspace_patch_staging.py -v
+
+      - name: Run complete Runtime compatibility suite
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "..\VESTIGIA_Runtime\src"
+          python -m pytest -q ..\VESTIGIA_Runtime\tests
