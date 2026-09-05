@@ -17,6 +17,8 @@ class Settings:
     state_dir: Path
     deployment_id: str
     archive_text_max_bytes: int = 1_000_000
+    runtime_home: Path | None = None
+    runtime_env_file: Path | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -51,4 +53,6 @@ class Settings:
             state_dir=state_dir,
             deployment_id=deployment_id,
             archive_text_max_bytes=max_bytes,
+            runtime_home=_optional_path("VESTIGIA_MCP_RUNTIME_HOME"),
+            runtime_env_file=_optional_path("VESTIGIA_MCP_RUNTIME_ENV_FILE"),
         )
