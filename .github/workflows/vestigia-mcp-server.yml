@@ -37,8 +37,10 @@ jobs:
             VESTIGIA_MCP_Server/pyproject.toml
             VESTIGIA_Runtime/pyproject.toml
 
-      - name: Install MCP package and development dependencies
-        run: python -m pip install -e ".[dev]"
+      - name: Install Runtime and MCP development packages
+        run: |
+          python -m pip install -e "..\VESTIGIA_Runtime"
+          python -m pip install -e ".[dev]"
 
       - name: Run MCP test suite
         run: pytest
