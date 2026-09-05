@@ -37,6 +37,10 @@ def test_configured_runtime_bridge_projects_and_dispatches_reads(tmp_path: Path)
     assert "fs.patch_list" in names
     assert "fs.patch_preview" in names
     assert "fs.patch_validate" in names
+    assert "policy.whoami" in names
+    assert "policy.can" in names
+    assert "policy.explain" in names
+    assert "capability.preview" in names
     assert "file.write" not in names
     assert "fs.stage_patch" not in names
     assert "fs.patch_discard" not in names
@@ -51,6 +55,34 @@ def test_configured_runtime_bridge_projects_and_dispatches_reads(tmp_path: Path)
     assert result["runtime"]["ok"] is True
     assert result["runtime"]["action"] == "status"
     assert result["runtime"]["receipt_id"]
+
+    whoami = bridge.call(
+        action="policy.whoami",
+        arguments={},
+        request_id="req_keyring_whoami",
+    )
+    assert whoami["runtime"]["principal"]["principal_id"] == "resident:test-resident"
+    assert whoami["runtime"]["principal"]["route"]["interface"] == "mcp"
+    assert whoami["runtime"]["principal"]["route"]["mcp_deployment_id"] == "mcp-test"
+    assert whoami["runtime"]["authority_epoch"] == 1
+
+    preview = bridge.call(
+        action="capability.preview",
+        arguments={
+            "capability": "fs.stage_patch",
+            "arguments": {
+                "operation": "create",
+                "path": "workspace/keyring-from-mcp.md",
+                "content": "preview only",
+            },
+        },
+        request_id="req_keyring_preview",
+    )
+    assert preview["runtime"]["preflight"]["decision"] == "allow"
+    assert preview["runtime"]["preflight"]["effect_class"] == "prepare"
+    assert preview["runtime"]["preflight"]["schema_valid"] is True
+    assert preview["runtime"]["preview_is_authorization"] is False
+    assert preview["runtime"]["target_executed"] is False
 
     with pytest.raises(RuntimeBridgeError):
         bridge.call(
