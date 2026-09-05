@@ -68,6 +68,24 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Inspect canonical house_index registry targets against the selected Archive source.",
     ),
     Capability(
+        "runtime.status",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect optional VESTIGIA Runtime linkage and its read-only projection status.",
+    ),
+    Capability(
+        "runtime.capabilities",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect the read-only projection derived from Runtime's executable CapabilityRegistry.",
+    ),
+    Capability(
+        "runtime.call",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Dispatch one Runtime capability only when Runtime itself classifies it as a safe read projection.",
+    ),
+    Capability(
         "receipts.recent",
         EffectClass.PERCEIVE,
         Decision.ALLOW,
@@ -77,7 +95,7 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "vestigia.status",
         EffectClass.PERCEIVE,
         Decision.ALLOW,
-        "Inspect this deployment's version, policy surface, Archive configuration, and audit health.",
+        "Inspect this deployment's version, policy surface, Archive configuration, Runtime linkage, and audit health.",
     ),
 )
 
