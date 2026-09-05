@@ -10,9 +10,14 @@ def test_recent_receipts_are_filtered_and_newest_first(tmp_path: Path) -> None:
     status = policy.require_allowed("archive.status")
     read_text = policy.require_allowed("archive.read_text")
 
-    first = ledger.record(status, {}, "ok")
-    second = ledger.record(read_text, {"path": "manifest.md"}, "error")
-    third = ledger.record(status, {}, "ok")
+    first = ledger.record(status, {}, "ok", request_id="req_a")
+    second = ledger.record(
+        read_text,
+        {"path": "manifest.md"},
+        "error",
+        request_id="req_b",
+    )
+    third = ledger.record(status, {}, "ok", request_id="req_a")
 
     recent = ledger.recent(limit=2)
     assert [event["event_id"] for event in recent["events"]] == [
@@ -30,6 +35,13 @@ def test_recent_receipts_are_filtered_and_newest_first(tmp_path: Path) -> None:
         third.event_id,
         first.event_id,
     ]
+
+    request_only = ledger.recent(limit=10, request_id="req_a")
+    assert [event["event_id"] for event in request_only["events"]] == [
+        third.event_id,
+        first.event_id,
+    ]
+    assert all(event["request_id"] == "req_a" for event in request_only["events"])
 
 
 def test_audit_summary_counts_valid_and_malformed_lines(tmp_path: Path) -> None:
