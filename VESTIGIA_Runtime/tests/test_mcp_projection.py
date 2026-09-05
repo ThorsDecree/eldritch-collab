@@ -20,6 +20,30 @@ class FakeRegistry:
                 "group": "house",
                 "input_schema": {"type": "object"},
             },
+            "policy.whoami": {
+                "name": "policy.whoami",
+                "description": "Inspect current principal and authority epoch.",
+                "effects": ["database:read"],
+                "confirmation": "none",
+                "outward_facing": False,
+                "callable_now": True,
+                "dispatchable_via_tool_action": True,
+                "schema_version": "v1",
+                "group": "policy",
+                "input_schema": {"type": "object"},
+            },
+            "capability.preview": {
+                "name": "capability.preview",
+                "description": "Preview one capability without executing it.",
+                "effects": ["database:read"],
+                "confirmation": "none",
+                "outward_facing": False,
+                "callable_now": True,
+                "dispatchable_via_tool_action": True,
+                "schema_version": "v1",
+                "group": "policy",
+                "input_schema": {"type": "object"},
+            },
             "file.write": {
                 "name": "file.write",
                 "description": "Write workspace text.",
@@ -93,10 +117,10 @@ class McpProjectionTests(unittest.TestCase):
         house = FakeHouse()
         projected = read_projection(house)
         self.assertEqual(projected["authority"], "runtime_capability_registry")
-        self.assertEqual(projected["capability_count"], 2)
+        self.assertEqual(projected["capability_count"], 4)
         self.assertEqual(
             {item["name"] for item in projected["capabilities"]},
-            {"status", "fs.patch_validate"},
+            {"status", "fs.patch_validate", "policy.whoami", "capability.preview"},
         )
         self.assertEqual(len(projected["capability_digest_sha256"]), 64)
 
