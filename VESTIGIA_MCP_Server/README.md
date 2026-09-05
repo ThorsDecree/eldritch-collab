@@ -8,25 +8,26 @@ auditable semantic boundary between a deployment and explicitly exposed capabili
 ## Design invariant
 
 ```text
-MCP host -> VESTIGIA MCP -> live policy -> adapter -> local/external system
-                       \-> audit receipt
+MCP host -> VESTIGIA MCP -> live policy / projection -> local system
+                       \-> MCP audit receipt
 ```
 
-The model-facing description of a tool is not authority. The live server policy is authority.
-Unknown capabilities are denied by default.
+The model-facing description of a tool is not authority. Executable policy is authority.
+Unknown native MCP capabilities are denied by default. When Runtime is linked, Runtime's own
+`CapabilityRegistry` / `HousePort` remains authoritative for Runtime actions.
 
-The capability vocabulary is deliberately split into three effect classes:
+The native MCP capability vocabulary is deliberately split into three effect classes:
 
 - **PERCEIVE** - read or inspect without changing the target system.
 - **PREPARE** - create a draft, staged action, crop, queue item, or other reversible working state.
 - **ACT** - cause an externally consequential or canonical mutation.
 
-Version `0.2.0.dev0` ("Lantern & Red Thread") remains PERCEIVE-only while the Archive and
-provenance surfaces are hardened before adding hands.
+Version `0.2.0.dev0` ("Lantern & Red Thread") remains PERCEIVE-only while perception,
+provenance, and cross-layer identity are hardened before adding hands.
 
-All current tools also advertise MCP read-only/non-destructive/non-open-world annotations so
-hosts can frame them accurately. Those annotations are descriptive hints only; executable
-server policy remains authoritative.
+All current tools advertise MCP read-only/non-destructive/non-open-world annotations so hosts
+can frame them accurately. Those annotations are descriptive hints only; executable server and
+Runtime policy remain authoritative.
 
 ## Sensory surface
 
@@ -70,6 +71,48 @@ Resources:
 - `vestigia://archive/live/manifest`
 - `vestigia://archive/snapshot/manifest`
 
+### Runtime projection: one authority, another route
+
+Optional tools:
+
+- `runtime.status`
+- `runtime.capabilities`
+- `runtime.call`
+
+This is intentionally **not** a second Runtime capability ontology.
+
+```text
+Runtime CapabilityRegistry / HousePort
+                |
+                v
+        read projection adapter
+                |
+                v
+             MCP host
+```
+
+`runtime.capabilities()` derives its surface from the live Runtime registry. The first
+projection admits only capabilities that Runtime currently reports as callable, non-outward,
+confirmation-free, and composed entirely of `filesystem:read` / `database:read` effects.
+`runtime.capabilities(target)` returns the Runtime-owned full contract and JSON schema for one
+projected action.
+
+`runtime.call(action, arguments)` checks the same projection again, forces a non-continuing
+`after=finish` invocation, and dispatches through `HousePort.dispatch`. Runtime validation,
+policy/authorizers, and durable Runtime receipts therefore remain in force. MCP does not call a
+provider or instantiate `CoreRuntime` through this bridge.
+
+Each projected call receives one `request_id`. That ID is written into the MCP audit event and
+passed into Runtime as the HousePort turn/request identifier, giving the two independent receipt
+layers an explicit join key without pretending either receipt proves the other.
+
+The embedded HousePort may maintain Runtime-derived indexes/schemas and action receipts. The
+projection's "read-only" promise means no canonical resident/Archive/outward mutation through
+the projected action surface; it does not promise a byte-for-byte untouched private Runtime
+bookkeeping database.
+
+See `docs/RUNTIME_PROJECTION.md` for the boundary and future Runtime -> MCP context-source plan.
+
 ### Receipts and proprioception
 
 Additional read-only tools:
@@ -77,16 +120,17 @@ Additional read-only tools:
 - `receipts.recent`
 - `vestigia.status`
 
-`receipts.recent` exposes recent capability receipts for provenance/debugging. Receipts contain
-the SHA-256 of canonicalized tool arguments rather than raw arguments. Filters are available for
-capability and outcome.
+`receipts.recent` exposes recent MCP capability receipts for provenance/debugging. Receipts
+contain the SHA-256 of canonicalized tool arguments rather than raw arguments. Filters are
+available for capability, outcome, and cross-layer `request_id`.
 
-`vestigia.status` reports the running server version, deployment ID, current executable policy
-surface, whether live/snapshot Archive sources are configured, and bounded audit-ledger health.
-It is intended to make host/schema/deployment mismatches easier to diagnose.
+`vestigia.status` reports the running server version, deployment ID, current executable MCP
+policy surface, Archive configuration, optional Runtime linkage configuration, and bounded
+audit-ledger health.
 
-No tool in the current slice modifies either Archive source or any external system. Read tools do
-append MCP-owned audit receipts outside the Archive roots.
+No tool in the current slice modifies either Archive source or any external system. Read tools
+do append MCP-owned audit receipts outside the Archive roots. Runtime projected reads preserve
+Runtime's own receipt path as a separate evidence layer.
 
 ## Setup
 
@@ -106,6 +150,30 @@ The production package itself reads only normal process environment variables an
 search the filesystem for `.env` files. The checked-in `dev_server.py` development entrypoint
 loads the project-local `.env` before importing the MCP server so Inspector-launched stdio
 processes receive the intended configuration.
+
+### Optional Runtime linkage
+
+Install the sibling Runtime package into the MCP virtual environment once:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e "..\VESTIGIA_Runtime"
+```
+
+Then point MCP at one resident Home:
+
+```text
+VESTIGIA_MCP_RUNTIME_HOME=C:\path\to\VESTIGIA_Runtime\homes\resident
+VESTIGIA_MCP_RUNTIME_ENV_FILE=C:\path\to\VESTIGIA_Runtime\.env
+```
+
+The env-file setting is optional. The bridge does not initialize a language-model provider, but
+an explicit Runtime env file is preferable when the Home's effective configuration depends on
+it.
+
+For Inspector development, place those settings in this project's `.env`. For the production
+stdio/tunnel launcher, set `VESTIGIA_MCP_RUNTIME_HOME` (and optional env-file path) in the
+launching process or as ordinary Windows user environment variables. The batch launcher does
+not parse `.env` files or embed credentials.
 
 For an MCP host that launches local stdio servers:
 
@@ -138,7 +206,7 @@ tunnel-client-v0.0.14-windows-amd64\tunnel-client.exe
 ```
 
 and uses the existing `vestigia-local` profile by default. It resolves the current Garden
-layout relative to the project directory:
+Archive layout relative to the project directory:
 
 ```text
 GARDEN\
@@ -163,12 +231,16 @@ batch file. An alternate tunnel profile may be supplied as the first argument.
 - Literal search only scans configured text-like suffixes and enforces the same per-file byte ceiling.
 - Non-UTF-8 and oversized search candidates are reported as skipped rather than silently coerced.
 - Canonical registry diagnostics report discrepancies without modifying the Archive.
-- Unknown capabilities are denied by default.
-- Audit receipts store an argument hash rather than raw tool arguments.
+- Runtime projection is derived from Runtime's own executable registry rather than copied into MCP.
+- Runtime projected calls still pass through `HousePort.dispatch` and create Runtime receipts.
+- The current Runtime projection cannot dispatch outward/confirmed/write capabilities.
+- Unknown native MCP capabilities are denied by default.
+- MCP audit receipts store an argument hash rather than raw tool arguments.
+- Cross-layer Runtime calls preserve a shared request ID without blending receipt authority.
 - MCP-owned state is kept outside the Archive roots.
 - Current MCP tool annotations explicitly advertise read-only, non-destructive, closed-world behavior.
 
-See `docs/ARCHITECTURE.md` and `docs/THREAT_MODEL.md`.
+See `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md`, and `docs/RUNTIME_PROJECTION.md`.
 
 ## v0.2 - Lantern & Red Thread
 
@@ -178,11 +250,19 @@ Current / near-term work:
 2. Add one-path diff detail for fast seam inspection. **Done.**
 3. Add bounded literal Archive text search with explicit skip accounting. **Done.**
 4. Inspect canonical `00_Bootloader/house_index.json` targets against Archive contents. **Done.**
-5. Make audit receipts queryable through read-only MCP tools. **Done.**
+5. Make MCP audit receipts queryable. **Done.**
 6. Add top-level VESTIGIA status/proprioception. **Done.**
-7. Add orphan/unindexed and broken-link diagnostics without repairing canonical content.
-8. Add bounded recent-change views without turning the snapshot witness into a hidden mutable cache.
+7. Project Runtime's existing read capability contracts through MCP. **Initial bridge done.**
+8. Preserve a request ID across MCP -> Runtime receipt layers. **Done for projected calls.**
+9. Add `archive.health`, coverage canaries, orphan/unindexed, and broken-link diagnostics.
+10. Add `system.identity` with source/config/capability fingerprints and qualification state.
+11. Add bounded recent-change/watch views without turning the snapshot witness into a hidden mutable cache.
+12. Add a Runtime context-source composition seam and optional MCP Archive source.
 
-After the perception layer is strong, the next load-bearing phase is the deployment Keyring:
-explicit scoped grants and hash-bound confirmations for PREPARE/ACT capabilities. Runtime and
-social adapters come after that boundary exists.
+Before write-capable projection, the next load-bearing phase is the deployment Keyring: explicit
+scoped grants, authority epochs, dry-run/preview semantics, hash-bound staged objects, and a final
+dispatch recheck at the last reversible boundary.
+
+Local execution should extend Runtime's existing Workshop/script shelf rather than introduce a
+raw MCP shell. Staged filesystem patches and bounded execution profiles belong behind that same
+Runtime authority/evidence model.
