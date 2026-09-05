@@ -38,6 +38,7 @@ class AuditEvent:
     decision: str
     arguments_sha256: str
     outcome: str
+    request_id: str | None = None
     detail: str | None = None
 
 
@@ -61,6 +62,7 @@ class AuditLedger:
         outcome: str,
         *,
         decision: Decision = Decision.ALLOW,
+        request_id: str | None = None,
         detail: str | None = None,
     ) -> AuditEvent:
         event = AuditEvent(
@@ -72,6 +74,7 @@ class AuditLedger:
             decision=decision.value,
             arguments_sha256=hash_arguments(arguments),
             outcome=outcome,
+            request_id=request_id,
             detail=detail,
         )
         line = json.dumps(asdict(event), ensure_ascii=False, sort_keys=True)
@@ -88,16 +91,20 @@ class AuditLedger:
         limit: int = 25,
         capability: str | None = None,
         outcome: str | None = None,
+        request_id: str | None = None,
     ) -> dict[str, object]:
         """Return newest matching receipts without exposing raw tool arguments."""
         if limit <= 0 or limit > 200:
             raise AuditError("Receipt limit must be between 1 and 200")
         capability_filter = capability.strip() if capability else None
         outcome_filter = outcome.strip() if outcome else None
+        request_filter = request_id.strip() if request_id else None
         if capability is not None and not capability_filter:
             raise AuditError("Capability filter must not be blank")
         if outcome is not None and not outcome_filter:
             raise AuditError("Outcome filter must not be blank")
+        if request_id is not None and not request_filter:
+            raise AuditError("Request ID filter must not be blank")
 
         matching: deque[dict[str, object]] = deque(maxlen=limit)
         matched_total = 0
@@ -112,6 +119,7 @@ class AuditLedger:
                     "filters": {
                         "capability": capability_filter,
                         "outcome": outcome_filter,
+                        "request_id": request_filter,
                     },
                     "excludes_current_call": True,
                 }
@@ -131,6 +139,8 @@ class AuditLedger:
                         continue
                     if outcome_filter and event.get("outcome") != outcome_filter:
                         continue
+                    if request_filter and event.get("request_id") != request_filter:
+                        continue
                     matched_total += 1
                     matching.append(event)
 
@@ -141,6 +151,7 @@ class AuditLedger:
             "filters": {
                 "capability": capability_filter,
                 "outcome": outcome_filter,
+                "request_id": request_filter,
             },
             "excludes_current_call": True,
         }
