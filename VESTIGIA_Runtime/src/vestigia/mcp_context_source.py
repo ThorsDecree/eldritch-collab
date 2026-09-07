@@ -167,6 +167,90 @@ class VestigiaArchiveMcpSource:
                 f"VESTIGIA Archive MCP retrieval failed: {type(exc).__name__}: {exc}"
             ) from exc
 
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Call one MCP tool through the same credential-minimizing stdio bridge.
+
+        Resident-facing MCP capabilities use this narrow seam rather than receiving a raw
+        client. Image bytes remain separated from text/structured results so callers can put
+        them into Runtime's private content-addressed image shelf without copying base64 into
+        resident-visible receipts.
+        """
+
+        tool_name = str(name).strip()
+        if not tool_name:
+            raise ValueError("MCP tool name must not be empty")
+        try:
+            return _run_async_blocking(
+                lambda: self._call_tool_async(tool_name, dict(arguments)),
+                float(self.source_config.timeout_seconds),
+            )
+        except ContextSourceError:
+            raise
+        except Exception as exc:
+            raise ContextSourceError(
+                f"VESTIGIA Archive MCP tool call failed: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    async def _call_tool_async(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            from mcp import Client, StdioServerParameters
+        except ImportError as exc:
+            raise ContextSourceError(
+                "MCP Archive tools are enabled but the optional MCP SDK is not installed; "
+                "install VESTIGIA Runtime with the 'mcp-context' extra"
+            ) from exc
+
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "vestigia_mcp.cli"],
+            env=self._child_env(),
+        )
+        async with Client(params) as client:
+            result = await client.call_tool(name, arguments)
+            text_blocks: list[str] = []
+            image_blocks: list[dict[str, str]] = []
+            for block in result.content:
+                block_type = str(getattr(block, "type", ""))
+                if block_type == "text":
+                    text_blocks.append(str(getattr(block, "text", "")))
+                elif block_type == "image":
+                    image_blocks.append(
+                        {
+                            "data": str(getattr(block, "data", "")),
+                            "mime_type": str(getattr(block, "mime_type", "")),
+                        }
+                    )
+            if result.is_error:
+                detail = "; ".join(item for item in text_blocks if item).strip()
+                raise ContextSourceError(
+                    f"MCP tool {name} returned an error"
+                    + (f": {detail}" if detail else "")
+                )
+            structured = result.structured_content
+            return {
+                "tool": name,
+                "structured_content": (
+                    dict(structured) if isinstance(structured, dict) else None
+                ),
+                "text_blocks": text_blocks,
+                "image_blocks": image_blocks,
+                "protocol_version": str(client.protocol_version or "") or None,
+                "server_name": (
+                    str(client.server_info.name or "") or None
+                    if client.server_info is not None
+                    else None
+                ),
+                "server_version": (
+                    str(client.server_info.version or "") or None
+                    if client.server_info is not None
+                    else None
+                ),
+            }
+
     def _child_env(self) -> dict[str, str]:
         env = {
             "VESTIGIA_MCP_LIVE_ARCHIVE_ROOT": str(self.source_config.live_root),
