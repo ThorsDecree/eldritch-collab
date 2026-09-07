@@ -23,6 +23,7 @@ _INSTALLATION_PLAN: Final[tuple[tuple[str, str], ...]] = (
     ("gaming_tools", "register_composition"),
     ("workbench", "register_composition"),
     ("mcp_context_source", "register_composition"),
+    ("mcp_archive_tools", "register_composition"),
     ("context_introspection", "register_composition"),
     ("workspace_patch_staging", "register_composition"),
 )

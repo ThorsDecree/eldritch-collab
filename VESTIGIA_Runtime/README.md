@@ -14,6 +14,7 @@ For operator configuration and providers:
 
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
 - [docs/PROVIDERS.md](docs/PROVIDERS.md)
+- [docs/MCP_ARCHIVE_CLIENT.md](docs/MCP_ARCHIVE_CLIENT.md)
 - [`.env.example`](.env.example)
 
 For architecture and release history:
@@ -63,6 +64,7 @@ The active development line includes, among other things:
 - bounded Tool Forge and workshop/sandbox tooling;
 - gaming dice;
 - Workbench Continue-Reading provider and provider-neutral Workbench substrate;
+- optional read-only MCP Archive context and resident browsing tools;
 - CLI, Discord, and private localhost web doorways;
 - pack/restore, doctor, support bundle, and deterministic fake-provider testing.
 
@@ -82,6 +84,7 @@ Depending on how you run it:
 - **local/third-party OpenAI-compatible text:** a compatible HTTP endpoint plus the current client's required nonempty `OPENAI_API_KEY` string;
 - **Discord:** Discord bot token and the `discord` package extra;
 - **local browser UI:** the `web-ui` package extra; it binds only to localhost;
+- **local MCP Archive window:** the `mcp-context` extra plus the sibling VESTIGIA MCP Server;
 - **local OCR:** Tesseract 5;
 - **OpenAI-backed images/vision:** compatible image/Responses endpoints and credentials.
 
@@ -298,6 +301,17 @@ VESTIGIA_WEB_ALLOW_HTTP=false
 ```
 
 Remote content is treated as untrusted evidence and constrained by the Runtime's Library Window/quarantine rules rather than gaining authority because it appeared on a webpage.
+
+## MCP Archive window
+
+Runtime can launch the sibling VESTIGIA MCP Server over local stdio as an optional,
+read-only Archive window. When enabled, Liora can intentionally list, search, read, and
+health-check Archive records through `mcp.archive.*` capabilities. Verified image reads enter
+her private image shelf with provenance and remain governed by the existing image policies.
+
+There is no arbitrary MCP passthrough and no Archive write capability in this bridge.
+
+See [docs/MCP_ARCHIVE_CLIENT.md](docs/MCP_ARCHIVE_CLIENT.md).
 
 ## Images
 
