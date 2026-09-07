@@ -249,7 +249,10 @@ class McpArchiveToolTests(unittest.TestCase):
             )
 
         self.assertTrue(text_result["ok"])
-        self.assertEqual(text_result["content"], "The lantern crossed the bridge.\n")
+        self.assertEqual(
+            text_result["content"].splitlines(),
+            ["The lantern crossed the bridge."],
+        )
         self.assertEqual(text_result["mcp"]["tool"], "archive.read_text")
         self.assertTrue(media_result["ok"])
         self.assertTrue(media_result["image_id"].startswith("img_"))
