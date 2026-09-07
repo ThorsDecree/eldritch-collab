@@ -22,10 +22,12 @@ class RuntimeBridge:
         env_file: Path | None,
         *,
         deployment_id: str,
+        write_actions: tuple[str, ...] = (),
     ) -> None:
         self._home = home.expanduser() if home is not None else None
         self._env_file = env_file.expanduser() if env_file is not None else None
         self._deployment_id = deployment_id
+        self._write_actions = tuple(sorted(set(write_actions)))
         self._lock = threading.Lock()
         self._loaded: dict[str, Any] | None = None
 
@@ -53,7 +55,9 @@ class RuntimeBridge:
                 from vestigia.db import ContinuityDB
                 from vestigia.house_tools import HousePort
                 from vestigia.mcp_projection import (
+                    dispatch_mutation_projection,
                     dispatch_read_projection,
+                    mutation_projection,
                     read_projection,
                 )
             except ImportError as exc:
@@ -85,6 +89,8 @@ class RuntimeBridge:
                 "house": house,
                 "read_projection": read_projection,
                 "dispatch_read_projection": dispatch_read_projection,
+                "mutation_projection": mutation_projection,
+                "dispatch_mutation_projection": dispatch_mutation_projection,
             }
             return self._loaded
 
@@ -101,6 +107,9 @@ class RuntimeBridge:
             loaded = self._load()
             house = loaded["house"]
             projection = loaded["read_projection"](house)
+            mutation_projection = loaded["mutation_projection"](
+                house, self._write_actions
+            )
             return {
                 "configured": True,
                 "available": True,
@@ -112,6 +121,17 @@ class RuntimeBridge:
                 "projected_capability_count": projection["capability_count"],
                 "capability_digest_sha256": projection["capability_digest_sha256"],
                 "projection_authority": projection["authority"],
+                "mutation_projection": {
+                    "enabled": bool(self._write_actions),
+                    "configured_actions": list(self._write_actions),
+                    "projected_capability_count": mutation_projection[
+                        "capability_count"
+                    ],
+                    "capability_digest_sha256": mutation_projection[
+                        "capability_digest_sha256"
+                    ],
+                    "authority": mutation_projection["authority"],
+                },
                 "provider_initialized": False,
                 "provider_calls_enabled_by_bridge": False,
                 "note": (
@@ -158,4 +178,37 @@ class RuntimeBridge:
                 raise
             raise RuntimeBridgeError(
                 f"Runtime projected call failed: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    def write_capabilities(self, target: str | None = None) -> dict[str, Any]:
+        loaded = self._load()
+        try:
+            return loaded["mutation_projection"](
+                loaded["house"], self._write_actions, target
+            )
+        except (KeyError, ValueError, PermissionError) as exc:
+            raise RuntimeBridgeError(str(exc)) from exc
+
+    def write(
+        self,
+        *,
+        action: str,
+        arguments: dict[str, Any] | None,
+        request_id: str,
+    ) -> dict[str, Any]:
+        loaded = self._load()
+        try:
+            return loaded["dispatch_mutation_projection"](
+                loaded["house"],
+                action=action,
+                arguments=arguments,
+                request_id=request_id,
+                allowed_actions=self._write_actions,
+                deployment_id=self._deployment_id,
+            )
+        except Exception as exc:
+            if isinstance(exc, RuntimeBridgeError):
+                raise
+            raise RuntimeBridgeError(
+                f"Runtime projected mutation failed: {type(exc).__name__}: {exc}"
             ) from exc

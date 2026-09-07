@@ -189,6 +189,16 @@ No complete-continuity claim. No canonical write merely because a capsule was ge
 
 Needed primitives:
 
+Initial bounded-hand slice now present:
+
+- deployment-scoped named Runtime mutation grants;
+- live intersection with Runtime-owned contracts;
+- final `HousePort` dispatch recheck;
+- shared request IDs and separate MCP/Runtime receipts;
+- access to Runtime's existing workspace hash checks, byte limits, and staged patch shelf.
+
+Still needed:
+
 - deployment / resident / principal identity;
 - capability grants scoped to targets/workspaces/accounts;
 - ALLOW / CONFIRM / DENY;
@@ -358,7 +368,8 @@ surveillance.
 
 Potential directions:
 
-- media inspection/contact sheets/resize/transcode/frame extraction;
+- bounded signature-checked Archive raster retrieval (**initial image sight present**);
+- richer media inspection/contact sheets/resize/transcode/frame extraction;
 - normalized social envelopes with raw-platform provenance retained;
 - MCP federation: external MCP servers as organs behind VESTIGIA policy/receipts;
 - local tray lantern / health dashboard;

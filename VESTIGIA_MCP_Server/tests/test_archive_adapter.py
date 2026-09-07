@@ -6,6 +6,9 @@ import pytest
 from vestigia_mcp.adapters.archive import ArchiveError, ArchiveSource
 
 
+PNG = b"\x89PNG\r\n\x1a\n" + b"bounded-fixture"
+
+
 def write_zip(path: Path, files: dict[str, str]) -> None:
     with ZipFile(path, "w") as archive:
         for name, content in files.items():
@@ -34,6 +37,46 @@ def test_rejects_traversal_and_binary_text_read(tmp_path: Path) -> None:
         source.read_text("../manifest.md", 100)
     with pytest.raises(ArchiveError):
         source.read_text("image.png", 100)
+
+
+def test_reads_bounded_signature_checked_media_from_directory_and_zip(
+    tmp_path: Path,
+) -> None:
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "image.png").write_bytes(PNG)
+    media = ArchiveSource(live).read_media("image.png", 100)
+    assert media.data == PNG
+    assert media.mime_type == "image/png"
+    assert media.size == len(PNG)
+    assert len(media.sha256) == 64
+
+    snapshot = tmp_path / "snapshot.zip"
+    with ZipFile(snapshot, "w") as archive:
+        archive.writestr("art/image.png", PNG)
+    zipped = ArchiveSource(snapshot).read_media("art/image.png", 100)
+    assert zipped.data == PNG
+    assert zipped.mime_type == "image/png"
+
+
+def test_media_rejects_spoofing_unsupported_types_and_byte_overflow(
+    tmp_path: Path,
+) -> None:
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "spoof.png").write_bytes(b"not-an-image")
+    (live / "wrong.jpg").write_bytes(PNG)
+    (live / "active.svg").write_text("<svg/>", encoding="utf-8")
+    source = ArchiveSource(live)
+
+    with pytest.raises(ArchiveError, match="signature"):
+        source.read_media("spoof.png", 100)
+    with pytest.raises(ArchiveError, match="does not match"):
+        source.read_media("wrong.jpg", 100)
+    with pytest.raises(ArchiveError, match="only exposes"):
+        source.read_media("active.svg", 100)
+    with pytest.raises(ArchiveError, match="byte ceiling"):
+        source.read_media("wrong.jpg", 4)
 
 
 def test_diff_reports_added_removed_changed_and_unchanged(tmp_path: Path) -> None:

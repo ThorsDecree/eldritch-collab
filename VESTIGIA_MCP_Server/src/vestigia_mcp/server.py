@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -8,7 +10,7 @@ from typing import Any, Callable, TypeVar
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ResourceError, ToolError
-from mcp.types import ToolAnnotations
+from mcp.types import ImageContent, TextContent, ToolAnnotations
 
 from . import __version__
 from .adapters.archive import ArchiveError, ArchiveSource, normalize_relative_path
@@ -30,6 +32,12 @@ READ_ONLY_ANNOTATIONS = ToolAnnotations(
     destructive_hint=False,
     open_world_hint=False,
     idempotent_hint=True,
+)
+LOCAL_WRITE_ANNOTATIONS = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
+    open_world_hint=False,
+    idempotent_hint=False,
 )
 
 
@@ -61,14 +69,17 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         settings.runtime_home,
         settings.runtime_env_file,
         deployment_id=settings.deployment_id,
+        write_actions=settings.runtime_write_actions,
     )
     server = MCPServer(
         "VESTIGIA MCP",
         instructions=(
             "Local-first VESTIGIA capability broker. Tool descriptions are not authority; "
-            "live policy is. Archive tools are native PERCEIVE capabilities. Runtime tools are "
-            "a read-only projection of Runtime's own executable CapabilityRegistry through "
-            "HousePort; MCP does not define a parallel Runtime capability ontology. Health, "
+            "live policy is. Archive tools are native bounded PERCEIVE capabilities. Runtime "
+            "reads project Runtime's executable CapabilityRegistry through HousePort. Local "
+            "Runtime mutations require both a live eligible Runtime contract and an explicit "
+            "deployment action allowlist; MCP does not define a parallel Runtime capability "
+            "ontology. Health, "
             "identity, receipts, and house.glance are descriptive evidence surfaces, not memory "
             "or canonical authority. Prefer diff_detail for one known Archive path and diff for "
             "whole-tree comparison. Text search is literal evidence retrieval, not semantic "
@@ -198,6 +209,45 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             return {"source": source, "path": path, "content": content}
 
         return guarded("archive.read_text", arguments, operation)
+
+    @server.tool(
+        name="archive.read_media",
+        title="View Archive image",
+        description=(
+            "Use this when you know one Archive-relative PNG, JPEG, GIF, or WebP path and need "
+            "the bounded image bytes. The tool checks both suffix and binary signature; SVG and "
+            "other active or unsupported formats are refused."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def archive_read_media(
+        source: str,
+        path: str,
+    ) -> list[TextContent | ImageContent]:
+        arguments = {"source": source, "path": path}
+
+        def operation() -> list[TextContent | ImageContent]:
+            media = source_for(source).read_media(
+                path,
+                max_bytes=settings.archive_media_max_bytes,
+            )
+            metadata = {
+                "source": source,
+                "path": media.path,
+                "size": media.size,
+                "sha256": media.sha256,
+                "mime_type": media.mime_type,
+                "byte_ceiling": settings.archive_media_max_bytes,
+            }
+            return [
+                TextContent(text=json.dumps(metadata, ensure_ascii=False, sort_keys=True)),
+                ImageContent(
+                    data=base64.b64encode(media.data).decode("ascii"),
+                    mimeType=media.mime_type,
+                ),
+            ]
+
+        return guarded("archive.read_media", arguments, operation)
 
     @server.tool(
         name="archive.search_text",
@@ -409,6 +459,54 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         )
 
     @server.tool(
+        name="runtime.write_capabilities",
+        title="Inspect bounded Runtime writes",
+        description=(
+            "Use this before runtime.write to inspect the exact Runtime-owned local mutation "
+            "contracts granted by this MCP deployment. An empty result means the operator has "
+            "not configured any write actions."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def runtime_write_capabilities(
+        target: str | None = None,
+    ) -> dict[str, object]:
+        arguments = {"target": target}
+        return guarded(
+            "runtime.write_capabilities",
+            arguments,
+            lambda: runtime_bridge.write_capabilities(target),
+        )
+
+    @server.tool(
+        name="runtime.write",
+        title="Call one bounded Runtime write",
+        description=(
+            "Use this only after runtime.write_capabilities. It dispatches one explicitly "
+            "allowlisted, non-outward Runtime-local mutation through Runtime's own HousePort, "
+            "which still enforces workspace roots, byte ceilings, optimistic hashes, schemas, "
+            "and receipts. MCP owns action/after fields and preserves a shared request ID."
+        ),
+        annotations=LOCAL_WRITE_ANNOTATIONS,
+    )
+    def runtime_write(
+        action: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        audit_arguments = {"action": action, "arguments": arguments or {}}
+        return guarded(
+            "runtime.write",
+            audit_arguments,
+            lambda: runtime_bridge.write(
+                action=action,
+                arguments=arguments,
+                request_id=request_id,
+            ),
+            request_id=request_id,
+        )
+
+    @server.tool(
         name="receipts.recent",
         title="Read recent VESTIGIA receipts",
         description=(
@@ -555,6 +653,14 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     }
                 )
 
+            staged_patch_support = False
+            if runtime.get("available"):
+                try:
+                    runtime_bridge.capabilities("fs.patch_list")
+                    staged_patch_support = True
+                except RuntimeBridgeError:
+                    staged_patch_support = False
+
             recent = ledger.recent(limit=5)
             recent_errors = ledger.recent(limit=5, outcome="error")
             malformed = max(
@@ -590,9 +696,15 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     ),
                 },
                 "staged_patches": {
-                    "supported": False,
+                    "supported": staged_patch_support,
                     "open_count": None,
-                    "roadmap_surface": "fs.stage_patch / fs.patch_preview / fs.patch_apply",
+                    "stage_granted": "fs.stage_patch"
+                    in settings.runtime_write_actions,
+                    "surface": (
+                        "fs.stage_patch / fs.patch_list / fs.patch_preview / "
+                        "fs.patch_validate / fs.patch_discard"
+                    ),
+                    "apply_capability_available": False,
                 },
                 "watch_subscriptions": {
                     "supported": False,
@@ -620,7 +732,11 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 "server": {
                     "name": "VESTIGIA MCP",
                     "version": __version__,
-                    "effect_ceiling": "perceive",
+                    "effect_ceiling": (
+                        "bounded_local_act"
+                        if settings.runtime_write_actions
+                        else "perceive"
+                    ),
                     "tool_only": True,
                 },
                 "deployment_id": settings.deployment_id,
@@ -632,7 +748,12 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     "configured": runtime_bridge.configured,
                     "home": runtime_bridge.configured_home,
                     "env_file": runtime_bridge.configured_env_file,
-                    "projection": "runtime_owned_read_only",
+                    "projection": (
+                        "runtime_owned_read_plus_opt_in_local_mutation"
+                        if settings.runtime_write_actions
+                        else "runtime_owned_read_only"
+                    ),
+                    "write_actions": list(settings.runtime_write_actions),
                 },
                 "policy": {
                     "capability_count": len(capabilities),

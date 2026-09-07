@@ -22,12 +22,13 @@ The native MCP capability vocabulary is deliberately split into three effect cla
 - **PREPARE** - create a draft, staged action, crop, queue item, or other reversible working state.
 - **ACT** - cause an externally consequential or canonical mutation.
 
-Version `0.2.0.dev0` ("Lantern & Red Thread") remains PERCEIVE-only while perception,
-provenance, and cross-layer identity are hardened before adding hands.
+Version `0.3.0.dev0` adds bounded raster sight and opt-in local Runtime hands. Archive content
+remains read-only. Runtime mutation is disabled by default and requires an explicit action
+allowlist in the MCP deployment in addition to an eligible live Runtime contract.
 
-All current tools advertise MCP read-only/non-destructive/non-open-world annotations so hosts
-can frame them accurately. Those annotations are descriptive hints only; executable server and
-Runtime policy remain authoritative.
+Sensory tools advertise read-only/non-destructive/non-open-world annotations. `runtime.write`
+advertises a local, non-open-world mutation. Those annotations are descriptive hints only;
+executable MCP policy, deployment grants, and Runtime policy remain authoritative.
 
 ## Sensory surface
 
@@ -43,6 +44,7 @@ Tools:
 - `archive.status`
 - `archive.list`
 - `archive.read_text`
+- `archive.read_media`
 - `archive.search_text`
 - `archive.diff`
 - `archive.diff_detail`
@@ -52,6 +54,10 @@ Tools:
 files. It is deliberately not fuzzy or semantic search. Results include path, line number, a
 bounded excerpt, total matching lines, and explicit counts for oversized/non-UTF-8 files that
 were skipped.
+
+`archive.read_media(source, path)` returns one PNG, JPEG, GIF, or WebP as a native MCP image
+content block plus bounded metadata. It enforces an independent byte ceiling and checks the
+file suffix against its binary signature. SVG is intentionally excluded from this surface.
 
 `archive.diff_detail(path)` hashes only the requested path on each side and reports whether it
 is added, removed, changed, unchanged, or absent. It is intended for seam inspection after a
@@ -78,6 +84,8 @@ Optional tools:
 - `runtime.status`
 - `runtime.capabilities`
 - `runtime.call`
+- `runtime.write_capabilities`
+- `runtime.write`
 
 This is intentionally **not** a second Runtime capability ontology.
 
@@ -111,6 +119,19 @@ projection's "read-only" promise means no canonical resident/Archive/outward mut
 the projected action surface; it does not promise a byte-for-byte untouched private Runtime
 bookkeeping database.
 
+`runtime.write_capabilities(target)` exposes only Runtime-local mutation contracts named in
+`VESTIGIA_MCP_RUNTIME_WRITE_ACTIONS` and still reported by Runtime as callable,
+confirmation-free, non-outward, and limited to supported workspace/draft/audit effect classes.
+`runtime.write(action, arguments)` re-checks that projection at dispatch, forces
+`after=finish`, passes through `HousePort.dispatch`, and preserves the shared request ID in both
+receipt layers. An empty action allowlist disables the mutation surface without changing the
+tool catalog.
+
+This does not grant Archive mutation. A practical starting grant is
+`fs.stage_patch,file.write,file.patch,fs.patch_discard`: proposal staging plus Runtime's existing
+bounded `workspace/` text writers. Runtime continues to enforce accessible/writable roots,
+maximum write bytes, schemas, optimistic hashes, and receipts.
+
 See `docs/RUNTIME_PROJECTION.md` for the boundary and future Runtime -> MCP context-source plan.
 
 ### Receipts and proprioception
@@ -129,8 +150,9 @@ policy surface, Archive configuration, optional Runtime linkage configuration, a
 audit-ledger health.
 
 No tool in the current slice modifies either Archive source or any external system. Read tools
-do append MCP-owned audit receipts outside the Archive roots. Runtime projected reads preserve
-Runtime's own receipt path as a separate evidence layer.
+do append MCP-owned audit receipts outside the Archive roots. Runtime projected reads and
+explicitly granted local mutations preserve Runtime's own receipt path as a separate evidence
+layer.
 
 ## Setup
 
@@ -169,6 +191,15 @@ VESTIGIA_MCP_RUNTIME_ENV_FILE=C:\path\to\VESTIGIA_Runtime\.env
 The env-file setting is optional. The bridge does not initialize a language-model provider, but
 an explicit Runtime env file is preferable when the Home's effective configuration depends on
 it.
+
+To grant specific bounded Runtime-local mutations, add for example:
+
+```text
+VESTIGIA_MCP_RUNTIME_WRITE_ACTIONS=fs.stage_patch,file.write,file.patch,fs.patch_discard
+```
+
+Omit the variable or leave it blank for a read-only deployment. Adding an outward-facing or
+otherwise ineligible action name does not make it projectable.
 
 For Inspector development, place those settings in this project's `.env`. For the production
 stdio/tunnel launcher, set `VESTIGIA_MCP_RUNTIME_HOME` (and optional env-file path) in the
@@ -221,26 +252,39 @@ batch file. An alternate tunnel profile may be supplied as the first argument.
 
 ## Safety properties
 
-- Archive sources are read-only by construction.
+- Archive sources remain read-only by construction.
 - The configured snapshot witness is excluded from a nested live root automatically.
 - Relative paths reject absolute paths and `..` traversal.
 - Directory reads are containment-checked after path resolution.
 - Symlink files are not enumerated.
 - ZIP members are never extracted and unsafe/duplicate member paths are rejected.
 - Arbitrary binary files are not returned through `archive.read_text`.
+- Archive images use a separate byte ceiling, format allowlist, and binary signature check.
 - Literal search only scans configured text-like suffixes and enforces the same per-file byte ceiling.
 - Non-UTF-8 and oversized search candidates are reported as skipped rather than silently coerced.
 - Canonical registry diagnostics report discrepancies without modifying the Archive.
 - Runtime projection is derived from Runtime's own executable registry rather than copied into MCP.
 - Runtime projected calls still pass through `HousePort.dispatch` and create Runtime receipts.
-- The current Runtime projection cannot dispatch outward/confirmed/write capabilities.
+- The Runtime read projection cannot dispatch outward/confirmed/write capabilities.
+- Runtime mutation requires both an explicit MCP deployment action grant and an eligible live
+  Runtime-local contract; outward and confirmed actions remain excluded.
 - Unknown native MCP capabilities are denied by default.
 - MCP audit receipts store an argument hash rather than raw tool arguments.
 - Cross-layer Runtime calls preserve a shared request ID without blending receipt authority.
 - MCP-owned state is kept outside the Archive roots.
-- Current MCP tool annotations explicitly advertise read-only, non-destructive, closed-world behavior.
+- MCP tool annotations distinguish sensory reads from bounded local Runtime mutation.
 
 See `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md`, and `docs/RUNTIME_PROJECTION.md`.
+
+## v0.3 - Eyes & Bounded Hands
+
+1. Return bounded PNG/JPEG/GIF/WebP Archive files as native MCP image content. **Done.**
+2. Keep Archive mutation out of the media lane. **Done.**
+3. Add an empty-by-default deployment allowlist for Runtime-local mutations. **Done.**
+4. Intersect deployment grants with Runtime's live contract/effect boundary. **Done.**
+5. Dispatch granted writes through Runtime `HousePort` with joined receipts. **Done.**
+6. Surface Runtime staged-patch availability in house orientation. **Done.**
+7. Add principal/target grants, authority epochs, and a promotion boundary for canon. **Next.**
 
 ## v0.2 - Lantern & Red Thread
 
@@ -259,9 +303,10 @@ Current / near-term work:
 11. Add bounded recent-change/watch views without turning the snapshot witness into a hidden mutable cache.
 12. Add a Runtime context-source composition seam and optional MCP Archive source.
 
-Before write-capable projection, the next load-bearing phase is the deployment Keyring: explicit
-scoped grants, authority epochs, dry-run/preview semantics, hash-bound staged objects, and a final
-dispatch recheck at the last reversible boundary.
+The first write-capable projection now uses explicit named deployment grants plus Runtime's live
+contract checks and final `HousePort` dispatch. The next load-bearing Keyring work is richer
+principal/target scoping, authority epochs, approval challenges, and hash-bound promotion from
+staged workspace objects toward canon.
 
 Local execution should extend Runtime's existing Workshop/script shelf rather than introduce a
 raw MCP shell. Staged filesystem patches and bounded execution profiles belong behind that same

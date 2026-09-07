@@ -12,6 +12,7 @@ EXPECTED_TOOLS = {
     "archive.status",
     "archive.list",
     "archive.read_text",
+    "archive.read_media",
     "archive.search_text",
     "archive.diff",
     "archive.diff_detail",
@@ -20,6 +21,8 @@ EXPECTED_TOOLS = {
     "runtime.status",
     "runtime.capabilities",
     "runtime.call",
+    "runtime.write_capabilities",
+    "runtime.write",
     "receipts.recent",
     "audit.show",
     "system.identity",
@@ -33,6 +36,9 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
     (live / "00_Bootloader").mkdir(parents=True)
     (live / "Liora").mkdir()
     (live / "manifest.md").write_text("lantern lit", encoding="utf-8")
+    (live / "portrait.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n" + b"wire-fixture"
+    )
     (live / "Liora" / "breathprint.md").write_text("gutterstar", encoding="utf-8")
     registry = {
         "schema_version": "0.1",
@@ -67,13 +73,28 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             tools = {tool.name: tool for tool in listed.tools}
             assert EXPECTED_TOOLS <= set(tools)
 
-            for name in EXPECTED_TOOLS:
+            for name in EXPECTED_TOOLS - {"runtime.write"}:
                 annotations = tools[name].annotations
                 assert annotations is not None
                 assert annotations.read_only_hint is True
                 assert annotations.destructive_hint is False
                 assert annotations.open_world_hint is False
                 assert annotations.idempotent_hint is True
+
+            write_annotations = tools["runtime.write"].annotations
+            assert write_annotations is not None
+            assert write_annotations.read_only_hint is False
+            assert write_annotations.destructive_hint is False
+            assert write_annotations.open_world_hint is False
+            assert write_annotations.idempotent_hint is False
+
+            media_result = await client.call_tool(
+                "archive.read_media",
+                {"source": "live", "path": "portrait.png"},
+            )
+            assert media_result.is_error is False
+            assert [item.type for item in media_result.content] == ["text", "image"]
+            assert media_result.content[1].mime_type == "image/png"
 
             registry_result = await client.call_tool(
                 "archive.registry_status",
@@ -108,12 +129,17 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert runtime_result.structured_content["configured"] is False
             assert runtime_result.structured_content["available"] is False
 
+            writes_result = await client.call_tool(
+                "runtime.write_capabilities", {}
+            )
+            assert writes_result.is_error is True
+
             identity_result = await client.call_tool("system.identity", {})
             assert identity_result.is_error is False
             assert identity_result.structured_content is not None
             assert identity_result.structured_content["schema_version"] == "vestigia.system-identity.v0.1"
             assert identity_result.structured_content["archive"]["live"]["available"] is True
-            assert identity_result.structured_content["capability_registry"]["capability_count"] == 16
+            assert identity_result.structured_content["capability_registry"]["capability_count"] == 19
 
             glance_result = await client.call_tool("house.glance", {})
             assert glance_result.is_error is False
@@ -125,8 +151,8 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             status_result = await client.call_tool("vestigia.status", {})
             assert status_result.is_error is False
             assert status_result.structured_content is not None
-            assert status_result.structured_content["server"]["version"] == "0.2.0.dev0"
-            assert status_result.structured_content["policy"]["capability_count"] == 16
+            assert status_result.structured_content["server"]["version"] == "0.3.0.dev0"
+            assert status_result.structured_content["policy"]["capability_count"] == 19
             assert status_result.structured_content["runtime"]["configured"] is False
             assert "archive.health" in status_result.structured_content["proprioception"]["new_native_tools"]
 
@@ -141,6 +167,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert "archive.registry_status" in capabilities
             assert "archive.health" in capabilities
             assert "archive.search_text" in capabilities
+            assert "archive.read_media" in capabilities
             assert "runtime.status" in capabilities
             assert "system.identity" in capabilities
             assert "house.glance" in capabilities

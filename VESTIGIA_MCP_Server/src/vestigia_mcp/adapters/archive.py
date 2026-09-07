@@ -12,6 +12,13 @@ ArchiveKind = Literal["directory", "zip"]
 TEXT_SUFFIXES = frozenset(
     {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".csv", ".tsv", ".log"}
 )
+IMAGE_MIME_TYPES = {
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
 
 class ArchiveError(RuntimeError):
@@ -56,6 +63,18 @@ def _sha256_stream(handle: BinaryIO) -> str:
     return digest.hexdigest()
 
 
+def _image_mime_from_signature(data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 @dataclass(frozen=True)
 class ArchiveStats:
     configured_path: str
@@ -70,6 +89,15 @@ class ArchiveEntry:
     path: str
     size: int
     sha256: str
+
+
+@dataclass(frozen=True)
+class ArchiveMedia:
+    path: str
+    size: int
+    sha256: str
+    mime_type: str
+    data: bytes
 
 
 @dataclass(frozen=True)
@@ -265,6 +293,60 @@ class ArchiveSource:
             raise ArchiveError(
                 f"Archive text is not valid UTF-8: {normalized}"
             ) from exc
+
+    def read_media(self, relative: str, max_bytes: int) -> ArchiveMedia:
+        """Read one bounded, signature-checked raster image.
+
+        Media has a separate surface from text so binary bytes cannot be smuggled through
+        archive.read_text. SVG is intentionally excluded because it is executable-ish text and
+        may contain external references; add new formats only with an explicit validation rule.
+        """
+        normalized = normalize_relative_path(relative)
+        suffix = PurePosixPath(normalized).suffix.lower()
+        declared_mime = IMAGE_MIME_TYPES.get(suffix)
+        if declared_mime is None:
+            raise ArchiveError(
+                "archive.read_media only exposes PNG, JPEG, GIF, and WebP images"
+            )
+        if max_bytes <= 0:
+            raise ArchiveError("Media byte ceiling must be positive")
+
+        if self.kind == "directory":
+            path = self._resolve_directory_file(normalized)
+            size = path.stat().st_size
+            if size > max_bytes:
+                raise ArchiveError(
+                    f"Archive media exceeds byte ceiling ({size} > {max_bytes})"
+                )
+            data = path.read_bytes()
+        else:
+            members = dict(self._zip_members())
+            info = members.get(normalized)
+            if info is None:
+                raise ArchiveError(f"Archive file not found: {normalized}")
+            if info.file_size > max_bytes:
+                raise ArchiveError(
+                    f"Archive media exceeds byte ceiling ({info.file_size} > {max_bytes})"
+                )
+            with zipfile.ZipFile(self.root, "r") as archive:
+                data = archive.read(info)
+            size = info.file_size
+
+        detected_mime = _image_mime_from_signature(data)
+        if detected_mime is None:
+            raise ArchiveError("Archive media does not have a supported image signature")
+        if detected_mime != declared_mime:
+            raise ArchiveError(
+                "Archive media extension does not match its image signature "
+                f"({declared_mime} != {detected_mime})"
+            )
+        return ArchiveMedia(
+            path=normalized,
+            size=size,
+            sha256=hashlib.sha256(data).hexdigest(),
+            mime_type=declared_mime,
+            data=data,
+        )
 
     def search_text(
         self,

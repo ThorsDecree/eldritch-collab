@@ -66,15 +66,17 @@ Examples:
 - `archive.append_note`
 - `filesystem.move`
 
-PREPARE and ACT are intentionally absent from v0.1.
+The first ACT lane is limited to explicitly allowlisted, non-outward Runtime-local mutations.
+Archive and external-platform mutation remain absent.
 
 ## Policy invariant
 
 Tool registration is not authorization.
 
 A callable handler must still pass the live policy engine. Unknown capability names are denied.
-Future deployment-specific grants will refine the default policy by deployment, resident,
-account, target, and effect class.
+`VESTIGIA_MCP_RUNTIME_WRITE_ACTIONS` supplies the first deployment-specific named grant and is
+intersected with Runtime's live executable contract at final dispatch. Future Keyring work will
+refine grants by principal, resident, target, authority epoch, and effect class.
 
 ## Archive source model
 
