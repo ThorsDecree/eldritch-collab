@@ -44,6 +44,12 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Read one bounded UTF-8 text file from a configured Archive source.",
     ),
     Capability(
+        "archive.read_media",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Read one bounded, signature-checked raster image from an Archive source.",
+    ),
+    Capability(
         "archive.search_text",
         EffectClass.PERCEIVE,
         Decision.ALLOW,
@@ -90,6 +96,18 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         EffectClass.PERCEIVE,
         Decision.ALLOW,
         "Dispatch one Runtime capability only when Runtime itself classifies it as a safe read projection.",
+    ),
+    Capability(
+        "runtime.write_capabilities",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect the Runtime-local mutations explicitly granted to this MCP deployment.",
+    ),
+    Capability(
+        "runtime.write",
+        EffectClass.ACT,
+        Decision.ALLOW,
+        "Dispatch one explicitly granted, non-outward Runtime-local mutation.",
     ),
     Capability(
         "receipts.recent",

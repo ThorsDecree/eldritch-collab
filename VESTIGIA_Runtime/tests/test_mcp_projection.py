@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from vestigia.mcp_projection import dispatch_read_projection, read_projection
+from vestigia.mcp_projection import (
+    dispatch_mutation_projection,
+    dispatch_read_projection,
+    mutation_projection,
+    read_projection,
+)
 
 
 class FakeRegistry:
@@ -130,6 +135,54 @@ class McpProjectionTests(unittest.TestCase):
                 action="status",
                 arguments={"after": "continue"},
                 request_id="req_bad",
+            )
+
+    def test_mutation_projection_requires_explicit_named_local_grants(self) -> None:
+        house = FakeHouse()
+        disabled = mutation_projection(house, ())
+        self.assertEqual(disabled["capability_count"], 0)
+
+        projected = mutation_projection(
+            house,
+            ("file.write", "fs.stage_patch", "discord.react", "missing.action"),
+        )
+        self.assertEqual(
+            {item["name"] for item in projected["capabilities"]},
+            {"file.write", "fs.stage_patch"},
+        )
+        self.assertEqual(
+            projected["authority"],
+            "runtime_capability_registry_plus_mcp_deployment_allowlist",
+        )
+        with self.assertRaises(PermissionError):
+            mutation_projection(house, ("file.write",), "fs.stage_patch")
+        with self.assertRaises(PermissionError):
+            mutation_projection(house, ("discord.react",), "discord.react")
+
+    def test_mutation_dispatch_preserves_runtime_and_mcp_boundaries(self) -> None:
+        house = FakeHouse()
+        result = dispatch_mutation_projection(
+            house,
+            action="file.write",
+            arguments={"path": "workspace/note.md", "content": "hello"},
+            request_id="req_write",
+            allowed_actions=("file.write",),
+            deployment_id="desktop",
+        )
+        payload, turn_id, context = house.calls[0]
+        self.assertEqual(payload["action"], "file.write")
+        self.assertEqual(payload["after"], "finish")
+        self.assertEqual(turn_id, "req_write")
+        self.assertEqual(context["mcp_projection"], "bounded_local_mutation")
+        self.assertEqual(result["request_id"], "req_write")
+
+        with self.assertRaises(PermissionError):
+            dispatch_mutation_projection(
+                house,
+                action="file.write",
+                arguments={"path": "workspace/nope.md", "content": "nope"},
+                request_id="req_denied",
+                allowed_actions=(),
             )
 
 

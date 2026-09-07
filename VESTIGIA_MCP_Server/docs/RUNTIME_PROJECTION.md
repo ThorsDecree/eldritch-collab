@@ -8,7 +8,7 @@ The load-bearing direction is:
 Runtime CapabilityRegistry / HousePort
                 |
                 v
-        read projection adapter
+       read/mutation projection
                 |
                 v
              MCP host
@@ -16,15 +16,20 @@ Runtime CapabilityRegistry / HousePort
 
 One fact, one authority, many routes.
 
-## Current v0.1 projection
+## Current projections
 
-The first bridge is deliberately read-heavy and optional.
+The bridge is optional. Its read lane remains the default.
 
 MCP exposes three stable tools:
 
 - `runtime.status`
 - `runtime.capabilities`
 - `runtime.call`
+
+The opt-in mutation lane adds:
+
+- `runtime.write_capabilities`
+- `runtime.write`
 
 `runtime.capabilities` is derived from the live Runtime registry. A Runtime capability is
 projectable only when its current executable contract says all of the following:
@@ -44,10 +49,21 @@ The generic `runtime.call` surface is intentional. Host applications may cache M
 for a conversation. Keeping Runtime's evolving action vocabulary behind a stable projection
 avoids making the MCP descriptor cache authoritative over Runtime.
 
+The mutation projection also derives contracts from the live Runtime registry, but intersects
+them with `VESTIGIA_MCP_RUNTIME_WRITE_ACTIONS`. A named action is projectable only when its
+Runtime contract is callable, tool-dispatchable, confirmation-free, non-outward, contains at
+least one supported local mutation effect, and contains no unsupported effect. An empty
+deployment allowlist grants nothing.
+
+`runtime.write` re-checks that intersection at final dispatch and then calls
+`HousePort.dispatch`. Runtime therefore retains authority over schemas, writable roots, byte
+ceilings, optimistic hashes, and Runtime receipts. MCP contributes the deployment-scoped named
+grant and its separate audit receipt.
+
 ## Cross-layer evidence
 
-Every `runtime.call` generates one MCP `request_id` and passes the same value into Runtime as the
-HousePort `turn_id`/bridge request identifier.
+Every `runtime.call` and `runtime.write` generates one MCP `request_id` and passes the same value
+into Runtime as the HousePort `turn_id`/bridge request identifier.
 
 ```text
 MCP request
@@ -83,17 +99,17 @@ The next clean direction is a Runtime context-source composition seam, then an o
 remains replaceable/optional. Context receipts must preserve source class, query, truncation,
 provenance, and authority/advisory status.
 
-## Future consequence boundary
+## Current and future consequence boundary
 
-Write-capable projection is intentionally out of scope for this slice.
+The first local mutation slice is deliberately narrower than a complete Keyring. It supports
+explicit named grants to Runtime-local workspace/draft actions and a final live contract check.
+It does not grant Archive mutation, outward actions, confirmed actions, arbitrary filesystem
+paths, provider calls, or a shell.
 
-Before PREPARE/ACT projection exists, the shared architecture needs:
-
-1. explicit scoped grants / authority epoch;
-2. preview/dry-run semantics;
-3. hash-bound staged objects for reviewable changes;
-4. final dispatch recheck at the last reversible boundary;
-5. cross-layer request IDs and separate receipts at every layer.
+Future widening still requires principal/target-scoped grants, authority epochs, approval
+challenges, and separate promotion authority for canonical or outward effects. Runtime's staged
+patch objects already provide preview, optimistic base hashes, and proposal durability; applying
+one to canonical state remains a distinct capability boundary.
 
 Local code execution should extend Runtime's existing Workshop/script-shelf architecture rather
 than introduce arbitrary MCP shell access. The intended shape is named execution profiles,

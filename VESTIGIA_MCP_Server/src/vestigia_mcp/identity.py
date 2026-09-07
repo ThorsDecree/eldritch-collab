@@ -42,8 +42,10 @@ def config_fingerprint(settings: Settings) -> str:
             "state_dir": _path(settings.state_dir),
             "deployment_id": settings.deployment_id,
             "archive_text_max_bytes": settings.archive_text_max_bytes,
+            "archive_media_max_bytes": settings.archive_media_max_bytes,
             "runtime_home": _path(settings.runtime_home),
             "runtime_env_file": _path(settings.runtime_env_file),
+            "runtime_write_actions": list(settings.runtime_write_actions),
         }
     )
 

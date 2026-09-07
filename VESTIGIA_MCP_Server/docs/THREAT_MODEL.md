@@ -1,7 +1,7 @@
 # Threat Model
 
-This document starts narrow on purpose. The first release is local and read-only, but the
-architecture should not make later write capabilities accidentally unsafe.
+This document starts narrow on purpose. Archive access is read-only. The first Runtime write
+lane is local, explicitly allowlisted, and bounded by Runtime's own workspace contracts.
 
 ## Trust boundaries
 
@@ -39,6 +39,22 @@ paths are rejected.
 `archive.read_text` is limited to a small text suffix allowlist, strict UTF-8, and a configured
 byte ceiling. Binary artifacts will need a separate media capability rather than sneaking
 through a text read.
+
+`archive.read_media` has an independent byte ceiling and a small raster allowlist. It checks
+the file suffix against PNG/JPEG/GIF/WebP binary signatures. SVG is excluded because it is
+active text and may reference external content.
+
+### Runtime-local mutation
+
+Tool registration does not grant a Runtime mutation. `runtime.write` requires the action name
+in the deployment's `VESTIGIA_MCP_RUNTIME_WRITE_ACTIONS` and an eligible live Runtime contract.
+The projection rejects outward-facing, confirmed, disabled, non-tool-dispatchable, unknown, or
+unsupported-effect actions. Final dispatch still passes through Runtime `HousePort`, preserving
+its path roots, byte ceilings, schemas, optimistic hashes, and receipts.
+
+This first gate is not a complete multi-principal Keyring. A process able to change the MCP
+environment already controls the deployment grant. Canonical Archive writes, provider calls,
+social actions, and arbitrary shell execution remain outside this lane.
 
 ### Prompt injection in source material
 

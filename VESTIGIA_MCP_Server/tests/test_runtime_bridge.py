@@ -68,3 +68,50 @@ def test_configured_runtime_bridge_projects_and_dispatches_reads(tmp_path: Path)
             },
             request_id="req_prepare_denied",
         )
+
+
+def test_runtime_bridge_mutations_require_explicit_action_grants(tmp_path: Path) -> None:
+    home = make_home(tmp_path / "home")
+    bridge = RuntimeBridge(
+        home,
+        None,
+        deployment_id="mcp-test",
+        write_actions=("file.write", "fs.stage_patch", "discord.react"),
+    )
+
+    projected = bridge.write_capabilities()
+    names = {item["name"] for item in projected["capabilities"]}
+    assert names == {"file.write", "fs.stage_patch"}
+    assert bridge.status()["mutation_projection"]["enabled"] is True
+
+    result = bridge.write(
+        action="file.write",
+        arguments={"path": "workspace/from-mcp.md", "content": "bounded hand\n"},
+        request_id="req_write",
+    )
+    assert result["request_id"] == "req_write"
+    assert result["runtime"]["receipt_id"]
+    assert (home / "workspace" / "from-mcp.md").read_text(encoding="utf-8") == (
+        "bounded hand\n"
+    )
+
+    staged = bridge.write(
+        action="fs.stage_patch",
+        arguments={
+            "operation": "edit",
+            "path": "workspace/from-mcp.md",
+            "content": "proposal only\n",
+        },
+        request_id="req_stage",
+    )
+    assert staged["runtime"]["proposal_only"] is True
+    assert (home / "workspace" / "from-mcp.md").read_text(encoding="utf-8") == (
+        "bounded hand\n"
+    )
+
+    with pytest.raises(RuntimeBridgeError):
+        bridge.write(
+            action="discord.react",
+            arguments={"message_id": "nope"},
+            request_id="req_outward_denied",
+        )
