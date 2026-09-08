@@ -132,8 +132,10 @@ Runtime CapabilityRegistry / HousePort
 `runtime.capabilities()` derives its surface from the live Runtime registry. The first
 projection admits only capabilities that Runtime currently reports as callable, non-outward,
 confirmation-free, and composed entirely of `filesystem:read` / `database:read` effects.
-`runtime.capabilities(target)` returns the Runtime-owned full contract and JSON schema for one
-projected action.
+`runtime.capabilities(target)` returns the projected action's wrapper-valid `input_schema`, its
+authoritative native envelope as `runtime_input_schema`, and the machine-readable
+`wrapper_owned_fields` distinction. Callers should place only `input_schema` fields inside
+`runtime.call.arguments`.
 
 `runtime.call(action, arguments)` checks the same projection again, forces a non-continuing
 `after=finish` invocation, and dispatches through `HousePort.dispatch`. Runtime validation,
@@ -152,6 +154,8 @@ bookkeeping database.
 `runtime.write_capabilities(target)` exposes only Runtime-local mutation contracts named in
 `VESTIGIA_MCP_RUNTIME_WRITE_ACTIONS` and still reported by Runtime as callable,
 confirmation-free, non-outward, and limited to supported workspace/draft/audit effect classes.
+Its focused contract uses the same `input_schema` / `runtime_input_schema` /
+`wrapper_owned_fields` distinction as the read projection.
 `runtime.write(action, arguments)` re-checks that projection at dispatch, forces
 `after=finish`, passes through `HousePort.dispatch`, and preserves the shared request ID in both
 receipt layers. An empty action allowlist disables the mutation surface without changing the

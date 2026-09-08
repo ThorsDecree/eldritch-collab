@@ -42,6 +42,23 @@ def test_configured_runtime_bridge_projects_and_dispatches_reads(tmp_path: Path)
     assert "fs.patch_discard" not in names
     assert "discord.react" not in names
 
+    activity = bridge.capabilities("activity.status")["capabilities"][0]
+    assert activity["wrapper_owned_fields"] == ["action", "after"]
+    assert set(activity["input_schema"]["properties"]) == {"activity_id"}
+    assert set(activity["runtime_input_schema"]["properties"]) == {
+        "action",
+        "after",
+        "activity_id",
+    }
+
+    activity_result = bridge.call(
+        action="activity.status",
+        arguments={},
+        request_id="req_activity",
+    )
+    assert activity_result["request_id"] == "req_activity"
+    assert activity_result["runtime"]["ok"] is True
+
     result = bridge.call(
         action="status",
         arguments={},
