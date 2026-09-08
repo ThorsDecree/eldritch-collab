@@ -1,0 +1,35 @@
+{
+  "name": "chunking and synthetic delay",
+  "config": {"allowed_users": ["1001"]},
+  "steps": [
+    {
+      "op": "message",
+      "message_id": 300,
+      "user_id": 1001,
+      "channel_id": 3001,
+      "content": "long reply please",
+      "expect": {"accepted": true, "trigger_kind": "direct"}
+    },
+    {
+      "op": "runtime_commit",
+      "message_id": 300,
+      "operation_id": "turn-300",
+      "text": "chunk me"
+    },
+    {
+      "op": "delivery",
+      "channel_id": 3001,
+      "outcome": "delay",
+      "delay_seconds": 5
+    },
+    {
+      "op": "deliver_text",
+      "message_id": 300,
+      "operation_id": "turn-300",
+      "text": "abcdefghij",
+      "maximum": 4
+    },
+    {"op": "expect", "path": "clock", "equals": "2030-01-01T12:00:05+00:00"},
+    {"op": "expect", "path": "receipts.2.status", "equals": "succeeded"}
+  ]
+}
