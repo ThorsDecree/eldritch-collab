@@ -99,12 +99,14 @@ The next clean direction is a Runtime context-source composition seam, then an o
 remains replaceable/optional. Context receipts must preserve source class, query, truncation,
 provenance, and authority/advisory status.
 
-## Current and future consequence boundary
+## Runtime consequence boundary
 
 The first local mutation slice is deliberately narrower than a complete Keyring. It supports
 explicit named grants to Runtime-local workspace/draft actions and a final live contract check.
-It does not grant Archive mutation, outward actions, confirmed actions, arbitrary filesystem
-paths, provider calls, or a shell.
+It does not itself grant Archive mutation, outward actions, confirmed actions, arbitrary
+filesystem paths, provider calls, or a shell. Canonical Archive staging and promotion now exist
+as a separate MCP-native boundary documented in `CANONICAL_ARCHIVE_WRITES.md`; they do not widen
+Runtime's projection.
 
 Future widening still requires principal/target-scoped grants, authority epochs, approval
 challenges, and separate promotion authority for canonical or outward effects. Runtime's staged

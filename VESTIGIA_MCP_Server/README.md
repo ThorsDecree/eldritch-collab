@@ -22,13 +22,15 @@ The native MCP capability vocabulary is deliberately split into three effect cla
 - **PREPARE** - create a draft, staged action, crop, queue item, or other reversible working state.
 - **ACT** - cause an externally consequential or canonical mutation.
 
-Version `0.3.0.dev0` adds bounded raster sight and opt-in local Runtime hands. Archive content
-remains read-only. Runtime mutation is disabled by default and requires an explicit action
-allowlist in the MCP deployment in addition to an eligible live Runtime contract.
+Version `0.4.0.dev0` adds an opt-in two-phase canonical Archive text lane. A proposal is first
+stored under MCP-owned state without changing the Archive; promotion then requires an explicit
+path-prefix grant, the exact proposal digest, and a still-matching live base hash. Runtime and
+Archive mutation remain disabled by default.
 
-Sensory tools advertise read-only/non-destructive/non-open-world annotations. `runtime.write`
-advertises a local, non-open-world mutation. Those annotations are descriptive hints only;
-executable MCP policy, deployment grants, and Runtime policy remain authoritative.
+Sensory tools advertise read-only/non-destructive/non-open-world annotations. Staging and
+Runtime workspace writes advertise local non-open-world mutation; `archive.promote` advertises
+a potentially destructive canonical mutation. Those annotations are descriptive hints only;
+executable MCP policy, deployment grants, base hashes, and target policy remain authoritative.
 
 ## Sensory surface
 
@@ -49,11 +51,21 @@ Tools:
 - `archive.diff`
 - `archive.diff_detail`
 - `archive.registry_status`
+- `archive.write_capabilities`
+- `archive.stage_text`
+- `archive.stage_list`
+- `archive.stage_inspect`
+- `archive.stage_discard`
+- `archive.promote`
 
 `archive.search_text` performs literal, line-oriented search across configured UTF-8 text-like
 files. It is deliberately not fuzzy or semantic search. Results include path, line number, a
 bounded excerpt, total matching lines, and explicit counts for oversized/non-UTF-8 files that
 were skipped.
+
+`archive.read_text` returns the exact bounded UTF-8 content together with its byte size and
+SHA-256. Pass that digest as `expected_base_sha256` when staging a replacement to bind the
+proposal to the version that was actually read.
 
 `archive.read_media(source, path)` returns one PNG, JPEG, GIF, or WebP as a native MCP image
 content block plus bounded metadata. It enforces an independent byte ceiling and checks the
@@ -71,6 +83,24 @@ When the configured snapshot itself lives inside the live Archive root, the serv
 that snapshot path from the live view automatically. The witness is not counted as house
 content merely because it sits inside the house directory. `archive.status` reports active
 exclusions explicitly.
+
+### Canonical Archive staging and promotion
+
+Canonical mutation is a separate opt-in lane for bounded UTF-8 text creation and replacement:
+
+```text
+candidate text -> durable MCP stage -> inspect/revalidate -> atomic live promotion
+```
+
+`archive.stage_text` records content, path, reason, content hash, and the target's current base
+hash under `VESTIGIA_MCP_STATE_DIR/archive-stages/`. It does not modify the Archive.
+`archive.promote` requires the returned `stage_id` and `proposal_sha256`, checks the deployment's
+current prefix grant again, refuses if the live target changed after staging, and writes through
+an atomic same-directory replacement. Stage inspection can return metadata alone or the bounded
+candidate content. Promotion never targets the snapshot.
+
+The first slice deliberately excludes delete, move, directory creation, binary/media writes,
+arbitrary paths, and a direct-write bypass. See `docs/CANONICAL_ARCHIVE_WRITES.md`.
 
 Resources:
 
@@ -149,10 +179,10 @@ available for capability, outcome, and cross-layer `request_id`.
 policy surface, Archive configuration, optional Runtime linkage configuration, and bounded
 audit-ledger health.
 
-No tool in the current slice modifies either Archive source or any external system. Read tools
-do append MCP-owned audit receipts outside the Archive roots. Runtime projected reads and
-explicitly granted local mutations preserve Runtime's own receipt path as a separate evidence
-layer.
+Read tools append MCP-owned audit receipts outside the Archive roots. When explicitly granted,
+`archive.promote` may create or replace text beneath configured live-Archive prefixes; it never
+modifies the snapshot. Runtime projected reads and explicitly granted local mutations preserve
+Runtime's own receipt path as a separate evidence layer.
 
 ## Setup
 
@@ -172,6 +202,19 @@ The production package itself reads only normal process environment variables an
 search the filesystem for `.env` files. The checked-in `dev_server.py` development entrypoint
 loads the project-local `.env` before importing the MCP server so Inspector-launched stdio
 processes receive the intended configuration.
+
+### Optional canonical Archive text promotion
+
+Grant only the relative live-Archive prefixes this deployment may change:
+
+```text
+VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES=02_Journal,01_Residents/Liora
+VESTIGIA_MCP_ARCHIVE_WRITE_MAX_BYTES=1000000
+```
+
+An empty prefix list disables both staging and promotion. Prefixes are path-segment-aware:
+granting `02_Journal` covers that directory, not similarly named siblings. The state directory
+must remain outside the live Archive. Existing target parents must already exist.
 
 ### Optional Runtime linkage
 
@@ -202,9 +245,9 @@ Omit the variable or leave it blank for a read-only deployment. Adding an outwar
 otherwise ineligible action name does not make it projectable.
 
 For Inspector development, place those settings in this project's `.env`. For the production
-stdio/tunnel launcher, set `VESTIGIA_MCP_RUNTIME_HOME` (and optional env-file path) in the
-launching process or as ordinary Windows user environment variables. The batch launcher does
-not parse `.env` files or embed credentials.
+stdio/tunnel launcher, set Runtime and Archive write grants in the launching process or as
+ordinary Windows user environment variables. The batch launcher does not parse `.env` files or
+embed credentials.
 
 For an MCP host that launches local stdio servers:
 
@@ -252,7 +295,13 @@ batch file. An alternate tunnel profile may be supplied as the first argument.
 
 ## Safety properties
 
-- Archive sources remain read-only by construction.
+- Snapshot Archive sources remain read-only by construction.
+- Canonical live-Archive mutation is disabled when the path-prefix grant is empty.
+- Canonical writes require a durable stage, exact proposal digest, current prefix grant, and
+  unchanged optimistic base hash.
+- Canonical promotion is text-only, byte-bounded, symlink-refusing, containment-checked, and
+  performed through atomic same-directory replacement.
+- Delete, move, directory creation, binary writes, and direct-write bypasses are absent.
 - The configured snapshot witness is excluded from a nested live root automatically.
 - Relative paths reject absolute paths and `..` traversal.
 - Directory reads are containment-checked after path resolution.
@@ -272,9 +321,21 @@ batch file. An alternate tunnel profile may be supplied as the first argument.
 - MCP audit receipts store an argument hash rather than raw tool arguments.
 - Cross-layer Runtime calls preserve a shared request ID without blending receipt authority.
 - MCP-owned state is kept outside the Archive roots.
-- MCP tool annotations distinguish sensory reads from bounded local Runtime mutation.
+- MCP tool annotations distinguish sensory reads, reversible preparation, local Runtime
+  mutation, and canonical Archive promotion.
 
-See `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md`, and `docs/RUNTIME_PROJECTION.md`.
+See `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md`, `docs/RUNTIME_PROJECTION.md`, and
+`docs/CANONICAL_ARCHIVE_WRITES.md`.
+
+## v0.4 - Canonical Stage & Promotion
+
+1. Add empty-by-default relative path-prefix grants for canonical live-Archive text. **Done.**
+2. Store durable create/replace proposals outside the Archive. **Done.**
+3. Bind path, content, operation, reason, and base state into a proposal digest. **Done.**
+4. Revalidate live base hashes and path grants immediately before promotion. **Done.**
+5. Promote through atomic same-directory replacement with separate audit receipts. **Done.**
+6. Add list, inspect, validation, and discard lifecycle surfaces. **Done.**
+7. Add principal-specific grants, authority epochs, and interactive approval challenges. **Next.**
 
 ## v0.3 - Eyes & Bounded Hands
 
@@ -284,7 +345,7 @@ See `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md`, and `docs/RUNTIME_PROJECTION
 4. Intersect deployment grants with Runtime's live contract/effect boundary. **Done.**
 5. Dispatch granted writes through Runtime `HousePort` with joined receipts. **Done.**
 6. Surface Runtime staged-patch availability in house orientation. **Done.**
-7. Add principal/target grants, authority epochs, and a promotion boundary for canon. **Next.**
+7. Add principal/target grants and authority epochs. **Partially advanced in v0.4.**
 
 ## v0.2 - Lantern & Red Thread
 
@@ -303,10 +364,10 @@ Current / near-term work:
 11. Add bounded recent-change/watch views without turning the snapshot witness into a hidden mutable cache.
 12. Add a Runtime context-source composition seam and optional MCP Archive source.
 
-The first write-capable projection now uses explicit named deployment grants plus Runtime's live
-contract checks and final `HousePort` dispatch. The next load-bearing Keyring work is richer
-principal/target scoping, authority epochs, approval challenges, and hash-bound promotion from
-staged workspace objects toward canon.
+The Runtime projection uses explicit named deployment grants plus Runtime's live contract checks
+and final `HousePort` dispatch. Canonical Archive promotion is a separate MCP-native, prefix- and
+hash-bound lane. The next load-bearing Keyring work is richer principal scoping, authority
+epochs, approval challenges, and promotion/release orchestration across multiple artifacts.
 
 Local execution should extend Runtime's existing Workshop/script shelf rather than introduce a
 raw MCP shell. Staged filesystem patches and bounded execution profiles belong behind that same

@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .adapters.archive import normalize_relative_path
+
 
 def _optional_path(name: str) -> Path | None:
     raw = os.getenv(name, "").strip()
@@ -30,6 +32,15 @@ def _action_allowlist(name: str) -> tuple[str, ...]:
     return tuple(sorted(values))
 
 
+def _path_prefix_allowlist(name: str) -> tuple[str, ...]:
+    values = {
+        normalize_relative_path(item.strip()).rstrip("/")
+        for item in os.getenv(name, "").split(",")
+        if item.strip()
+    }
+    return tuple(sorted(values))
+
+
 @dataclass(frozen=True)
 class Settings:
     live_archive_root: Path | None
@@ -41,6 +52,8 @@ class Settings:
     runtime_home: Path | None = None
     runtime_env_file: Path | None = None
     runtime_write_actions: tuple[str, ...] = ()
+    archive_write_prefixes: tuple[str, ...] = ()
+    archive_write_max_bytes: int = 1_000_000
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -70,5 +83,11 @@ class Settings:
             runtime_env_file=_optional_path("VESTIGIA_MCP_RUNTIME_ENV_FILE"),
             runtime_write_actions=_action_allowlist(
                 "VESTIGIA_MCP_RUNTIME_WRITE_ACTIONS"
+            ),
+            archive_write_prefixes=_path_prefix_allowlist(
+                "VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES"
+            ),
+            archive_write_max_bytes=_positive_int_env(
+                "VESTIGIA_MCP_ARCHIVE_WRITE_MAX_BYTES", 1_000_000
             ),
         )
