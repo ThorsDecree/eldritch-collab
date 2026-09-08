@@ -598,8 +598,9 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         title="Inspect projected Runtime capabilities",
         description=(
             "Use this when you need the Runtime-owned read-only MCP projection. With no target, "
-            "returns a compact index; with target, returns that Runtime capability's full live "
-            "contract and input schema. Runtime CapabilityRegistry remains authoritative."
+            "returns a compact index; with target, returns the MCP arguments schema, the native "
+            "Runtime envelope schema, and explicit wrapper-owned fields. Runtime "
+            "CapabilityRegistry remains authoritative."
         ),
         annotations=READ_ONLY_ANNOTATIONS,
     )
@@ -616,8 +617,10 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         title="Call one projected Runtime read",
         description=(
             "Use this after inspecting runtime.capabilities when you need to execute one Runtime "
-            "capability through Runtime's own HousePort. The bridge rejects anything not already "
-            "classified by Runtime as callable, confirmation-free, non-outward read behavior."
+            "capability through Runtime's own HousePort. Supply only the focused capability's "
+            "input_schema fields inside arguments; MCP supplies action and after. The bridge "
+            "rejects anything not already classified by Runtime as callable, confirmation-free, "
+            "non-outward read behavior."
         ),
         annotations=READ_ONLY_ANNOTATIONS,
     )
@@ -643,8 +646,9 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         title="Inspect bounded Runtime writes",
         description=(
             "Use this before runtime.write to inspect the exact Runtime-owned local mutation "
-            "contracts granted by this MCP deployment. An empty result means the operator has "
-            "not configured any write actions."
+            "contracts granted by this MCP deployment. A focused result separates the MCP "
+            "arguments schema from the native Runtime envelope and names wrapper-owned fields. "
+            "An empty result means the operator has not configured any write actions."
         ),
         annotations=READ_ONLY_ANNOTATIONS,
     )
@@ -665,7 +669,8 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             "Use this only after runtime.write_capabilities. It dispatches one explicitly "
             "allowlisted, non-outward Runtime-local mutation through Runtime's own HousePort, "
             "which still enforces workspace roots, byte ceilings, optimistic hashes, schemas, "
-            "and receipts. MCP owns action/after fields and preserves a shared request ID."
+            "and receipts. Supply only the focused input_schema fields inside arguments; MCP "
+            "owns action/after and preserves a shared request ID."
         ),
         annotations=LOCAL_WRITE_ANNOTATIONS,
     )

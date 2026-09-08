@@ -40,9 +40,13 @@ projectable only when its current executable contract says all of the following:
 - not outward-facing;
 - every declared effect is `filesystem:read` or `database:read`.
 
-The MCP layer does not maintain a second list of Runtime action names or copy Runtime input
-schemas. `runtime.capabilities(target)` returns the Runtime-owned live contract for one projected
-action. `runtime.call` then dispatches through `HousePort.dispatch`, so Runtime policy,
+The MCP layer does not maintain a second list of Runtime action names. A focused
+`runtime.capabilities(target)` response preserves the native Runtime envelope schema as
+`runtime_input_schema`, and publishes the schema accepted inside the MCP wrapper's nested
+`arguments` object as `input_schema`. It also exposes
+`wrapper_owned_fields: ["action", "after"]` and wrapper-ready `argument_examples`. This makes
+the changed call grammar machine-readable without hiding or replacing the authoritative Runtime
+contract. `runtime.call` then dispatches through `HousePort.dispatch`, so Runtime policy,
 authorizers, validation, and durable Runtime receipts remain in force.
 
 The generic `runtime.call` surface is intentional. Host applications may cache MCP tool schemas

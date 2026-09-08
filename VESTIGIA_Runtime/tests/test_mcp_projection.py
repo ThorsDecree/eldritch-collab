@@ -23,7 +23,19 @@ class FakeRegistry:
                 "dispatchable_via_tool_action": True,
                 "schema_version": "v1",
                 "group": "house",
-                "input_schema": {"type": "object"},
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "const": "status"},
+                        "after": {"type": "string", "enum": ["continue", "finish"]},
+                        "limit": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["action"],
+                    "additionalProperties": False,
+                },
+                "example_envelopes": [
+                    {"action": "status", "after": "continue", "limit": 3}
+                ],
             },
             "file.write": {
                 "name": "file.write",
@@ -35,7 +47,17 @@ class FakeRegistry:
                 "dispatchable_via_tool_action": True,
                 "schema_version": "v1",
                 "group": "workspace",
-                "input_schema": {"type": "object"},
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "const": "file.write"},
+                        "after": {"type": "string", "enum": ["continue", "finish"]},
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["action", "path", "content"],
+                    "additionalProperties": False,
+                },
             },
             "fs.stage_patch": {
                 "name": "fs.stage_patch",
@@ -137,6 +159,30 @@ class McpProjectionTests(unittest.TestCase):
                 request_id="req_bad",
             )
 
+    def test_focused_projection_publishes_the_wrapper_call_grammar(self) -> None:
+        house = FakeHouse()
+        projected = read_projection(house, "status")
+        capability = projected["capabilities"][0]
+
+        self.assertEqual(
+            capability["wrapper_owned_fields"],
+            ["action", "after"],
+        )
+        self.assertEqual(
+            set(capability["input_schema"]["properties"]),
+            {"limit"},
+        )
+        self.assertEqual(capability["input_schema"]["required"], [])
+        self.assertEqual(
+            set(capability["runtime_input_schema"]["properties"]),
+            {"action", "after", "limit"},
+        )
+        self.assertEqual(capability["argument_examples"], [{"limit": 3}])
+        self.assertEqual(
+            capability["runtime_example_envelopes"],
+            [{"action": "status", "after": "continue", "limit": 3}],
+        )
+
     def test_mutation_projection_requires_explicit_named_local_grants(self) -> None:
         house = FakeHouse()
         disabled = mutation_projection(house, ())
@@ -154,6 +200,14 @@ class McpProjectionTests(unittest.TestCase):
             projected["authority"],
             "runtime_capability_registry_plus_mcp_deployment_allowlist",
         )
+        focused = mutation_projection(house, ("file.write",), "file.write")
+        capability = focused["capabilities"][0]
+        self.assertEqual(capability["wrapper_owned_fields"], ["action", "after"])
+        self.assertEqual(
+            set(capability["input_schema"]["properties"]),
+            {"path", "content"},
+        )
+        self.assertEqual(capability["input_schema"]["required"], ["path", "content"])
         with self.assertRaises(PermissionError):
             mutation_projection(house, ("file.write",), "fs.stage_patch")
         with self.assertRaises(PermissionError):
