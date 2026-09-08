@@ -85,10 +85,9 @@ def test_promotion_retry_reconciles_content_written_before_stage_status(
         "already landed\n",
         expected_base_sha256="absent",
     )
-    (live / "02_Journal" / "recover.md").write_text(
-        "already landed\n",
-        encoding="utf-8",
-    )
+    # Simulate the exact byte-preserving atomic write used by promotion. Path.write_text
+    # translates LF to CRLF on Windows and would therefore model different content.
+    (live / "02_Journal" / "recover.md").write_bytes(b"already landed\n")
 
     recovered = store.promote(staged["stage_id"], staged["proposal_sha256"])
 
