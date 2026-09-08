@@ -80,6 +80,42 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Inspect mechanical Archive health, local links, normalization ambiguity, and routing coverage candidates.",
     ),
     Capability(
+        "archive.write_capabilities",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect the deployment-scoped canonical Archive text-write boundary.",
+    ),
+    Capability(
+        "archive.stage_text",
+        EffectClass.PREPARE,
+        Decision.ALLOW,
+        "Create a durable MCP-owned text proposal without changing the canonical Archive.",
+    ),
+    Capability(
+        "archive.stage_list",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "List bounded metadata for durable canonical Archive proposals.",
+    ),
+    Capability(
+        "archive.stage_inspect",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect and revalidate one canonical Archive proposal.",
+    ),
+    Capability(
+        "archive.stage_discard",
+        EffectClass.PREPARE,
+        Decision.ALLOW,
+        "Discard an unpromoted canonical Archive proposal without changing the Archive.",
+    ),
+    Capability(
+        "archive.promote",
+        EffectClass.ACT,
+        Decision.ALLOW,
+        "Atomically promote one digest-bound proposal after revalidating path and base hash.",
+    ),
+    Capability(
         "runtime.status",
         EffectClass.PERCEIVE,
         Decision.ALLOW,

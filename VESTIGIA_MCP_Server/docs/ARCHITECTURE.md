@@ -66,8 +66,9 @@ Examples:
 - `archive.append_note`
 - `filesystem.move`
 
-The first ACT lane is limited to explicitly allowlisted, non-outward Runtime-local mutations.
-Archive and external-platform mutation remain absent.
+The ACT lanes are limited to explicitly allowlisted, non-outward Runtime-local mutations and
+two-phase canonical Archive text promotion beneath deployment-granted prefixes. External-platform
+mutation remains absent.
 
 ## Policy invariant
 
@@ -78,6 +79,10 @@ A callable handler must still pass the live policy engine. Unknown capability na
 intersected with Runtime's live executable contract at final dispatch. Future Keyring work will
 refine grants by principal, resident, target, authority epoch, and effect class.
 
+`VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES` independently grants canonical text targets. Promotion
+also requires a durable proposal digest and a still-matching captured base hash. Registering the
+tool or staging content does not itself grant promotion authority.
+
 ## Archive source model
 
 The first adapter gives semantic names to two different sources:
@@ -85,8 +90,10 @@ The first adapter gives semantic names to two different sources:
 - `live`: an immediately-current unpacked directory.
 - `snapshot`: the latest stable snapshot, as a directory or ZIP.
 
-The adapter never extracts the ZIP and never writes either source. Comparison is by relative
-path plus SHA-256 content digest so same-size changes are not missed.
+The adapter never extracts the ZIP and never writes the snapshot. Read comparison is by relative
+path plus SHA-256 content digest so same-size changes are not missed. A separate mutation store
+may atomically create or replace bounded UTF-8 text in the unpacked live Archive only after the
+two-phase promotion checks described in `CANONICAL_ARCHIVE_WRITES.md`.
 
 The server is intentionally honest about cost: a full `archive.diff` hashes the files it
 compares. Caching can be added later, but a stale hidden cache should not masquerade as the

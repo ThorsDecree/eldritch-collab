@@ -1,7 +1,8 @@
 # Threat Model
 
-This document starts narrow on purpose. Archive access is read-only. The first Runtime write
-lane is local, explicitly allowlisted, and bounded by Runtime's own workspace contracts.
+This document starts narrow on purpose. Archive reads remain sensory. Canonical Archive text
+promotion is two-phase and prefix-granted; the Runtime write lane is independently allowlisted
+and bounded by Runtime's own workspace contracts.
 
 ## Trust boundaries
 
@@ -53,8 +54,22 @@ unsupported-effect actions. Final dispatch still passes through Runtime `HousePo
 its path roots, byte ceilings, schemas, optimistic hashes, and receipts.
 
 This first gate is not a complete multi-principal Keyring. A process able to change the MCP
-environment already controls the deployment grant. Canonical Archive writes, provider calls,
-social actions, and arbitrary shell execution remain outside this lane.
+environment already controls the deployment grant. Provider calls, social actions, and
+arbitrary shell execution remain outside this lane.
+
+### Canonical Archive promotion
+
+`archive.stage_text` writes candidate content only beneath MCP-owned state. `archive.promote`
+requires a deployment prefix grant, the exact proposal digest, and a current live target that
+still matches the captured SHA-256/absence. The path is containment-checked again at promotion;
+symlink parents/targets, missing parents, non-text suffixes, oversized content, and snapshot
+targets are refused. The final write uses a temporary sibling plus atomic replacement.
+
+This prevents accidental stale overwrites and common path escapes; it is not a complete defense
+against a malicious local process that can race filesystem metadata, rewrite MCP state, alter
+the environment, or modify the Archive directly. Proposal digests are integrity witnesses, not
+signatures or human confirmations. Delete, move, directory creation, binary writes, and direct
+write bypasses remain unavailable.
 
 ### Prompt injection in source material
 

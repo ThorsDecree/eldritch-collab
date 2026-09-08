@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import uuid
 from dataclasses import asdict
@@ -15,6 +16,7 @@ from mcp.types import ImageContent, TextContent, ToolAnnotations
 from . import __version__
 from .adapters.archive import ArchiveError, ArchiveSource, normalize_relative_path
 from .adapters.runtime import RuntimeBridge, RuntimeBridgeError
+from .archive_mutation import ArchiveMutationStore
 from .audit import AuditError, AuditLedger
 from .config import Settings
 from .health import (
@@ -38,6 +40,12 @@ LOCAL_WRITE_ANNOTATIONS = ToolAnnotations(
     destructive_hint=False,
     open_world_hint=False,
     idempotent_hint=False,
+)
+CANONICAL_WRITE_ANNOTATIONS = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=True,
+    open_world_hint=False,
+    idempotent_hint=True,
 )
 
 
@@ -71,6 +79,13 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         deployment_id=settings.deployment_id,
         write_actions=settings.runtime_write_actions,
     )
+    archive_mutations = ArchiveMutationStore(
+        settings.live_archive_root,
+        settings.state_dir,
+        settings.deployment_id,
+        write_prefixes=settings.archive_write_prefixes,
+        max_bytes=settings.archive_write_max_bytes,
+    )
     server = MCPServer(
         "VESTIGIA MCP",
         instructions=(
@@ -79,7 +94,9 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             "reads project Runtime's executable CapabilityRegistry through HousePort. Local "
             "Runtime mutations require both a live eligible Runtime contract and an explicit "
             "deployment action allowlist; MCP does not define a parallel Runtime capability "
-            "ontology. Health, "
+            "ontology. Canonical Archive text changes require a durable stage, an explicit "
+            "path-prefix grant, a matching proposal digest, and a still-current base hash. "
+            "Health, "
             "identity, receipts, and house.glance are descriptive evidence surfaces, not memory "
             "or canonical authority. Prefer diff_detail for one known Archive path and diff for "
             "whole-tree comparison. Text search is literal evidence retrieval, not semantic "
@@ -206,7 +223,14 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 path,
                 max_bytes=settings.archive_text_max_bytes,
             )
-            return {"source": source, "path": path, "content": content}
+            encoded = content.encode("utf-8")
+            return {
+                "source": source,
+                "path": path,
+                "content": content,
+                "size": len(encoded),
+                "sha256": hashlib.sha256(encoded).hexdigest(),
+            }
 
         return guarded("archive.read_text", arguments, operation)
 
@@ -398,6 +422,162 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     check_links=check_links,
                 ),
             },
+        )
+
+    @server.tool(
+        name="archive.write_capabilities",
+        title="Inspect canonical Archive write grants",
+        description=(
+            "Use this before staging or promotion to inspect the exact path prefixes, text "
+            "suffixes, byte ceiling, and two-phase authority configured for this deployment."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def archive_write_capabilities() -> dict[str, object]:
+        return guarded(
+            "archive.write_capabilities",
+            {},
+            archive_mutations.capabilities,
+        )
+
+    @server.tool(
+        name="archive.stage_text",
+        title="Stage a canonical Archive text change",
+        description=(
+            "Create a durable MCP-owned create/replace proposal under an operator-granted "
+            "Archive prefix. This does not modify the live Archive. The proposal captures its "
+            "content digest and the target's current base hash for later promotion. For a "
+            "replacement, pass the SHA-256 returned by archive.read_text; for a create, pass "
+            "'absent'."
+        ),
+        annotations=LOCAL_WRITE_ANNOTATIONS,
+    )
+    def archive_stage_text(
+        path: str,
+        content: str,
+        expected_base_sha256: str | None = None,
+        reason: str = "",
+    ) -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        arguments = {
+            "path": path,
+            "content": content,
+            "expected_base_sha256": expected_base_sha256,
+            "reason": reason,
+        }
+
+        def operation() -> dict[str, object]:
+            return {
+                "request_id": request_id,
+                **archive_mutations.stage_text(
+                    path,
+                    content,
+                    expected_base_sha256=expected_base_sha256,
+                    reason=reason,
+                ),
+            }
+
+        return guarded(
+            "archive.stage_text",
+            arguments,
+            operation,
+            request_id=request_id,
+        )
+
+    @server.tool(
+        name="archive.stage_list",
+        title="List canonical Archive stages",
+        description=(
+            "List durable Archive proposal metadata without returning staged content. "
+            "Listing never changes the Archive or proposal state."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def archive_stage_list(
+        status: str = "staged",
+        limit: int = 50,
+    ) -> dict[str, object]:
+        arguments = {"status": status, "limit": limit}
+        return guarded(
+            "archive.stage_list",
+            arguments,
+            lambda: archive_mutations.list_stages(status=status, limit=limit),
+        )
+
+    @server.tool(
+        name="archive.stage_inspect",
+        title="Inspect a canonical Archive stage",
+        description=(
+            "Inspect one durable proposal and revalidate its captured base against the live "
+            "Archive. Staged content is omitted unless include_content is true."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def archive_stage_inspect(
+        stage_id: str,
+        include_content: bool = False,
+    ) -> dict[str, object]:
+        arguments = {"stage_id": stage_id, "include_content": include_content}
+        return guarded(
+            "archive.stage_inspect",
+            arguments,
+            lambda: archive_mutations.inspect_stage(
+                stage_id,
+                include_content=include_content,
+            ),
+        )
+
+    @server.tool(
+        name="archive.stage_discard",
+        title="Discard a canonical Archive stage",
+        description=(
+            "Discard one still-staged proposal while preserving its durable record. This never "
+            "changes the canonical Archive."
+        ),
+        annotations=LOCAL_WRITE_ANNOTATIONS,
+    )
+    def archive_stage_discard(
+        stage_id: str,
+        reason: str = "",
+    ) -> dict[str, object]:
+        arguments = {"stage_id": stage_id, "reason": reason}
+        return guarded(
+            "archive.stage_discard",
+            arguments,
+            lambda: archive_mutations.discard_stage(stage_id, reason=reason),
+        )
+
+    @server.tool(
+        name="archive.promote",
+        title="Promote a staged canonical Archive change",
+        description=(
+            "Atomically create or replace one live Archive text file from a durable stage. "
+            "Promotion requires the exact proposal digest, an active deployment prefix grant, "
+            "and an unchanged captured base hash; otherwise it refuses without writing."
+        ),
+        annotations=CANONICAL_WRITE_ANNOTATIONS,
+    )
+    def archive_promote(
+        stage_id: str,
+        proposal_sha256: str,
+    ) -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        arguments = {
+            "stage_id": stage_id,
+            "proposal_sha256": proposal_sha256,
+        }
+
+        def operation() -> dict[str, object]:
+            return {
+                "request_id": request_id,
+                **archive_mutations.promote(stage_id, proposal_sha256),
+            }
+
+        return guarded(
+            "archive.promote",
+            arguments,
+            operation,
+            request_id=request_id,
         )
 
     @server.tool(
@@ -663,6 +843,11 @@ def create_server(settings: Settings | None = None) -> MCPServer:
 
             recent = ledger.recent(limit=5)
             recent_errors = ledger.recent(limit=5, outcome="error")
+            canonical_stages = archive_mutations.list_stages(
+                status="staged",
+                limit=5,
+            )
+            archive_write = archive_mutations.capabilities()
             malformed = max(
                 int(recent.get("malformed_lines", 0)),
                 int(recent_errors.get("malformed_lines", 0)),
@@ -706,6 +891,16 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     ),
                     "apply_capability_available": False,
                 },
+                "canonical_archive_stages": {
+                    "open_count": canonical_stages["total"],
+                    "recent": canonical_stages["stages"],
+                    "promotion_configured": archive_write["promotion_configured"],
+                    "write_prefixes": archive_write["write_prefixes"],
+                    "surface": (
+                        "archive.stage_text / archive.stage_list / "
+                        "archive.stage_inspect / archive.stage_discard / archive.promote"
+                    ),
+                },
                 "watch_subscriptions": {
                     "supported": False,
                     "roadmap_surface": "durable watch spec with cursor/last-seen receipt",
@@ -733,9 +928,13 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     "name": "VESTIGIA MCP",
                     "version": __version__,
                     "effect_ceiling": (
-                        "bounded_local_act"
-                        if settings.runtime_write_actions
-                        else "perceive"
+                        "canonical_archive_act"
+                        if settings.archive_write_prefixes
+                        else (
+                            "bounded_local_act"
+                            if settings.runtime_write_actions
+                            else "perceive"
+                        )
                     ),
                     "tool_only": True,
                 },
@@ -743,6 +942,9 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 "archive": {
                     "live_configured": settings.live_archive_root is not None,
                     "snapshot_configured": settings.snapshot_archive_root is not None,
+                    "promotion_configured": bool(settings.archive_write_prefixes),
+                    "write_prefixes": list(settings.archive_write_prefixes),
+                    "write_max_bytes": settings.archive_write_max_bytes,
                 },
                 "runtime": {
                     "configured": runtime_bridge.configured,
@@ -771,6 +973,12 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     "surface_version": "v0.1",
                     "new_native_tools": [
                         "archive.health",
+                        "archive.write_capabilities",
+                        "archive.stage_text",
+                        "archive.stage_list",
+                        "archive.stage_inspect",
+                        "archive.stage_discard",
+                        "archive.promote",
                         "audit.show",
                         "system.identity",
                         "house.glance",

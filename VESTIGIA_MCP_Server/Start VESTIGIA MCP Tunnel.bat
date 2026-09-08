@@ -65,6 +65,16 @@ echo   Live:       %VESTIGIA_MCP_LIVE_ARCHIVE_ROOT%
 echo   Snapshot:   %VESTIGIA_MCP_SNAPSHOT_ARCHIVE_ROOT%
 echo   Deployment: %VESTIGIA_MCP_DEPLOYMENT_ID%
 echo   Source:     %VESTIGIA_MCP_SOURCE_STATE% %VESTIGIA_MCP_SOURCE_COMMIT%
+if defined VESTIGIA_MCP_RUNTIME_WRITE_ACTIONS (
+    echo   Runtime writes: %VESTIGIA_MCP_RUNTIME_WRITE_ACTIONS%
+) else (
+    echo   Runtime writes: disabled
+)
+if defined VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES (
+    echo   Archive writes: %VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES%
+) else (
+    echo   Archive writes: disabled
+)
 echo.
 
 pushd "%ROOT%"
