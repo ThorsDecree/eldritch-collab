@@ -293,9 +293,15 @@ GARDEN\
 └── VESTIGIA_MCP_Server\
 ```
 
-It intentionally does **not** contain, persist, or echo `CONTROL_PLANE_API_KEY`. Set that key as
-a Windows user environment variable (or in the launching shell) before double-clicking the
-batch file. An alternate tunnel profile may be supplied as the first argument.
+The launcher restores this deployment's non-secret Archive and Runtime settings after a reboot,
+including bounded Runtime actions, canonical Archive write prefixes, and byte ceilings. Existing
+process or local overrides win over those defaults.
+
+It intentionally does **not** contain or echo `CONTROL_PLANE_API_KEY`. For a reboot-persistent
+local setup, copy `Start VESTIGIA MCP Tunnel.local.example.bat` to
+`Start VESTIGIA MCP Tunnel.local.bat`, replace the placeholder with the key, and keep that ignored
+sidecar on Jeff's machine. Alternatively, set the key as a Windows user environment variable or
+in the launching shell. An alternate tunnel profile may be supplied as the first argument.
 
 ## Safety properties
 
