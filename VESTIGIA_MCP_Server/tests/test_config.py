@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from vestigia_mcp.config import Settings
 
 
@@ -12,6 +14,8 @@ def test_media_ceiling_and_runtime_write_grants_are_explicit_env(monkeypatch) ->
         " 02_Journal,Residents/Liora,02_Journal ",
     )
     monkeypatch.setenv("VESTIGIA_MCP_ARCHIVE_WRITE_MAX_BYTES", "54321")
+    monkeypatch.setenv("VESTIGIA_MCP_MOUNTS_FILE", "/tmp/vestigia-mounts.json")
+    monkeypatch.setenv("VESTIGIA_MCP_RUNTIMES_FILE", "/tmp/vestigia-runtimes.json")
 
     settings = Settings.from_env()
 
@@ -23,6 +27,8 @@ def test_media_ceiling_and_runtime_write_grants_are_explicit_env(monkeypatch) ->
     )
     assert settings.archive_write_prefixes == ("02_Journal", "Residents/Liora")
     assert settings.archive_write_max_bytes == 54321
+    assert settings.mounts_file == Path("/tmp/vestigia-mounts.json")
+    assert settings.runtimes_file == Path("/tmp/vestigia-runtimes.json")
 
 
 def test_runtime_write_grants_default_to_empty(monkeypatch) -> None:

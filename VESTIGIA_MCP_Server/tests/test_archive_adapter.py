@@ -197,3 +197,97 @@ def test_zip_rejects_unsafe_member_path(tmp_path: Path) -> None:
     write_zip(snapshot, {"../escape.md": "nope"})
     with pytest.raises(ArchiveError):
         ArchiveSource(snapshot).list_paths()
+
+
+def test_list_paths_pages_with_stale_view_detection(tmp_path: Path) -> None:
+    live = tmp_path / "live"
+    live.mkdir()
+    for name in ("a.md", "b.md", "c.md"):
+        (live / name).write_text(name, encoding="utf-8")
+    source = ArchiveSource(live)
+
+    first = source.list_paths(limit=2)
+    assert first["paths"] == ["a.md", "b.md"]
+    assert first["total"] == 3
+    assert first["page"]["offset"] == 0
+    assert first["page"]["returned"] == 2
+    assert first["page"]["has_more"] is True
+    assert first["next_cursor"]
+
+    second = source.list_paths(limit=2, cursor=str(first["next_cursor"]))
+    assert second["paths"] == ["c.md"]
+    assert second["page"]["offset"] == 2
+    assert second["next_cursor"] is None
+
+    (live / "d.md").write_text("new", encoding="utf-8")
+    with pytest.raises(ArchiveError, match="stale"):
+        source.list_paths(limit=2, cursor=str(first["next_cursor"]))
+
+
+def test_read_text_pages_are_utf8_safe_and_hash_bound(tmp_path: Path) -> None:
+    live = tmp_path / "live"
+    live.mkdir()
+    original = ("a" * 255) + "🏮" + ("b" * 20)
+    path = live / "long.md"
+    path.write_text(original, encoding="utf-8")
+    source = ArchiveSource(live)
+
+    first = source.read_text_page("long.md", 1000, page_bytes=256)
+    assert first["content"] == "a" * 255
+    assert first["page"]["byte_end"] == 255
+    assert first["next_cursor"]
+
+    second = source.read_text_page(
+        "long.md",
+        1000,
+        page_bytes=256,
+        cursor=str(first["next_cursor"]),
+    )
+    assert first["content"] + second["content"] == original
+    assert second["sha256"] == first["sha256"]
+    assert second["next_cursor"] is None
+
+    path.write_text(original + "changed", encoding="utf-8")
+    with pytest.raises(ArchiveError, match="stale"):
+        source.read_text_page(
+            "long.md",
+            1000,
+            page_bytes=256,
+            cursor=str(first["next_cursor"]),
+        )
+
+
+def test_search_text_pages_bind_query_and_result_view(tmp_path: Path) -> None:
+    live = tmp_path / "live"
+    live.mkdir()
+    path = live / "notes.md"
+    path.write_text("needle one\nneedle two\nneedle three\n", encoding="utf-8")
+    source = ArchiveSource(live)
+
+    first = source.search_text("needle", limit=2)
+    assert [hit["line"] for hit in first["hits"]] == [1, 2]
+    assert first["page"]["total"] == 3
+    assert first["next_cursor"]
+
+    second = source.search_text(
+        "needle",
+        limit=2,
+        cursor=str(first["next_cursor"]),
+    )
+    assert [hit["line"] for hit in second["hits"]] == [3]
+    assert second["next_cursor"] is None
+
+    with pytest.raises(ArchiveError, match="parameters"):
+        source.search_text(
+            "different",
+            limit=2,
+            cursor=str(first["next_cursor"]),
+        )
+
+    path.write_text("needle one\nneedle changed\n", encoding="utf-8")
+    with pytest.raises(ArchiveError, match="stale"):
+        source.search_text(
+            "needle",
+            limit=2,
+            cursor=str(first["next_cursor"]),
+        )

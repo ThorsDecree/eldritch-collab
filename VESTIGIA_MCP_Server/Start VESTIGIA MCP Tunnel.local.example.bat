@@ -6,3 +6,5 @@ set "CONTROL_PLANE_API_KEY=PASTE_CONTROL_PLANE_API_KEY_HERE"
 rem Optional machine-local overrides may also live here. The checked-in launcher already
 rem supplies Jeff's current relative Archive, Runtime Home, write grants, and byte ceilings.
 rem set "VESTIGIA_MCP_DEPLOYMENT_ID=jeff-desktop"
+rem set "VESTIGIA_MCP_MOUNTS_FILE=C:\absolute\path\to\VESTIGIA_MCP_Server\mounts.local.json"
+rem set "VESTIGIA_MCP_RUNTIMES_FILE=C:\absolute\path\to\VESTIGIA_MCP_Server\runtimes.local.json"

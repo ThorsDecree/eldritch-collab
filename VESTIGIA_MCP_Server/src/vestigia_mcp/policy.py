@@ -92,6 +92,12 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Create a durable MCP-owned text proposal without changing the canonical Archive.",
     ),
     Capability(
+        "archive.stage_directory",
+        EffectClass.PREPARE,
+        Decision.ALLOW,
+        "Create a durable MCP-owned directory proposal without changing the canonical Archive.",
+    ),
+    Capability(
         "archive.stage_list",
         EffectClass.PERCEIVE,
         Decision.ALLOW,
@@ -114,6 +120,48 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         EffectClass.ACT,
         Decision.ALLOW,
         "Atomically promote one digest-bound proposal after revalidating path and base hash.",
+    ),
+    Capability(
+        "archive.promote_directory",
+        EffectClass.ACT,
+        Decision.ALLOW,
+        "Promote one digest-bound directory proposal after revalidating every planned path.",
+    ),
+    Capability(
+        "mount.status",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect operator-configured named read-only filesystem mounts.",
+    ),
+    Capability(
+        "mount.list",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "List paged relative paths inside one named read-only mount.",
+    ),
+    Capability(
+        "mount.read_text",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Read one paged UTF-8 text file inside a named read-only mount.",
+    ),
+    Capability(
+        "mount.read_media",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Read one bounded raster image inside a named read-only mount.",
+    ),
+    Capability(
+        "mount.search_text",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Search paged literal text evidence inside a named read-only mount.",
+    ),
+    Capability(
+        "runtime.list",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "List operator-named Runtime houses and their current linkage status.",
     ),
     Capability(
         "runtime.status",

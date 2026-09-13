@@ -14,7 +14,8 @@ from typing import Any
 from .adapters.archive import ArchiveError, TEXT_SUFFIXES, normalize_relative_path
 
 
-STAGE_SCHEMA_VERSION = "vestigia.archive-stage.v0.1"
+STAGE_SCHEMA_VERSION = "vestigia.archive-stage.v0.2"
+LEGACY_STAGE_SCHEMA_VERSION = "vestigia.archive-stage.v0.1"
 _STAGE_ID = re.compile(r"archive_stage_[0-9a-f]{32}\Z")
 
 
@@ -37,7 +38,7 @@ def _matches_prefix(path: str, prefix: str) -> bool:
 
 
 class ArchiveMutationStore:
-    """Durable two-phase text proposals for one unpacked live Archive.
+    """Durable two-phase text and directory proposals for one live Archive.
 
     Staging writes only MCP-owned state. Promotion revalidates the captured base hash and
     deployment prefix grant immediately before an atomic replacement in the live Archive.
@@ -76,14 +77,14 @@ class ArchiveMutationStore:
         except ArchiveError as exc:
             error = str(exc)
         return {
-            "schema_version": "vestigia.archive-write-capabilities.v0.1",
+            "schema_version": "vestigia.archive-write-capabilities.v0.2",
             "authority": "mcp_deployment_prefix_grant_plus_live_base_hash",
             "write_boundary_available": available,
             "promotion_configured": bool(self._write_prefixes),
             "write_prefixes": list(self._write_prefixes),
             "text_suffixes": sorted(TEXT_SUFFIXES),
             "max_bytes": self._max_bytes,
-            "operations": ["create", "replace"],
+            "operations": ["create", "replace", "create_directory"],
             "requires_staging": True,
             "requires_proposal_digest": True,
             "optimistic_base_hash": True,
@@ -112,7 +113,7 @@ class ArchiveMutationStore:
             raise ArchiveError("Stage reason must be at most 1000 characters")
 
         with self._lock:
-            normalized, target = self._target(path)
+            normalized, target = self._text_target(path)
             current_sha = self._current_sha(target)
             expected = self._normalize_expected_hash(expected_base_sha256)
             if expected is not None:
@@ -129,6 +130,7 @@ class ArchiveMutationStore:
                 "stage_id": stage_id,
                 "created_at": now,
                 "deployment_id": self._deployment_id,
+                "kind": "text",
                 "path": normalized,
                 "operation": "create" if current_sha is None else "replace",
                 "base_sha256": current_sha,
@@ -153,6 +155,49 @@ class ArchiveMutationStore:
                 "next_step": (
                     "Inspect the stage, then call archive.promote with this stage_id and "
                     "proposal_sha256 while the captured base remains unchanged."
+                ),
+            }
+
+    def stage_directory(
+        self,
+        path: str,
+        *,
+        reason: str = "",
+    ) -> dict[str, object]:
+        if len(reason) > 1000:
+            raise ArchiveError("Stage reason must be at most 1000 characters")
+        with self._lock:
+            plan = self._directory_plan(path)
+            now = datetime.now(UTC).isoformat()
+            stage_id = f"archive_stage_{uuid.uuid4().hex}"
+            immutable = {
+                "schema_version": STAGE_SCHEMA_VERSION,
+                "stage_id": stage_id,
+                "created_at": now,
+                "deployment_id": self._deployment_id,
+                "kind": "directory",
+                "path": plan["path"],
+                "operation": "create_directory",
+                "existing_parent": plan["existing_parent"],
+                "missing_directories": plan["missing_directories"],
+                "base_state_sha256": plan["base_state_sha256"],
+                "reason": reason.strip(),
+            }
+            record = {
+                **immutable,
+                "proposal_sha256": _canonical_digest(immutable),
+                "status": "staged",
+                "updated_at": now,
+                "promoted_at": None,
+                "discarded_at": None,
+            }
+            self._write_record(record)
+            return {
+                **self._public_record(record, include_content=False),
+                "canonical_changed": False,
+                "next_step": (
+                    "Inspect the stage, then call archive.promote_directory with this "
+                    "stage_id and proposal_sha256 while every planned directory remains absent."
                 ),
             }
 
@@ -219,6 +264,8 @@ class ArchiveMutationStore:
     def promote(self, stage_id: str, proposal_sha256: str) -> dict[str, object]:
         with self._lock:
             record = self._load_record(stage_id)
+            if self._record_kind(record) != "text":
+                raise ArchiveError("Directory proposals require archive.promote_directory")
             if proposal_sha256 != record["proposal_sha256"]:
                 raise ArchiveError("Proposal digest does not match the staged Archive proposal")
 
@@ -251,7 +298,7 @@ class ArchiveMutationStore:
                         "promotion_reconciled": True,
                     }
                 raise ArchiveError(str(validation["detail"]))
-            _, target = self._target(str(record["path"]))
+            _, target = self._text_target(str(record["path"]))
             data = str(record["content"]).encode("utf-8")
             self._atomic_write(target, data)
             self._mark_promoted(record, reconciled=False)
@@ -262,12 +309,73 @@ class ArchiveMutationStore:
                 "atomic_replace": True,
             }
 
+    def promote_directory(
+        self,
+        stage_id: str,
+        proposal_sha256: str,
+    ) -> dict[str, object]:
+        with self._lock:
+            record = self._load_record(stage_id)
+            if self._record_kind(record) != "directory":
+                raise ArchiveError("Text proposals require archive.promote")
+            if proposal_sha256 != record["proposal_sha256"]:
+                raise ArchiveError("Proposal digest does not match the staged Archive proposal")
+
+            if record.get("status") == "promoted":
+                target = self._directory_target(str(record["path"]))
+                if not target.is_dir() or target.is_symlink():
+                    raise ArchiveError(
+                        "Promoted Archive directory stage no longer matches the live target"
+                    )
+                return {
+                    **self._public_record(record, include_content=False),
+                    "canonical_changed": False,
+                    "already_promoted": True,
+                    "created_directories": list(record["missing_directories"]),
+                    "atomic_per_directory": True,
+                }
+            if record.get("status") != "staged":
+                raise ArchiveError("Only a staged Archive proposal can be promoted")
+
+            validation = self._validation(record)
+            if not validation["ready"]:
+                raise ArchiveError(str(validation["detail"]))
+
+            root = self._root()
+            created: list[Path] = []
+            try:
+                for relative in record["missing_directories"]:
+                    directory = root.joinpath(*PurePosixPath(str(relative)).parts)
+                    directory.mkdir()
+                    created.append(directory)
+            except OSError as exc:
+                for directory in reversed(created):
+                    try:
+                        directory.rmdir()
+                    except OSError:
+                        pass
+                raise ArchiveError("Unable to create the staged Archive directory tree") from exc
+
+            self._mark_promoted(record, reconciled=False)
+            return {
+                **self._public_record(record, include_content=False),
+                "canonical_changed": True,
+                "created_directories": list(record["missing_directories"]),
+                "atomic_per_directory": True,
+                "rollback_on_failure": True,
+            }
+
     def _mark_promoted(self, record: dict[str, Any], *, reconciled: bool) -> None:
         now = datetime.now(UTC).isoformat()
         record["status"] = "promoted"
         record["promoted_at"] = now
         record["updated_at"] = now
-        record["promoted_sha256"] = record["content_sha256"]
+        if self._record_kind(record) == "text":
+            record["promoted_sha256"] = record["content_sha256"]
+        else:
+            record["promoted_state_sha256"] = _canonical_digest(
+                {"path": record["path"], "kind": "directory", "exists": True}
+            )
         record["promotion_reconciled"] = reconciled
         self._write_record(record)
 
@@ -285,8 +393,8 @@ class ArchiveMutationStore:
             raise ArchiveError("MCP state directory must not be inside the live Archive")
         return root
 
-    def _target(self, path: str) -> tuple[str, Path]:
-        normalized = normalize_relative_path(path)
+    @staticmethod
+    def _validate_path_components(normalized: str) -> None:
         for part in PurePosixPath(normalized).parts:
             if (
                 ":" in part
@@ -294,12 +402,19 @@ class ArchiveMutationStore:
                 or PureWindowsPath(part).is_reserved()
             ):
                 raise ArchiveError("Archive path contains a Windows-unsafe component")
-        if PurePosixPath(normalized).suffix.lower() not in TEXT_SUFFIXES:
-            raise ArchiveError("Canonical Archive promotion supports text-like files only")
+
+    def _require_write_prefix(self, normalized: str) -> None:
         if not self._write_prefixes:
             raise ArchiveError("Canonical Archive promotion has no configured write prefixes")
         if not any(_matches_prefix(normalized, prefix) for prefix in self._write_prefixes):
             raise ArchiveError("Archive path is outside configured canonical write prefixes")
+
+    def _text_target(self, path: str) -> tuple[str, Path]:
+        normalized = normalize_relative_path(path)
+        self._validate_path_components(normalized)
+        if PurePosixPath(normalized).suffix.lower() not in TEXT_SUFFIXES:
+            raise ArchiveError("Canonical Archive promotion supports text-like files only")
+        self._require_write_prefix(normalized)
 
         root = self._root()
         target = root.joinpath(*PurePosixPath(normalized).parts)
@@ -321,6 +436,53 @@ class ArchiveMutationStore:
         if target.exists() and not target.is_file():
             raise ArchiveError("Archive target is not a regular file")
         return normalized, target
+
+    def _directory_target(self, path: str) -> Path:
+        normalized = normalize_relative_path(path)
+        self._validate_path_components(normalized)
+        self._require_write_prefix(normalized)
+        root = self._root()
+        target = root.joinpath(*PurePosixPath(normalized).parts)
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise ArchiveError("Resolved Archive directory escaped the live root") from exc
+        return target
+
+    def _directory_plan(self, path: str) -> dict[str, object]:
+        normalized = normalize_relative_path(path)
+        target = self._directory_target(normalized)
+        if target.is_symlink():
+            raise ArchiveError("Symlink Archive directories are not writable")
+        if target.exists():
+            if target.is_dir():
+                raise ArchiveError("Archive directory already exists")
+            raise ArchiveError("Archive directory target is an existing non-directory")
+
+        root = self._root()
+        cursor = root
+        missing: list[str] = []
+        existing_parent = "."
+        for part in PurePosixPath(normalized).parts:
+            cursor = cursor / part
+            relative = cursor.relative_to(root).as_posix()
+            if cursor.is_symlink():
+                raise ArchiveError("Symlink directories are not writable Archive parents")
+            if cursor.exists():
+                if not cursor.is_dir():
+                    raise ArchiveError("Archive directory path crosses a non-directory")
+                existing_parent = relative
+                continue
+            missing.append(relative)
+
+        if not missing:
+            raise ArchiveError("Archive directory already exists")
+        base = {
+            "path": normalized,
+            "existing_parent": existing_parent,
+            "missing_directories": missing,
+        }
+        return {**base, "base_state_sha256": _canonical_digest(base)}
 
     @staticmethod
     def _normalize_expected_hash(value: str | None) -> str | None:
@@ -367,17 +529,51 @@ class ArchiveMutationStore:
             raise ArchiveError(f"Archive stage not found: {stage_id}") from exc
         except (OSError, json.JSONDecodeError) as exc:
             raise ArchiveError(f"Archive stage is unreadable: {stage_id}") from exc
-        if not isinstance(record, dict) or record.get("schema_version") != STAGE_SCHEMA_VERSION:
+        if not isinstance(record, dict) or record.get("schema_version") not in {
+            LEGACY_STAGE_SCHEMA_VERSION,
+            STAGE_SCHEMA_VERSION,
+        }:
             raise ArchiveError("Archive stage has an unsupported schema")
         if record.get("deployment_id") != self._deployment_id:
             raise ArchiveError("Archive stage belongs to a different MCP deployment")
-        immutable = {
-            key: record.get(key)
-            for key in (
-                "schema_version",
-                "stage_id",
-                "created_at",
-                "deployment_id",
+        immutable = self._immutable_record(record)
+        if self._record_kind(record) == "text":
+            content = record.get("content")
+            if not isinstance(content, str):
+                raise ArchiveError("Archive stage content is invalid")
+            encoded = content.encode("utf-8")
+            if record.get("content_size") != len(encoded) or record.get(
+                "content_sha256"
+            ) != _sha256(encoded):
+                raise ArchiveError("Archive stage content failed integrity verification")
+        else:
+            missing = record.get("missing_directories")
+            if not isinstance(missing, list) or not missing or not all(
+                isinstance(item, str) for item in missing
+            ):
+                raise ArchiveError("Archive directory stage plan is invalid")
+        if record.get("proposal_sha256") != _canonical_digest(immutable):
+            raise ArchiveError("Archive stage proposal failed integrity verification")
+        return record
+
+    @staticmethod
+    def _record_kind(record: dict[str, Any]) -> str:
+        if record.get("schema_version") == LEGACY_STAGE_SCHEMA_VERSION:
+            return "text"
+        kind = record.get("kind")
+        if kind not in {"text", "directory"}:
+            raise ArchiveError("Archive stage kind is unsupported")
+        return str(kind)
+
+    def _immutable_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        common = (
+            "schema_version",
+            "stage_id",
+            "created_at",
+            "deployment_id",
+        )
+        if record.get("schema_version") == LEGACY_STAGE_SCHEMA_VERSION:
+            keys = common + (
                 "path",
                 "operation",
                 "base_sha256",
@@ -385,22 +581,54 @@ class ArchiveMutationStore:
                 "content_size",
                 "reason",
             )
-        }
-        content = record.get("content")
-        if not isinstance(content, str):
-            raise ArchiveError("Archive stage content is invalid")
-        encoded = content.encode("utf-8")
-        if record.get("content_size") != len(encoded) or record.get(
-            "content_sha256"
-        ) != _sha256(encoded):
-            raise ArchiveError("Archive stage content failed integrity verification")
-        if record.get("proposal_sha256") != _canonical_digest(immutable):
-            raise ArchiveError("Archive stage proposal failed integrity verification")
-        return record
+        elif self._record_kind(record) == "text":
+            keys = common + (
+                "kind",
+                "path",
+                "operation",
+                "base_sha256",
+                "content_sha256",
+                "content_size",
+                "reason",
+            )
+        else:
+            keys = common + (
+                "kind",
+                "path",
+                "operation",
+                "existing_parent",
+                "missing_directories",
+                "base_state_sha256",
+                "reason",
+            )
+        return {key: record.get(key) for key in keys}
 
     def _validation(self, record: dict[str, Any]) -> dict[str, object]:
+        if self._record_kind(record) == "directory":
+            try:
+                plan = self._directory_plan(str(record["path"]))
+            except ArchiveError as exc:
+                return {
+                    "ready": False,
+                    "detail": str(exc),
+                    "current_base_state_sha256": None,
+                }
+            ready = (
+                plan["base_state_sha256"] == record.get("base_state_sha256")
+                and plan["missing_directories"] == record.get("missing_directories")
+            )
+            return {
+                "ready": ready,
+                "detail": (
+                    "Staged directory plan is still absent and the prefix grant is active"
+                    if ready
+                    else "Archive directory state changed after staging; promotion refused"
+                ),
+                "expected_base_state_sha256": record.get("base_state_sha256"),
+                "current_base_state_sha256": plan["base_state_sha256"],
+            }
         try:
-            _, target = self._target(str(record["path"]))
+            _, target = self._text_target(str(record["path"]))
             current_sha = self._current_sha(target)
         except ArchiveError as exc:
             return {"ready": False, "detail": str(exc), "current_sha256": None}
@@ -421,7 +649,7 @@ class ArchiveMutationStore:
 
     def _validation_against_content(self, record: dict[str, Any]) -> dict[str, object]:
         try:
-            _, target = self._target(str(record["path"]))
+            _, target = self._text_target(str(record["path"]))
             current_sha = self._current_sha(target)
         except ArchiveError as exc:
             return {
@@ -438,7 +666,7 @@ class ArchiveMutationStore:
     def _public_record(record: dict[str, Any], *, include_content: bool) -> dict[str, object]:
         hidden = {"content"}
         result = {key: value for key, value in record.items() if key not in hidden}
-        if include_content:
+        if include_content and "content" in record:
             result["content"] = record["content"]
         return result
 

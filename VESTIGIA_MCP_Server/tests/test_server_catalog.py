@@ -20,10 +20,18 @@ EXPECTED_TOOLS = {
     "archive.health",
     "archive.write_capabilities",
     "archive.stage_text",
+    "archive.stage_directory",
     "archive.stage_list",
     "archive.stage_inspect",
     "archive.stage_discard",
     "archive.promote",
+    "archive.promote_directory",
+    "mount.status",
+    "mount.list",
+    "mount.read_text",
+    "mount.read_media",
+    "mount.search_text",
+    "runtime.list",
     "runtime.status",
     "runtime.capabilities",
     "runtime.call",
@@ -46,6 +54,24 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
         b"\x89PNG\r\n\x1a\n" + b"wire-fixture"
     )
     (live / "Liora" / "breathprint.md").write_text("gutterstar", encoding="utf-8")
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "outside.md").write_text("external lantern", encoding="utf-8")
+    (external / "outside.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n" + b"external-fixture"
+    )
+    mounts_file = tmp_path / "mounts.json"
+    mounts_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "vestigia.mounts.v0.1",
+                "mounts": [
+                    {"id": "outside", "root": str(external), "access": "read"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     registry = {
         "schema_version": "0.1",
         "generated": "2026-09-03T00:00:00-05:00",
@@ -71,6 +97,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
         deployment_id="test-deployment",
         archive_text_max_bytes=1_000_000,
         archive_write_prefixes=("Liora",),
+        mounts_file=mounts_file,
     )
     server = create_server(settings)
 
@@ -83,9 +110,11 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             local_writes = {
                 "runtime.write",
                 "archive.stage_text",
+                "archive.stage_directory",
                 "archive.stage_discard",
             }
-            for name in EXPECTED_TOOLS - local_writes - {"archive.promote"}:
+            canonical_writes = {"archive.promote", "archive.promote_directory"}
+            for name in EXPECTED_TOOLS - local_writes - canonical_writes:
                 annotations = tools[name].annotations
                 assert annotations is not None
                 assert annotations.read_only_hint is True
@@ -101,12 +130,13 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
                 assert write_annotations.open_world_hint is False
                 assert write_annotations.idempotent_hint is False
 
-            promote_annotations = tools["archive.promote"].annotations
-            assert promote_annotations is not None
-            assert promote_annotations.read_only_hint is False
-            assert promote_annotations.destructive_hint is True
-            assert promote_annotations.open_world_hint is False
-            assert promote_annotations.idempotent_hint is True
+            for name in canonical_writes:
+                promote_annotations = tools[name].annotations
+                assert promote_annotations is not None
+                assert promote_annotations.read_only_hint is False
+                assert promote_annotations.destructive_hint is True
+                assert promote_annotations.open_world_hint is False
+                assert promote_annotations.idempotent_hint is True
 
             media_result = await client.call_tool(
                 "archive.read_media",
@@ -152,6 +182,45 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert search_result.structured_content is not None
             assert search_result.structured_content["match_count"] == 1
             assert search_result.structured_content["hits"][0]["path"] == "manifest.md"
+            assert search_result.structured_content["hits"][0]["source"] == "live"
+            assert (
+                search_result.structured_content["hits"][0]["provenance"]
+                == "configured_archive_source"
+            )
+
+            mounts_result = await client.call_tool("mount.status", {})
+            assert mounts_result.is_error is False
+            assert mounts_result.structured_content is not None
+            assert mounts_result.structured_content["mount_count"] == 1
+            assert mounts_result.structured_content["stats_included"] is False
+
+            mount_list_result = await client.call_tool(
+                "mount.list", {"mount_id": "outside", "limit": 1}
+            )
+            assert mount_list_result.is_error is False
+            assert mount_list_result.structured_content is not None
+            assert mount_list_result.structured_content["mount_id"] == "outside"
+            assert mount_list_result.structured_content["page"]["has_more"] is True
+
+            mount_text_result = await client.call_tool(
+                "mount.read_text", {"mount_id": "outside", "path": "outside.md"}
+            )
+            assert mount_text_result.is_error is False
+            assert mount_text_result.structured_content is not None
+            assert mount_text_result.structured_content["content"] == "external lantern"
+
+            mount_search_result = await client.call_tool(
+                "mount.search_text", {"mount_id": "outside", "query": "lantern"}
+            )
+            assert mount_search_result.is_error is False
+            assert mount_search_result.structured_content is not None
+            assert mount_search_result.structured_content["hits"][0]["mount_id"] == "outside"
+
+            mount_media_result = await client.call_tool(
+                "mount.read_media", {"mount_id": "outside", "path": "outside.png"}
+            )
+            assert mount_media_result.is_error is False
+            assert [item.type for item in mount_media_result.content] == ["text", "image"]
 
             write_surface = await client.call_tool(
                 "archive.write_capabilities", {}
@@ -199,6 +268,38 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
                 encoding="utf-8"
             ) == "staged lantern\n"
 
+            directory_stage_result = await client.call_tool(
+                "archive.stage_directory",
+                {"path": "Liora/workbench/drafts", "reason": "wire test"},
+            )
+            assert directory_stage_result.is_error is False
+            assert directory_stage_result.structured_content is not None
+            directory_stage = directory_stage_result.structured_content
+            assert directory_stage["canonical_changed"] is False
+            assert directory_stage["kind"] == "directory"
+            assert not (live / "Liora" / "workbench").exists()
+
+            directory_inspect_result = await client.call_tool(
+                "archive.stage_inspect",
+                {"stage_id": directory_stage["stage_id"], "include_content": True},
+            )
+            assert directory_inspect_result.is_error is False
+            assert directory_inspect_result.structured_content is not None
+            assert "content" not in directory_inspect_result.structured_content
+            assert directory_inspect_result.structured_content["validation"]["ready"] is True
+
+            directory_promote_result = await client.call_tool(
+                "archive.promote_directory",
+                {
+                    "stage_id": directory_stage["stage_id"],
+                    "proposal_sha256": directory_stage["proposal_sha256"],
+                },
+            )
+            assert directory_promote_result.is_error is False
+            assert directory_promote_result.structured_content is not None
+            assert directory_promote_result.structured_content["canonical_changed"] is True
+            assert (live / "Liora" / "workbench" / "drafts").is_dir()
+
             runtime_result = await client.call_tool("runtime.status", {})
             assert runtime_result.is_error is False
             assert runtime_result.structured_content is not None
@@ -217,7 +318,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert identity_result.structured_content["archive"]["live"]["available"] is True
             assert (
                 identity_result.structured_content["capability_registry"]["capability_count"]
-                == 25
+                == 33
             )
 
             glance_result = await client.call_tool("house.glance", {})
@@ -230,8 +331,8 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             status_result = await client.call_tool("vestigia.status", {})
             assert status_result.is_error is False
             assert status_result.structured_content is not None
-            assert status_result.structured_content["server"]["version"] == "0.4.0.dev0"
-            assert status_result.structured_content["policy"]["capability_count"] == 25
+            assert status_result.structured_content["server"]["version"] == "0.5.0.dev0"
+            assert status_result.structured_content["policy"]["capability_count"] == 33
             assert status_result.structured_content["runtime"]["configured"] is False
             assert status_result.structured_content["archive"]["promotion_configured"] is True
             assert (
@@ -241,7 +342,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
 
             receipt_result = await client.call_tool(
                 "receipts.recent",
-                {"limit": 20},
+                {"limit": 50},
             )
             assert receipt_result.is_error is False
             assert receipt_result.structured_content is not None
@@ -251,9 +352,16 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert "archive.health" in capabilities
             assert "archive.search_text" in capabilities
             assert "archive.stage_text" in capabilities
+            assert "archive.stage_directory" in capabilities
             assert "archive.stage_inspect" in capabilities
             assert "archive.promote" in capabilities
+            assert "archive.promote_directory" in capabilities
             assert "archive.read_media" in capabilities
+            assert "mount.status" in capabilities
+            assert "mount.list" in capabilities
+            assert "mount.read_text" in capabilities
+            assert "mount.read_media" in capabilities
+            assert "mount.search_text" in capabilities
             assert "runtime.status" in capabilities
             assert "system.identity" in capabilities
             assert "house.glance" in capabilities

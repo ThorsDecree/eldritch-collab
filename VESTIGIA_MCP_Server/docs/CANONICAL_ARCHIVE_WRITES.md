@@ -2,7 +2,7 @@
 
 ## Boundary
 
-The canonical write lane is a two-phase, text-only capability for the unpacked live Archive.
+The canonical write lane is a two-phase text-and-directory capability for the unpacked live Archive.
 It is independent of Runtime's `workspace/` mutation projection.
 
 ```text
@@ -11,6 +11,12 @@ archive.stage_text
     -> archive.stage_inspect
     -> archive.promote
     -> atomic create/replace in the live Archive
+
+archive.stage_directory
+    -> MCP-owned durable directory plan
+    -> archive.stage_inspect
+    -> archive.promote_directory
+    -> nested directory creation in the live Archive
 ```
 
 Neither staging nor inspection changes canonical content. Promotion is the only canonical
@@ -28,8 +34,9 @@ VESTIGIA_MCP_ARCHIVE_WRITE_MAX_BYTES=1000000
 
 The prefix list defaults to empty. An empty list grants nothing. A target must equal a granted
 prefix or be beneath it on a path-segment boundary. Absolute paths, drive-qualified paths,
-parent traversal, symlink targets/parents, missing parent directories, non-text suffixes, and
-oversized or empty content are refused.
+parent traversal, symlink targets/parents, non-text suffixes, and oversized or empty text content
+are refused. Text targets require an existing parent; directory proposals may include multiple
+missing descendants beneath the nearest existing parent.
 
 The production server reads process environment only. `dev_server.py` loads the project-local
 `.env` for Inspector development; the tunnel batch launcher does not parse `.env`.
@@ -60,6 +67,11 @@ matches the captured base and the prefix grant remains active.
 
 `archive.stage_discard` changes only MCP-owned stage state and preserves the record.
 
+`archive.stage_directory(path, reason?)` captures the nearest existing parent, every missing
+directory component, and a digest of that exact plan. It creates nothing during staging. An
+already-existing target, non-directory path component, symlink, unsafe path, or path outside the
+current prefix grant is refused.
+
 ## Promotion contract
 
 `archive.promote(stage_id, proposal_sha256)` refuses unless:
@@ -80,13 +92,17 @@ stage-status update was interrupted, a retry recognizes the exact staged content
 the stage state, and reports reconciliation rather than writing again. A different live hash is
 always treated as a conflict.
 
+`archive.promote_directory(stage_id, proposal_sha256)` re-checks the digest and active prefix
+grant, then requires the planned directory state to match exactly. Each individual `mkdir` is an
+atomic filesystem operation. If a later component fails, the server removes newly created
+components in reverse order wherever they remain empty. A successful retry is idempotent.
+
 ## Deliberate exclusions
 
 This first canonical lane does not provide:
 
 - direct writes that bypass a stage;
 - delete or move;
-- directory creation;
 - image, binary, or SVG writes;
 - snapshot mutation;
 - arbitrary filesystem access;

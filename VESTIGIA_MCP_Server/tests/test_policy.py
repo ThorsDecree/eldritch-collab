@@ -25,7 +25,9 @@ def test_read_only_archive_capability_is_allowed() -> None:
 def test_archive_stage_and_promotion_have_distinct_effect_classes() -> None:
     engine = PolicyEngine()
     assert engine.require_allowed("archive.stage_text").effect is EffectClass.PREPARE
+    assert engine.require_allowed("archive.stage_directory").effect is EffectClass.PREPARE
     assert engine.require_allowed("archive.promote").effect is EffectClass.ACT
+    assert engine.require_allowed("archive.promote_directory").effect is EffectClass.ACT
 
 
 def test_confirm_or_deny_is_not_treated_as_allow() -> None:

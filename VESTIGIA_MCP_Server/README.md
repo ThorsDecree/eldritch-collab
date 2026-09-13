@@ -22,14 +22,14 @@ The native MCP capability vocabulary is deliberately split into three effect cla
 - **PREPARE** - create a draft, staged action, crop, queue item, or other reversible working state.
 - **ACT** - cause an externally consequential or canonical mutation.
 
-Version `0.4.0.dev0` adds an opt-in two-phase canonical Archive text lane. A proposal is first
-stored under MCP-owned state without changing the Archive; promotion then requires an explicit
-path-prefix grant, the exact proposal digest, and a still-matching live base hash. Runtime and
-Archive mutation remain disabled by default.
+Version `0.5.0.dev0` adds stable cursor pagination, staged directory creation, named external
+read-only mounts, and a multi-house Runtime registry/router. Canonical changes still require a
+durable proposal, an explicit path-prefix grant, the exact proposal digest, and revalidation at
+promotion. Runtime and Archive mutation remain disabled by default.
 
 Sensory tools advertise read-only/non-destructive/non-open-world annotations. Staging and
-Runtime workspace writes advertise local non-open-world mutation; `archive.promote` advertises
-a potentially destructive canonical mutation. Those annotations are descriptive hints only;
+Runtime workspace writes advertise local non-open-world mutation; `archive.promote` and
+`archive.promote_directory` advertise potentially destructive canonical mutations. Those annotations are descriptive hints only;
 executable MCP policy, deployment grants, base hashes, and target policy remain authoritative.
 
 ## Sensory surface
@@ -53,17 +53,27 @@ Tools:
 - `archive.registry_status`
 - `archive.write_capabilities`
 - `archive.stage_text`
+- `archive.stage_directory`
 - `archive.stage_list`
 - `archive.stage_inspect`
 - `archive.stage_discard`
 - `archive.promote`
+- `archive.promote_directory`
 
 `archive.search_text` performs literal, line-oriented search across configured UTF-8 text-like
 files. It is deliberately not fuzzy or semantic search. Results include path, line number, a
 bounded excerpt, total matching lines, and explicit counts for oversized/non-UTF-8 files that
 were skipped.
 
-`archive.read_text` returns the exact bounded UTF-8 content together with its byte size and
+Each search hit repeats its source ID and provenance class so extracted hits remain attributable
+outside the surrounding response envelope.
+
+`archive.list`, `archive.read_text`, and `archive.search_text` return `page` metadata and an
+opaque `next_cursor` when more results remain. Pass that cursor back unchanged with the same
+query. Cursors bind the source, query, offset, and result/file digest; a changed view is rejected
+as stale instead of silently mixing pages. Text pages are split only on UTF-8 boundaries.
+
+`archive.read_text` returns bounded UTF-8 content together with the whole file's byte size and
 SHA-256. Pass that digest as `expected_base_sha256` when staging a replacement to bind the
 proposal to the version that was actually read.
 
@@ -86,7 +96,7 @@ exclusions explicitly.
 
 ### Canonical Archive staging and promotion
 
-Canonical mutation is a separate opt-in lane for bounded UTF-8 text creation and replacement:
+Canonical mutation is a separate opt-in lane for bounded UTF-8 text and directory creation:
 
 ```text
 candidate text -> durable MCP stage -> inspect/revalidate -> atomic live promotion
@@ -99,19 +109,38 @@ current prefix grant again, refuses if the live target changed after staging, an
 an atomic same-directory replacement. Stage inspection can return metadata alone or the bounded
 candidate content. Promotion never targets the snapshot.
 
-The first slice deliberately excludes delete, move, directory creation, binary/media writes,
-arbitrary paths, and a direct-write bypass. See `docs/CANONICAL_ARCHIVE_WRITES.md`.
+`archive.stage_directory` records the nearest existing parent and every missing directory without
+touching the Archive. `archive.promote_directory` revalidates that plan, creates each component,
+and attempts to roll back newly created empty directories if a later component fails.
+
+Delete, move, binary/media writes, arbitrary paths, and a direct-write bypass remain excluded.
+See `docs/CANONICAL_ARCHIVE_WRITES.md`.
 
 Resources:
 
 - `vestigia://archive/live/manifest`
 - `vestigia://archive/snapshot/manifest`
 
-### Runtime projection: one authority, another route
+### Named external read-only mounts
+
+An operator may expose directories outside VESTIGIA through a JSON registry. Callers use a
+stable mount ID plus relative paths; they cannot submit host absolute paths. Mounts support:
+
+- `mount.status`
+- `mount.list`
+- `mount.read_text`
+- `mount.read_media`
+- `mount.search_text`
+
+Mount responses name their source as an `operator_named_read_only_root`. They do not imply
+canonical Archive membership, continuity authority, or write access.
+
+### Runtime projection: one authority, multiple routes
 
 Optional tools:
 
 - `runtime.status`
+- `runtime.list`
 - `runtime.capabilities`
 - `runtime.call`
 - `runtime.write_capabilities`
@@ -137,7 +166,11 @@ authoritative native envelope as `runtime_input_schema`, and the machine-readabl
 `wrapper_owned_fields` distinction. Callers should place only `input_schema` fields inside
 `runtime.call.arguments`.
 
-`runtime.call(action, arguments)` checks the same projection again, forces a non-continuing
+Every Runtime tool accepts an optional `runtime_id`. `runtime.list` reports configured houses and
+the default route. With legacy environment configuration the implicit ID is `default`; with a
+registry file the operator supplies stable IDs and an explicit default.
+
+`runtime.call(action, arguments, runtime_id?)` checks the same projection again, forces a non-continuing
 `after=finish` invocation, and dispatches through `HousePort.dispatch`. Runtime validation,
 policy/authorizers, and durable Runtime receipts therefore remain in force. MCP does not call a
 provider or instantiate `CoreRuntime` through this bridge.
@@ -218,7 +251,8 @@ VESTIGIA_MCP_ARCHIVE_WRITE_MAX_BYTES=1000000
 
 An empty prefix list disables both staging and promotion. Prefixes are path-segment-aware:
 granting `02_Journal` covers that directory, not similarly named siblings. The state directory
-must remain outside the live Archive. Existing target parents must already exist.
+must remain outside the live Archive. Text target parents must already exist; directory stages
+may propose missing descendants.
 
 ### Optional Runtime linkage
 
@@ -247,6 +281,28 @@ VESTIGIA_MCP_RUNTIME_WRITE_ACTIONS=fs.stage_patch,file.write,file.patch,fs.patch
 
 Omit the variable or leave it blank for a read-only deployment. Adding an outward-facing or
 otherwise ineligible action name does not make it projectable.
+
+For more than one house, copy `runtimes.example.json` to the ignored `runtimes.local.json`, set
+absolute Home/env-file paths and per-house write grants, then set:
+
+```text
+VESTIGIA_MCP_RUNTIMES_FILE=C:\path\to\VESTIGIA_MCP_Server\runtimes.local.json
+```
+
+The registry supersedes the three legacy single-home variables. Restart after changing it.
+
+### Optional named external mounts
+
+Copy `mounts.example.json` to the ignored `mounts.local.json`, give each external directory a
+path-safe lowercase ID, then set:
+
+```text
+VESTIGIA_MCP_MOUNTS_FILE=C:\path\to\VESTIGIA_MCP_Server\mounts.local.json
+```
+
+Each mount is read-only and may set its own text/media byte ceilings. `mount.status()` is cheap;
+use `mount.status(include_stats=true)` when a full file-count/byte inventory is actually wanted.
+Restart after changing the registry.
 
 For Inspector development, place those settings in this project's `.env`. For the production
 stdio/tunnel launcher, set Runtime and Archive write grants in the launching process or as
@@ -309,9 +365,14 @@ in the launching shell. An alternate tunnel profile may be supplied as the first
 - Canonical live-Archive mutation is disabled when the path-prefix grant is empty.
 - Canonical writes require a durable stage, exact proposal digest, current prefix grant, and
   unchanged optimistic base hash.
-- Canonical promotion is text-only, byte-bounded, symlink-refusing, containment-checked, and
-  performed through atomic same-directory replacement.
-- Delete, move, directory creation, binary writes, and direct-write bypasses are absent.
+- Canonical text promotion is byte-bounded, symlink-refusing, containment-checked, and performed
+  through atomic same-directory replacement.
+- Delete, move, binary writes, and direct-write bypasses are absent.
+- Directory creation uses a separate digest-bound stage/promote lifecycle and refuses stale plans.
+- External mounts are operator-named, read-only, relative-path-only, and semantically distinct
+  from the canonical Archive.
+- Pagination cursors bind source/query/result digests and reject changed views as stale.
+- Multi-house Runtime routing preserves a distinct HousePort and write grant set per Runtime ID.
 - The configured snapshot witness is excluded from a nested live root automatically.
 - Relative paths reject absolute paths and `..` traversal.
 - Directory reads are containment-checked after path resolution.
@@ -336,6 +397,16 @@ in the launching shell. An alternate tunnel profile may be supplied as the first
 
 See `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md`, `docs/RUNTIME_PROJECTION.md`, and
 `docs/CANONICAL_ARCHIVE_WRITES.md`.
+
+## v0.5 - More Rooms, Longer Shelves
+
+1. Add stable cursor pagination for path lists, text files, and literal search. **Done.**
+2. Add digest-bound staged directory creation and promotion. **Done.**
+3. Add operator-named external read-only mounts. **Done.**
+4. Add a multi-house Runtime registry/router with per-house grants. **Done.**
+5. Add transactional directory-plus-file change sets. **Next.**
+6. Add Archive-aware Git workbench operations. **Next.**
+7. Add media metadata indexes/contact sheets and principal/policy introspection. **Next.**
 
 ## v0.4 - Canonical Stage & Promotion
 

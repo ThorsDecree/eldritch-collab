@@ -1,0 +1,22 @@
+{
+  "schema_version": "vestigia.runtimes.v0.1",
+  "default_runtime_id": "liora",
+  "runtimes": [
+    {
+      "id": "liora",
+      "home": "C:\\absolute\\path\\to\\VESTIGIA_Runtime\\homes\\liora",
+      "env_file": "C:\\absolute\\path\\to\\VESTIGIA_Runtime\\.env",
+      "write_actions": [
+        "fs.stage_patch",
+        "file.write",
+        "file.patch",
+        "fs.patch_discard"
+      ]
+    },
+    {
+      "id": "anima",
+      "home": "C:\\absolute\\path\\to\\another\\VESTIGIA_Runtime\\homes\\anima",
+      "write_actions": []
+    }
+  ]
+}

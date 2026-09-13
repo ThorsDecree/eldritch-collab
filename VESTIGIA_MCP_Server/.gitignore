@@ -4,7 +4,12 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+build/
+dist/
+*.egg-info/
 .env
 Start VESTIGIA MCP Tunnel.local.bat
+mounts.local.json
+runtimes.local.json
 *.log
 .vestigia-mcp/

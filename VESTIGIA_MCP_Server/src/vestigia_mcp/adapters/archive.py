@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Iterator, Literal
+
+from ..pagination import (
+    CursorError,
+    canonical_sha256,
+    decode_cursor,
+    encode_cursor,
+    page_metadata,
+)
 
 
 ArchiveKind = Literal["directory", "zip"]
@@ -156,6 +165,15 @@ class ArchiveSource:
             f"Archive source must be a directory or .zip file: {self.root}"
         )
 
+    def _cursor_source_sha256(self) -> str:
+        return canonical_sha256(
+            {
+                "kind": self.kind,
+                "root": str(self.root.resolve(strict=False)),
+                "excluded_paths": self.excluded_paths,
+            }
+        )
+
     def _directory_root(self) -> Path:
         if self.kind != "directory":
             raise ArchiveError("Archive source is not a directory")
@@ -227,17 +245,65 @@ class ArchiveSource:
             excluded_paths=self.excluded_paths,
         )
 
-    def list_paths(self, prefix: str = "", limit: int = 500) -> dict[str, object]:
-        if limit <= 0:
-            raise ArchiveError("List limit must be positive")
+    def list_paths(
+        self,
+        prefix: str = "",
+        limit: int = 500,
+        cursor: str | None = None,
+    ) -> dict[str, object]:
+        if limit <= 0 or limit > 1000:
+            raise ArchiveError("List limit must be between 1 and 1000")
         normalized_prefix = normalize_prefix(prefix)
         paths = list(self.all_paths())
         if normalized_prefix:
             paths = [path for path in paths if _matches_prefix(path, normalized_prefix)]
+        source_sha256 = self._cursor_source_sha256()
+        view_sha256 = canonical_sha256(
+            {"source_sha256": source_sha256, "paths": paths}
+        )
+        offset = 0
+        if cursor is not None:
+            try:
+                state = decode_cursor(cursor, "archive.list")
+            except CursorError as exc:
+                raise ArchiveError(str(exc)) from exc
+            if state.get("prefix") != normalized_prefix:
+                raise ArchiveError("Cursor prefix does not match this request")
+            if state.get("source_sha256") != source_sha256:
+                raise ArchiveError("Cursor belongs to a different Archive source")
+            if state.get("view_sha256") != view_sha256:
+                raise ArchiveError("Cursor is stale because the Archive path view changed")
+            offset = state.get("offset", -1)
+            if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+                raise ArchiveError("Cursor offset is invalid")
+            if offset > len(paths):
+                raise ArchiveError("Cursor offset exceeds the current Archive path view")
+        page_paths = paths[offset : offset + limit]
+        next_offset = offset + len(page_paths)
+        next_cursor = None
+        if next_offset < len(paths):
+            next_cursor = encode_cursor(
+                "archive.list",
+                {
+                    "prefix": normalized_prefix,
+                    "offset": next_offset,
+                    "source_sha256": source_sha256,
+                    "view_sha256": view_sha256,
+                },
+            )
         return {
-            "paths": paths[:limit],
+            "paths": page_paths,
             "total": len(paths),
-            "truncated": len(paths) > limit,
+            "truncated": next_cursor is not None,
+            "next_cursor": next_cursor,
+            "page": page_metadata(
+                limit=limit,
+                returned=len(page_paths),
+                offset=offset,
+                total=len(paths),
+                next_cursor=next_cursor,
+                view_sha256=view_sha256,
+            ),
         }
 
     def _resolve_directory_file(self, relative: str) -> Path:
@@ -258,7 +324,7 @@ class ArchiveSource:
             raise ArchiveError(f"Archive path is not a file: {relative}")
         return resolved
 
-    def read_text(self, relative: str, max_bytes: int) -> str:
+    def _read_text_bytes(self, relative: str, max_bytes: int) -> tuple[str, bytes]:
         normalized = normalize_relative_path(relative)
         if PurePosixPath(normalized).suffix.lower() not in TEXT_SUFFIXES:
             raise ArchiveError(
@@ -288,11 +354,93 @@ class ArchiveSource:
                 data = archive.read(info)
 
         try:
-            return data.decode("utf-8", errors="strict")
+            data.decode("utf-8", errors="strict")
         except UnicodeDecodeError as exc:
             raise ArchiveError(
                 f"Archive text is not valid UTF-8: {normalized}"
             ) from exc
+        return normalized, data
+
+    def read_text(self, relative: str, max_bytes: int) -> str:
+        _, data = self._read_text_bytes(relative, max_bytes)
+        return data.decode("utf-8")
+
+    def read_text_page(
+        self,
+        relative: str,
+        max_bytes: int,
+        *,
+        page_bytes: int = 64_000,
+        cursor: str | None = None,
+    ) -> dict[str, object]:
+        if page_bytes < 256 or page_bytes > 256_000:
+            raise ArchiveError("Text page_bytes must be between 256 and 256000")
+        normalized, data = self._read_text_bytes(relative, max_bytes)
+        digest = hashlib.sha256(data).hexdigest()
+        source_sha256 = self._cursor_source_sha256()
+        offset = 0
+        if cursor is not None:
+            try:
+                state = decode_cursor(cursor, "archive.read_text")
+            except CursorError as exc:
+                raise ArchiveError(str(exc)) from exc
+            if state.get("path") != normalized:
+                raise ArchiveError("Cursor path does not match this request")
+            if state.get("source_sha256") != source_sha256:
+                raise ArchiveError("Cursor belongs to a different Archive source")
+            if state.get("sha256") != digest:
+                raise ArchiveError("Cursor is stale because the Archive file changed")
+            offset = state.get("offset", -1)
+            if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+                raise ArchiveError("Cursor offset is invalid")
+            if offset > len(data):
+                raise ArchiveError("Cursor offset exceeds the current Archive file")
+
+        end = min(len(data), offset + page_bytes)
+        while end > offset:
+            try:
+                content = data[offset:end].decode("utf-8", errors="strict")
+                break
+            except UnicodeDecodeError:
+                end -= 1
+        else:
+            if offset == len(data):
+                content = ""
+            else:
+                raise ArchiveError("Text page is too small to contain the next UTF-8 character")
+
+        next_cursor = None
+        if end < len(data):
+            next_cursor = encode_cursor(
+                "archive.read_text",
+                {
+                    "path": normalized,
+                    "offset": end,
+                    "sha256": digest,
+                    "source_sha256": source_sha256,
+                },
+            )
+        return {
+            "path": normalized,
+            "content": content,
+            "size": len(data),
+            "sha256": digest,
+            "next_cursor": next_cursor,
+            "truncated": next_cursor is not None,
+            "page": {
+                **page_metadata(
+                    limit=page_bytes,
+                    returned=end - offset,
+                    offset=offset,
+                    total=len(data),
+                    next_cursor=next_cursor,
+                    view_sha256=digest,
+                ),
+                "unit": "utf8_bytes",
+                "byte_start": offset,
+                "byte_end": end,
+            },
+        }
 
     def read_media(self, relative: str, max_bytes: int) -> ArchiveMedia:
         """Read one bounded, signature-checked raster image.
@@ -357,6 +505,7 @@ class ArchiveSource:
         max_bytes: int = 1_000_000,
         case_sensitive: bool = False,
         excerpt_chars: int = 240,
+        cursor: str | None = None,
     ) -> dict[str, object]:
         """Literal line-oriented search over bounded UTF-8 text-like files."""
         needle = query.strip()
@@ -373,7 +522,33 @@ class ArchiveSource:
 
         normalized_prefix = normalize_prefix(prefix)
         comparable_needle = needle if case_sensitive else needle.casefold()
+        query_sha256 = canonical_sha256(
+            {
+                "source_sha256": self._cursor_source_sha256(),
+                "query": needle,
+                "prefix": normalized_prefix,
+                "case_sensitive": case_sensitive,
+                "max_bytes": max_bytes,
+                "excerpt_chars": excerpt_chars,
+            }
+        )
+        offset = 0
+        expected_view_sha256: str | None = None
+        if cursor is not None:
+            try:
+                state = decode_cursor(cursor, "archive.search_text")
+            except CursorError as exc:
+                raise ArchiveError(str(exc)) from exc
+            if state.get("query_sha256") != query_sha256:
+                raise ArchiveError("Cursor search parameters do not match this request")
+            offset = state.get("offset", -1)
+            if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+                raise ArchiveError("Cursor offset is invalid")
+            expected_view_sha256 = state.get("view_sha256")
+            if not isinstance(expected_view_sha256, str):
+                raise ArchiveError("Cursor search view digest is invalid")
         hits: list[dict[str, object]] = []
+        view_digest = hashlib.sha256()
         match_count = 0
         candidate_files = 0
         scanned_files = 0
@@ -393,21 +568,27 @@ class ArchiveSource:
                 if comparable_needle not in comparable_line:
                     continue
                 match_count += 1
-                if len(hits) >= limit:
-                    continue
                 excerpt = line.strip()
                 if len(excerpt) > excerpt_chars:
                     excerpt = excerpt[: excerpt_chars - 1] + "…"
-                hits.append(
-                    {
-                        "path": relative,
-                        "line": line_number,
-                        "excerpt": excerpt,
-                    }
+                hit = {"path": relative, "line": line_number, "excerpt": excerpt}
+                view_digest.update(
+                    json.dumps(
+                        hit,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
                 )
+                view_digest.update(b"\n")
+                if match_count <= offset or len(hits) >= limit:
+                    continue
+                hits.append(hit)
 
         if self.kind == "directory":
-            for relative, path, size in self._iter_directory_files():
+            for relative, path, size in sorted(
+                self._iter_directory_files(), key=lambda item: item[0]
+            ):
                 if not _matches_prefix(relative, normalized_prefix):
                     continue
                 if PurePosixPath(relative).suffix.lower() not in TEXT_SUFFIXES:
@@ -420,7 +601,7 @@ class ArchiveSource:
         else:
             members = self._zip_members()
             with zipfile.ZipFile(self.root, "r") as archive:
-                for relative, info in members:
+                for relative, info in sorted(members, key=lambda item: item[0]):
                     if not _matches_prefix(relative, normalized_prefix):
                         continue
                     if PurePosixPath(relative).suffix.lower() not in TEXT_SUFFIXES:
@@ -431,6 +612,22 @@ class ArchiveSource:
                         continue
                     scan(relative, archive.read(info))
 
+        if offset > match_count:
+            raise ArchiveError("Cursor offset exceeds the current search result view")
+        view_sha256 = view_digest.hexdigest()
+        if expected_view_sha256 is not None and expected_view_sha256 != view_sha256:
+            raise ArchiveError("Cursor is stale because the search result view changed")
+        next_offset = offset + len(hits)
+        next_cursor = None
+        if next_offset < match_count:
+            next_cursor = encode_cursor(
+                "archive.search_text",
+                {
+                    "query_sha256": query_sha256,
+                    "offset": next_offset,
+                    "view_sha256": view_sha256,
+                },
+            )
         return {
             "query": needle,
             "prefix": normalized_prefix,
@@ -441,7 +638,16 @@ class ArchiveSource:
             "scanned_files": scanned_files,
             "skipped_oversize": skipped_oversize,
             "skipped_non_utf8": skipped_non_utf8,
-            "truncated": match_count > len(hits),
+            "truncated": next_cursor is not None,
+            "next_cursor": next_cursor,
+            "page": page_metadata(
+                limit=limit,
+                returned=len(hits),
+                offset=offset,
+                total=match_count,
+                next_cursor=next_cursor,
+                view_sha256=view_sha256,
+            ),
         }
 
     def entry(self, relative: str) -> ArchiveEntry | None:
