@@ -90,6 +90,21 @@ explicit, and the selected ID is included in responses and audit argument hashes
 an independent HousePort; routing does not merge memory, identity, receipts, or authority across
 houses.
 
+### GameTable privacy and state authority
+
+GameTable has its own MCP-owned SQLite state and event store. Public and seat-filtered projections
+must never expose an opponent's hand or library order; public events describe hidden draws without
+card identity. Mutations require a current game revision plus the seat token that currently owns
+priority/control. The development token is stored only as a SHA-256 verifier, and MCP receipts
+hash its call arguments rather than serializing raw values.
+
+This protects ordinary tool callers from accidental hidden-information disclosure. It is not a
+complete authentication system: a holder of a bearer token can act as that seat, and an operator
+or local process that can directly read the GameTable database can inspect its state. Future
+Keyring work must bind an authenticated caller/principal to a seat before GameTable is offered
+across an untrusted transport. GameTable does not adjudicate a game's full rules and should never
+present a permitted state transition as proof that the action was rules-legal.
+
 ### Prompt injection in source material
 
 Archive text is data, not authority. Content inside a file cannot grant itself new tools or

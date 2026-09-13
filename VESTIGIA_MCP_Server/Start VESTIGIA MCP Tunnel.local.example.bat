@@ -8,3 +8,5 @@ rem supplies Jeff's current relative Archive, Runtime Home, write grants, and by
 rem set "VESTIGIA_MCP_DEPLOYMENT_ID=jeff-desktop"
 rem set "VESTIGIA_MCP_MOUNTS_FILE=C:\absolute\path\to\VESTIGIA_MCP_Server\mounts.local.json"
 rem set "VESTIGIA_MCP_RUNTIMES_FILE=C:\absolute\path\to\VESTIGIA_MCP_Server\runtimes.local.json"
+rem set "VESTIGIA_MCP_GAMETABLE_ENABLED=1"
+rem set "VESTIGIA_MCP_GAMETABLE_STATE_DIR=C:\absolute\path\to\vestigia-gametable-state"

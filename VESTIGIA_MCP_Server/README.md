@@ -22,10 +22,10 @@ The native MCP capability vocabulary is deliberately split into three effect cla
 - **PREPARE** - create a draft, staged action, crop, queue item, or other reversible working state.
 - **ACT** - cause an externally consequential or canonical mutation.
 
-Version `0.5.0.dev0` adds stable cursor pagination, staged directory creation, named external
-read-only mounts, and a multi-house Runtime registry/router. Canonical changes still require a
-durable proposal, an explicit path-prefix grant, the exact proposal digest, and revalidation at
-promotion. Runtime and Archive mutation remain disabled by default.
+Version `0.6.0.dev0` adds an opt-in GameTable reference module: an event-sourced, seat-filtered
+tabletop state engine with a rules-light Magic/Commander profile. It demonstrates that MCP can
+broker bounded shared state without becoming either a generic desktop controller or a second
+continuity runtime. Canonical Archive promotion remains independently staged and prefix-granted.
 
 Sensory tools advertise read-only/non-destructive/non-open-world annotations. Staging and
 Runtime workspace writes advertise local non-open-world mutation; `archive.promote` and
@@ -134,6 +134,46 @@ stable mount ID plus relative paths; they cannot submit host absolute paths. Mou
 
 Mount responses name their source as an `operator_named_read_only_root`. They do not imply
 canonical Archive membership, continuity authority, or write access.
+
+### Optional GameTable: private tabletop state, not a rules oracle
+
+When enabled, GameTable is MCP-owned shared state outside the Archive. It starts with two
+profiles:
+
+- `magic.commander.v0.1` — 40 life, opening hands of seven, Commander-visible zones, and
+  Magic-shaped turn/priority steps;
+- `generic.card-table.v0.1` — a smaller neutral profile for other card games.
+
+Tools:
+
+- `game.profiles`
+- `game.status`
+- `game.create`
+- `game.load_deck`
+- `game.start`
+- `game.view`
+- `game.events`
+- `game.act`
+- `game.pass_priority`
+- `game.concede`
+
+GameTable's state is an SQLite materialized view plus an event chain. `game.create` returns one
+opaque **development seat token** per configured seat; each recipient then calls `game.load_deck`
+with only their own token before the table starts. A public `game.view` returns public zones, life
+totals, hand/library counts, and turn state; a view with a valid seat token adds only that seat's
+hand. Public events say, for example, “Jeff drew a card”; card details are addressed only to
+Jeff's event/view projection. Library order is never returned through ordinary views.
+
+The first profile deliberately checks only table flow and control bounds: revision matching,
+current priority, seat ownership/control, supported zones, counters, damage, life, and passes. It
+does **not** validate deck legality, ship card data, execute card text, resolve targets/triggers,
+or claim to enforce Magic's comprehensive rules. Players remain the rules authority.
+
+Development seat tokens are bearer credentials, not a completed multi-principal Keyring. They are
+stored only as SHA-256 verifiers and are absent from readable MCP audit receipts, but they do not
+protect against the local machine operator who can read the server's SQLite state. A future
+principal/Keyring layer can replace this binding without changing the GameTable event model. See
+`docs/GAMETABLE.md`.
 
 ### Runtime projection: one authority, multiple routes
 
@@ -303,6 +343,24 @@ VESTIGIA_MCP_MOUNTS_FILE=C:\path\to\VESTIGIA_MCP_Server\mounts.local.json
 Each mount is read-only and may set its own text/media byte ceilings. `mount.status()` is cheap;
 use `mount.status(include_stats=true)` when a full file-count/byte inventory is actually wanted.
 Restart after changing the registry.
+
+### Optional GameTable module
+
+GameTable is disabled unless the deployment enables it:
+
+```text
+VESTIGIA_MCP_GAMETABLE_ENABLED=1
+```
+
+It stores game state under `VESTIGIA_MCP_STATE_DIR/gametable/` by default. To place that
+non-canonical state elsewhere, set an explicit directory outside Archive roots:
+
+```text
+VESTIGIA_MCP_GAMETABLE_STATE_DIR=C:\path\to\vestigia-gametable-state
+```
+
+Restart the MCP server after changing either value. In the tunnel launcher, add the same settings
+to the ignored `Start VESTIGIA MCP Tunnel.local.bat`; the checked-in default leaves GameTable off.
 
 For Inspector development, place those settings in this project's `.env`. For the production
 stdio/tunnel launcher, set Runtime and Archive write grants in the launching process or as

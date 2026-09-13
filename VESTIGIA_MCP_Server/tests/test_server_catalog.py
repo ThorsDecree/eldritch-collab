@@ -44,6 +44,19 @@ EXPECTED_TOOLS = {
     "vestigia.status",
 }
 
+GAME_TOOLS = {
+    "game.profiles",
+    "game.status",
+    "game.create",
+    "game.load_deck",
+    "game.start",
+    "game.view",
+    "game.events",
+    "game.act",
+    "game.pass_priority",
+    "game.concede",
+}
+
 
 def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> None:
     live = tmp_path / "live"
@@ -106,6 +119,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             listed = await client.list_tools()
             tools = {tool.name: tool for tool in listed.tools}
             assert EXPECTED_TOOLS <= set(tools)
+            assert not (GAME_TOOLS & set(tools))
 
             local_writes = {
                 "runtime.write",
@@ -331,7 +345,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             status_result = await client.call_tool("vestigia.status", {})
             assert status_result.is_error is False
             assert status_result.structured_content is not None
-            assert status_result.structured_content["server"]["version"] == "0.5.0.dev0"
+            assert status_result.structured_content["server"]["version"] == "0.6.0.dev0"
             assert status_result.structured_content["policy"]["capability_count"] == 33
             assert status_result.structured_content["runtime"]["configured"] is False
             assert status_result.structured_content["archive"]["promotion_configured"] is True
@@ -376,5 +390,114 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert show_result.structured_content is not None
             assert show_result.structured_content["event"]["event_id"] == target_event_id
             assert show_result.structured_content["receipt_is_memory"] is False
+
+    asyncio.run(exercise())
+
+
+def test_wire_gametable_keeps_opponent_cards_out_of_a_seat_projection(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        live_archive_root=None,
+        snapshot_archive_root=None,
+        state_dir=tmp_path / "state",
+        deployment_id="test-deployment",
+        gametable_enabled=True,
+    )
+    server = create_server(settings)
+    liora_deck = [f"Liora secret {number}" for number in range(1, 9)]
+    jeff_deck = [f"Jeff secret {number}" for number in range(1, 9)]
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            listed = await client.list_tools()
+            tools = {tool.name: tool for tool in listed.tools}
+            assert GAME_TOOLS <= set(tools)
+            assert tools["game.view"].annotations is not None
+            assert tools["game.view"].annotations.read_only_hint is True
+            assert tools["game.create"].annotations is not None
+            assert tools["game.create"].annotations.read_only_hint is False
+
+            profiles_result = await client.call_tool("game.profiles", {})
+            assert profiles_result.is_error is False
+            assert profiles_result.structured_content is not None
+            assert "magic.commander.v0.1" in {
+                profile["profile_id"]
+                for profile in profiles_result.structured_content["profiles"]
+            }
+
+            create_result = await client.call_tool(
+                "game.create",
+                {
+                    "title": "Wire Commander",
+                    "seats": [
+                        {"seat_id": "liora", "display_name": "Liora"},
+                        {"seat_id": "jeff", "display_name": "Jeff"},
+                    ],
+                },
+            )
+            assert create_result.is_error is False
+            assert create_result.structured_content is not None
+            created = create_result.structured_content
+            game_id = created["game_id"]
+            liora_token = created["seat_tokens"]["liora"]
+            jeff_token = created["seat_tokens"]["jeff"]
+
+            public_before_start = await client.call_tool("game.view", {"game_id": game_id})
+            assert public_before_start.is_error is False
+            assert public_before_start.structured_content is not None
+            assert "secret" not in json.dumps(public_before_start.structured_content)
+
+            liora_load = await client.call_tool(
+                "game.load_deck",
+                {
+                    "game_id": game_id,
+                    "seat_token": liora_token,
+                    "expected_revision": 0,
+                    "deck": liora_deck,
+                },
+            )
+            assert liora_load.is_error is False
+            jeff_load = await client.call_tool(
+                "game.load_deck",
+                {
+                    "game_id": game_id,
+                    "seat_token": jeff_token,
+                    "expected_revision": 1,
+                    "deck": jeff_deck,
+                },
+            )
+            assert jeff_load.is_error is False
+
+            start_result = await client.call_tool(
+                "game.start",
+                {"game_id": game_id, "seat_token": liora_token, "expected_revision": 2},
+            )
+            assert start_result.is_error is False
+            assert start_result.structured_content is not None
+            assert "Liora secret" in json.dumps(start_result.structured_content)
+            assert "Jeff secret" not in json.dumps(start_result.structured_content)
+
+            liora_view = await client.call_tool(
+                "game.view", {"game_id": game_id, "seat_token": liora_token}
+            )
+            jeff_view = await client.call_tool(
+                "game.view", {"game_id": game_id, "seat_token": jeff_token}
+            )
+            assert liora_view.structured_content is not None
+            assert jeff_view.structured_content is not None
+            assert "Jeff secret" not in json.dumps(liora_view.structured_content)
+            assert "Liora secret" not in json.dumps(jeff_view.structured_content)
+
+            events_result = await client.call_tool("game.events", {"game_id": game_id})
+            assert events_result.is_error is False
+            assert events_result.structured_content is not None
+            assert "secret" not in json.dumps(events_result.structured_content)
+
+            receipts = await client.call_tool("receipts.recent", {"capability": "game.start"})
+            assert receipts.is_error is False
+            assert receipts.structured_content is not None
+            assert liora_token not in json.dumps(receipts.structured_content)
+            assert jeff_token not in json.dumps(receipts.structured_content)
 
     asyncio.run(exercise())
