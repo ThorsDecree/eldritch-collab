@@ -20,8 +20,9 @@ One fact, one authority, many routes.
 
 The bridge is optional. Its read lane remains the default.
 
-MCP exposes three stable tools:
+MCP exposes four stable read tools:
 
+- `runtime.list`
 - `runtime.status`
 - `runtime.capabilities`
 - `runtime.call`
@@ -52,6 +53,17 @@ authorizers, validation, and durable Runtime receipts remain in force.
 The generic `runtime.call` surface is intentional. Host applications may cache MCP tool schemas
 for a conversation. Keeping Runtime's evolving action vocabulary behind a stable projection
 avoids making the MCP descriptor cache authoritative over Runtime.
+
+## Multiple houses
+
+`VESTIGIA_MCP_RUNTIMES_FILE` may name multiple Runtime Homes. The JSON registry has an explicit
+`default_runtime_id`; every Runtime-facing tool also accepts `runtime_id` to select another house.
+Each route owns a separate lazy `HousePort`, Runtime configuration, database connection, and
+write-action grant set. Results and MCP audit arguments include the selected Runtime ID.
+
+The legacy `VESTIGIA_MCP_RUNTIME_HOME`, `VESTIGIA_MCP_RUNTIME_ENV_FILE`, and
+`VESTIGIA_MCP_RUNTIME_WRITE_ACTIONS` variables remain compatible as one implicit `default`
+Runtime. When a registry file is configured, it supersedes those single-home values.
 
 The mutation projection also derives contracts from the live Runtime registry, but intersects
 them with `VESTIGIA_MCP_RUNTIME_WRITE_ACTIONS`. A named action is projectable only when its

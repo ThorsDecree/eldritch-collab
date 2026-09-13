@@ -25,8 +25,8 @@ MCP host / resident deployment
            |
      +-----+----------------------+-------------------+
      |                            |                   |
- Archive adapter           Runtime adapter      Social adapters
- live + snapshot           continuity core      Discord / browser / ...
+ Archive + mounts          Runtime router       Social adapters
+ live + snapshot           named houses         Discord / browser / ...
 ```
 
 The MCP protocol provides discovery and invocation. VESTIGIA provides jurisdiction.
@@ -79,7 +79,7 @@ A callable handler must still pass the live policy engine. Unknown capability na
 intersected with Runtime's live executable contract at final dispatch. Future Keyring work will
 refine grants by principal, resident, target, authority epoch, and effect class.
 
-`VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES` independently grants canonical text targets. Promotion
+`VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES` independently grants canonical text and directory targets. Promotion
 also requires a durable proposal digest and a still-matching captured base hash. Registering the
 tool or staging content does not itself grant promotion authority.
 
@@ -94,6 +94,14 @@ The adapter never extracts the ZIP and never writes the snapshot. Read compariso
 path plus SHA-256 content digest so same-size changes are not missed. A separate mutation store
 may atomically create or replace bounded UTF-8 text in the unpacked live Archive only after the
 two-phase promotion checks described in `CANONICAL_ARCHIVE_WRITES.md`.
+
+Long Archive list, text-read, and literal-search results use opaque cursors bound to source,
+query, offset, and result/file digests. Continuing a changed view fails stale rather than mixing
+evidence from different states.
+
+Named mounts are a parallel sensory namespace for operator-configured directories outside the
+Archive. A mount ID resolves server-side to an absolute root; clients provide only relative
+paths. Mounts are read-only and never inherit canonical Archive semantics.
 
 The server is intentionally honest about cost: a full `archive.diff` hashes the files it
 compares. Caching can be added later, but a stale hidden cache should not masquerade as the
@@ -119,6 +127,10 @@ Interface -> normalized message -> continuity core -> provider -> normalized res
 An MCP Runtime adapter must call supported Runtime/core interfaces. It must not reach around the
 continuity core to assemble identity, retrieve private memory, mutate continuity, or invoke a
 provider behind the Runtime's back.
+
+The optional Runtime registry maps stable IDs to independent Homes, env files, and write-action
+grants. One ID is explicit default. Routing changes transport selection, not Runtime-owned
+capability meaning or HousePort authority.
 
 ## State
 

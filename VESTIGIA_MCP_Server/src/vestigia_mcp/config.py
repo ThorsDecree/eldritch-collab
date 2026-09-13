@@ -54,6 +54,8 @@ class Settings:
     runtime_write_actions: tuple[str, ...] = ()
     archive_write_prefixes: tuple[str, ...] = ()
     archive_write_max_bytes: int = 1_000_000
+    mounts_file: Path | None = None
+    runtimes_file: Path | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -90,4 +92,6 @@ class Settings:
             archive_write_max_bytes=_positive_int_env(
                 "VESTIGIA_MCP_ARCHIVE_WRITE_MAX_BYTES", 1_000_000
             ),
+            mounts_file=_optional_path("VESTIGIA_MCP_MOUNTS_FILE"),
+            runtimes_file=_optional_path("VESTIGIA_MCP_RUNTIMES_FILE"),
         )

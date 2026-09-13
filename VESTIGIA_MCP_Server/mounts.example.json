@@ -1,0 +1,12 @@
+{
+  "schema_version": "vestigia.mounts.v0.1",
+  "mounts": [
+    {
+      "id": "perchance-renders",
+      "root": "C:\\absolute\\path\\to\\Perchance renders",
+      "access": "read",
+      "text_max_bytes": 1000000,
+      "media_max_bytes": 20000000
+    }
+  ]
+}

@@ -225,7 +225,29 @@ Approval binds the exact object/target/action being approved, not merely the act
 
 ---
 
-## 0.5 — Workshop Within
+## 0.5 — Long Shelves & More Rooms
+
+**Goal:** make bounded perception resumable and let one server name more than one local room.
+
+Delivered:
+
+- opaque digest-bound cursors for Archive path lists, long UTF-8 documents, and literal search;
+- explicit page metadata and stale-view rejection;
+- digest-bound `archive.stage_directory` / `archive.promote_directory` lifecycle;
+- operator-named external read-only mounts with relative-path-only tools;
+- a multi-house Runtime registry/router with explicit default and per-house write grants;
+- selected source/Runtime IDs in tool results and receipt argument hashes.
+
+Next within this family:
+
+- transactional directory-plus-file change sets;
+- media metadata indexes, thumbnails, and bounded contact sheets;
+- richer source provenance in every search hit;
+- `policy.whoami`, `policy.can`, and `policy.explain`.
+
+---
+
+## 0.6 — Workshop Within
 
 **Goal:** let curiosity become bounded local computation without creating a raw god-shell.
 
@@ -284,7 +306,7 @@ separate authority boundary.
 
 ---
 
-## 0.6 — House Bus
+## 0.7 — House Bus
 
 **Goal:** move from constant polling toward bounded event-shaped attention.
 
@@ -314,7 +336,7 @@ Bells/autonomous turns can consume bounded event summaries without silence becom
 
 ---
 
-## 0.7 — Doors Between Rooms & The Outbox
+## 0.8 — Doors Between Rooms & The Outbox
 
 **Goal:** connect Runtime and external social surfaces without blending their authority/evidence.
 
@@ -344,7 +366,7 @@ but never let a successful middle-layer call masquerade as proof of external acc
 
 ---
 
-## 0.8 — BRING THIS NONSENSE HOME
+## 0.9 — BRING THIS NONSENSE HOME
 
 **Goal:** browser/desktop perception with staged interaction before submission.
 
@@ -364,7 +386,7 @@ surveillance.
 
 ---
 
-## 0.9+ — Media, federation, and resident toys
+## 1.0+ — Media, federation, and resident toys
 
 Potential directions:
 

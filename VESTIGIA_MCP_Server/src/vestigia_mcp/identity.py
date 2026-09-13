@@ -48,6 +48,8 @@ def config_fingerprint(settings: Settings) -> str:
             "runtime_home": _path(settings.runtime_home),
             "runtime_env_file": _path(settings.runtime_env_file),
             "runtime_write_actions": list(settings.runtime_write_actions),
+            "mounts_file": _path(settings.mounts_file),
+            "runtimes_file": _path(settings.runtimes_file),
         }
     )
 

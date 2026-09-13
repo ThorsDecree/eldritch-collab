@@ -37,9 +37,9 @@ paths are rejected.
 
 ### Oversized / binary output
 
-`archive.read_text` is limited to a small text suffix allowlist, strict UTF-8, and a configured
-byte ceiling. Binary artifacts will need a separate media capability rather than sneaking
-through a text read.
+`archive.read_text` is limited to a small text suffix allowlist, strict UTF-8, a configured byte
+ceiling, and cursor-sized pages. Cursors bind the source and whole-file/result digest; changed
+views are rejected as stale. Binary artifacts use a separate media capability.
 
 `archive.read_media` has an independent byte ceiling and a small raster allowlist. It checks
 the file suffix against PNG/JPEG/GIF/WebP binary signatures. SVG is excluded because it is
@@ -62,14 +62,33 @@ arbitrary shell execution remain outside this lane.
 `archive.stage_text` writes candidate content only beneath MCP-owned state. `archive.promote`
 requires a deployment prefix grant, the exact proposal digest, and a current live target that
 still matches the captured SHA-256/absence. The path is containment-checked again at promotion;
-symlink parents/targets, missing parents, non-text suffixes, oversized content, and snapshot
-targets are refused. The final write uses a temporary sibling plus atomic replacement.
+symlink parents/targets, missing text parents, non-text suffixes, oversized content, and snapshot
+targets are refused. The final text write uses a temporary sibling plus atomic replacement.
+
+Directory stages capture every missing component beneath a known existing parent. Promotion
+revalidates that exact plan before creating components. Each `mkdir` is atomic; multi-component
+creation is not globally atomic, so a failure triggers best-effort reverse removal of the empty
+directories created by that attempt.
 
 This prevents accidental stale overwrites and common path escapes; it is not a complete defense
 against a malicious local process that can race filesystem metadata, rewrite MCP state, alter
 the environment, or modify the Archive directly. Proposal digests are integrity witnesses, not
-signatures or human confirmations. Delete, move, directory creation, binary writes, and direct
-write bypasses remain unavailable.
+signatures or human confirmations. Delete, move, binary writes, and direct write bypasses remain
+unavailable.
+
+### Named external mounts
+
+Mount configuration is operator-controlled JSON. Tools accept only a validated mount ID and a
+relative path, and the ordinary containment/symlink/size/signature checks still apply. Mounts are
+read-only and labeled as non-canonical provenance. A local process that can rewrite the registry
+or its mounted directory remains inside the operator's trust boundary.
+
+### Multi-house routing
+
+Runtime IDs select operator-configured Homes and per-house write grants. The default ID is
+explicit, and the selected ID is included in responses and audit argument hashes. Each route has
+an independent HousePort; routing does not merge memory, identity, receipts, or authority across
+houses.
 
 ### Prompt injection in source material
 

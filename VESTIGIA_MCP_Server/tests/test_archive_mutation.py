@@ -189,3 +189,79 @@ def test_stage_cannot_cross_deployment_identity(tmp_path: Path) -> None:
 
     with pytest.raises(ArchiveError, match="different MCP deployment"):
         other.inspect_stage(staged["stage_id"])
+
+
+def test_stage_then_promote_nested_directory_is_digest_bound(tmp_path: Path) -> None:
+    store, live, _ = make_store(tmp_path)
+
+    staged = store.stage_directory(
+        "02_Journal/field_notes/night",
+        reason="make a bounded workbench",
+    )
+
+    assert staged["kind"] == "directory"
+    assert staged["operation"] == "create_directory"
+    assert staged["missing_directories"] == [
+        "02_Journal/field_notes",
+        "02_Journal/field_notes/night",
+    ]
+    assert staged["canonical_changed"] is False
+    assert not (live / "02_Journal" / "field_notes").exists()
+
+    inspected = store.inspect_stage(staged["stage_id"], include_content=True)
+    assert inspected["validation"]["ready"] is True
+    assert "content" not in inspected
+
+    promoted = store.promote_directory(
+        staged["stage_id"], staged["proposal_sha256"]
+    )
+    assert promoted["canonical_changed"] is True
+    assert promoted["created_directories"] == staged["missing_directories"]
+    assert (live / "02_Journal" / "field_notes" / "night").is_dir()
+
+    repeated = store.promote_directory(
+        staged["stage_id"], staged["proposal_sha256"]
+    )
+    assert repeated["already_promoted"] is True
+    assert repeated["canonical_changed"] is False
+
+
+def test_directory_stage_revalidates_absence_and_refuses_conflict(tmp_path: Path) -> None:
+    store, live, _ = make_store(tmp_path)
+    staged = store.stage_directory("02_Journal/workbench/drafts")
+    (live / "02_Journal" / "workbench").mkdir()
+
+    inspected = store.inspect_stage(staged["stage_id"])
+    assert inspected["validation"]["ready"] is False
+
+    with pytest.raises(ArchiveError, match="already exists|state changed"):
+        store.promote_directory(staged["stage_id"], staged["proposal_sha256"])
+    assert not (live / "02_Journal" / "workbench" / "drafts").exists()
+
+
+def test_directory_stage_honors_prefix_and_path_safety(tmp_path: Path) -> None:
+    store, live, _ = make_store(tmp_path)
+    (live / "02_Journal" / "already").mkdir()
+    (live / "02_Journal" / "blocker").write_text("x", encoding="utf-8")
+
+    with pytest.raises(ArchiveError, match="outside configured"):
+        store.stage_directory("Liora/private")
+    with pytest.raises(ArchiveError, match="Parent traversal"):
+        store.stage_directory("../escape")
+    with pytest.raises(ArchiveError, match="Windows-unsafe"):
+        store.stage_directory("02_Journal/CON")
+    with pytest.raises(ArchiveError, match="already exists"):
+        store.stage_directory("02_Journal/already")
+    with pytest.raises(ArchiveError, match="crosses a non-directory"):
+        store.stage_directory("02_Journal/blocker/child")
+
+
+def test_text_and_directory_promoters_refuse_the_wrong_stage_kind(tmp_path: Path) -> None:
+    store, _, _ = make_store(tmp_path)
+    text = store.stage_text("02_Journal/text.md", "hello\n")
+    directory = store.stage_directory("02_Journal/directory")
+
+    with pytest.raises(ArchiveError, match="Text proposals require"):
+        store.promote_directory(text["stage_id"], text["proposal_sha256"])
+    with pytest.raises(ArchiveError, match="Directory proposals require"):
+        store.promote(directory["stage_id"], directory["proposal_sha256"])

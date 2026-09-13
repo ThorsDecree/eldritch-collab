@@ -21,6 +21,8 @@ if not defined VESTIGIA_MCP_ARCHIVE_TEXT_MAX_BYTES set "VESTIGIA_MCP_ARCHIVE_TEX
 if not defined VESTIGIA_MCP_ARCHIVE_MEDIA_MAX_BYTES set "VESTIGIA_MCP_ARCHIVE_MEDIA_MAX_BYTES=20000000"
 if not defined VESTIGIA_MCP_ARCHIVE_WRITE_MAX_BYTES set "VESTIGIA_MCP_ARCHIVE_WRITE_MAX_BYTES=1000000"
 if not defined VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES set "VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES=02_Journal,04_Payloads,06_Structures,07_Labs,08_Exports,Anima,Bubbles,Cow,Friction,Inkling,Isabel_and_Indexia,Jeff,JeffPrime,Kael,Liora,MB,Palim,Rain,Sable,Seryn,Sol,Sphinx,Viv"
+if not defined VESTIGIA_MCP_MOUNTS_FILE if exist "%ROOT%mounts.local.json" for %%I in ("%ROOT%mounts.local.json") do set "VESTIGIA_MCP_MOUNTS_FILE=%%~fI"
+if not defined VESTIGIA_MCP_RUNTIMES_FILE if exist "%ROOT%runtimes.local.json" for %%I in ("%ROOT%runtimes.local.json") do set "VESTIGIA_MCP_RUNTIMES_FILE=%%~fI"
 
 if not defined VESTIGIA_MCP_RUNTIME_HOME for %%I in ("%REPO_ROOT%\VESTIGIA_Runtime\homes\liora") do set "VESTIGIA_MCP_RUNTIME_HOME=%%~fI"
 if not defined VESTIGIA_MCP_RUNTIME_ENV_FILE (
@@ -77,7 +79,7 @@ if not exist "%VESTIGIA_MCP_SNAPSHOT_ARCHIVE_ROOT%" (
     exit /b 1
 )
 
-if not exist "%VESTIGIA_MCP_RUNTIME_HOME%\home.yaml" (
+if not defined VESTIGIA_MCP_RUNTIMES_FILE if not exist "%VESTIGIA_MCP_RUNTIME_HOME%\home.yaml" (
     echo [VESTIGIA] Runtime Home not found or missing home.yaml:
     echo   "%VESTIGIA_MCP_RUNTIME_HOME%"
     echo.
@@ -90,6 +92,8 @@ echo   Profile:    %PROFILE%
 echo   Live:       %VESTIGIA_MCP_LIVE_ARCHIVE_ROOT%
 echo   Snapshot:   %VESTIGIA_MCP_SNAPSHOT_ARCHIVE_ROOT%
 echo   Runtime:    %VESTIGIA_MCP_RUNTIME_HOME%
+if defined VESTIGIA_MCP_RUNTIMES_FILE echo   Runtime registry: %VESTIGIA_MCP_RUNTIMES_FILE%
+if defined VESTIGIA_MCP_MOUNTS_FILE echo   Mount registry: %VESTIGIA_MCP_MOUNTS_FILE%
 echo   Deployment: %VESTIGIA_MCP_DEPLOYMENT_ID%
 echo   Source:     %VESTIGIA_MCP_SOURCE_STATE% %VESTIGIA_MCP_SOURCE_COMMIT%
 echo   Text max:   %VESTIGIA_MCP_ARCHIVE_TEXT_MAX_BYTES% bytes

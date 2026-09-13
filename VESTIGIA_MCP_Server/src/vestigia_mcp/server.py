@@ -15,7 +15,7 @@ from mcp.types import ImageContent, TextContent, ToolAnnotations
 
 from . import __version__
 from .adapters.archive import ArchiveError, ArchiveSource, normalize_relative_path
-from .adapters.runtime import RuntimeBridge, RuntimeBridgeError
+from .adapters.runtime import RuntimeBridgeError
 from .archive_mutation import ArchiveMutationStore
 from .audit import AuditError, AuditLedger
 from .config import Settings
@@ -25,7 +25,9 @@ from .health import (
     source_clock,
 )
 from .identity import system_identity as build_system_identity
+from .mounts import MountRegistry
 from .policy import PolicyDenied, PolicyEngine
+from .runtime_registry import RuntimeRegistry
 
 
 T = TypeVar("T")
@@ -73,11 +75,12 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     settings = settings or Settings.from_env()
     policy = PolicyEngine()
     ledger = AuditLedger(settings.state_dir, settings.deployment_id)
-    runtime_bridge = RuntimeBridge(
-        settings.runtime_home,
-        settings.runtime_env_file,
+    runtime_registry = RuntimeRegistry(
+        settings.runtimes_file,
+        legacy_home=settings.runtime_home,
+        legacy_env_file=settings.runtime_env_file,
         deployment_id=settings.deployment_id,
-        write_actions=settings.runtime_write_actions,
+        legacy_write_actions=settings.runtime_write_actions,
     )
     archive_mutations = ArchiveMutationStore(
         settings.live_archive_root,
@@ -86,16 +89,22 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         write_prefixes=settings.archive_write_prefixes,
         max_bytes=settings.archive_write_max_bytes,
     )
+    mounts = MountRegistry(
+        settings.mounts_file,
+        default_text_max_bytes=settings.archive_text_max_bytes,
+        default_media_max_bytes=settings.archive_media_max_bytes,
+    )
     server = MCPServer(
         "VESTIGIA MCP",
         instructions=(
             "Local-first VESTIGIA capability broker. Tool descriptions are not authority; "
             "live policy is. Archive tools are native bounded PERCEIVE capabilities. Runtime "
-            "reads project Runtime's executable CapabilityRegistry through HousePort. Local "
+            "reads project Runtime's executable CapabilityRegistry through independently routed "
+            "HousePorts. Named external mounts are read-only and non-canonical. Local "
             "Runtime mutations require both a live eligible Runtime contract and an explicit "
             "deployment action allowlist; MCP does not define a parallel Runtime capability "
-            "ontology. Canonical Archive text changes require a durable stage, an explicit "
-            "path-prefix grant, a matching proposal digest, and a still-current base hash. "
+            "ontology. Canonical Archive text or directory changes require a durable stage, an "
+            "explicit path-prefix grant, a matching proposal digest, and a still-current base. "
             "Health, "
             "identity, receipts, and house.glance are descriptive evidence surfaces, not memory "
             "or canonical authority. Prefer diff_detail for one known Archive path and diff for "
@@ -190,7 +199,8 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         title="List Archive paths",
         description=(
             "Use this when you need to browse relative file paths in the live or snapshot "
-            "Archive, optionally under one prefix."
+            "Archive, optionally under one prefix. Pass next_cursor back unchanged to continue "
+            "the same digest-bound path view."
         ),
         annotations=READ_ONLY_ANNOTATIONS,
     )
@@ -198,12 +208,22 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         source: str,
         prefix: str = "",
         limit: int = 500,
+        cursor: str | None = None,
     ) -> dict[str, object]:
-        arguments = {"source": source, "prefix": prefix, "limit": limit}
+        arguments = {
+            "source": source,
+            "prefix": prefix,
+            "limit": limit,
+            "cursor": cursor,
+        }
         return guarded(
             "archive.list",
             arguments,
-            lambda: source_for(source).list_paths(prefix=prefix, limit=limit),
+            lambda: source_for(source).list_paths(
+                prefix=prefix,
+                limit=limit,
+                cursor=cursor,
+            ),
         )
 
     @server.tool(
@@ -211,25 +231,34 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         title="Read Archive text",
         description=(
             "Use this when you know the relative path of one UTF-8 text-like Archive file and "
-            "need its bounded contents."
+            "need its bounded contents. Long files return UTF-8-safe pages; pass next_cursor "
+            "back unchanged to continue the same file hash."
         ),
         annotations=READ_ONLY_ANNOTATIONS,
     )
-    def archive_read_text(source: str, path: str) -> dict[str, object]:
-        arguments = {"source": source, "path": path}
+    def archive_read_text(
+        source: str,
+        path: str,
+        cursor: str | None = None,
+        page_bytes: int = 64_000,
+    ) -> dict[str, object]:
+        arguments = {
+            "source": source,
+            "path": path,
+            "cursor": cursor,
+            "page_bytes": page_bytes,
+        }
 
         def operation() -> dict[str, object]:
-            content = source_for(source).read_text(
+            page = source_for(source).read_text_page(
                 path,
                 max_bytes=settings.archive_text_max_bytes,
+                page_bytes=page_bytes,
+                cursor=cursor,
             )
-            encoded = content.encode("utf-8")
             return {
                 "source": source,
-                "path": path,
-                "content": content,
-                "size": len(encoded),
-                "sha256": hashlib.sha256(encoded).hexdigest(),
+                **page,
             }
 
         return guarded("archive.read_text", arguments, operation)
@@ -279,7 +308,8 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         description=(
             "Use this when you need literal line-level evidence from UTF-8 text-like Archive "
             "files. This is not semantic or fuzzy search; skipped oversized/non-UTF-8 files are "
-            "reported explicitly."
+            "reported explicitly. Pass next_cursor back unchanged to continue the same "
+            "digest-bound result view."
         ),
         annotations=READ_ONLY_ANNOTATIONS,
     )
@@ -289,6 +319,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         prefix: str = "",
         limit: int = 50,
         case_sensitive: bool = False,
+        cursor: str | None = None,
     ) -> dict[str, object]:
         arguments = {
             "source": source,
@@ -296,6 +327,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             "prefix": prefix,
             "limit": limit,
             "case_sensitive": case_sensitive,
+            "cursor": cursor,
         }
 
         def operation() -> dict[str, object]:
@@ -305,8 +337,21 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 limit=limit,
                 max_bytes=settings.archive_text_max_bytes,
                 case_sensitive=case_sensitive,
+                cursor=cursor,
             )
-            return {"source": source, **result}
+            result["hits"] = [
+                {
+                    "source": source,
+                    "provenance": "configured_archive_source",
+                    **hit,
+                }
+                for hit in result["hits"]
+            ]
+            return {
+                "source": source,
+                "provenance": "configured_archive_source",
+                **result,
+            }
 
         return guarded("archive.search_text", arguments, operation)
 
@@ -485,6 +530,37 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         )
 
     @server.tool(
+        name="archive.stage_directory",
+        title="Stage a canonical Archive directory",
+        description=(
+            "Create a durable MCP-owned proposal for one nested directory tree under an "
+            "operator-granted Archive prefix. This does not modify the live Archive. The "
+            "proposal records the nearest existing parent and every directory that must remain "
+            "absent until promotion."
+        ),
+        annotations=LOCAL_WRITE_ANNOTATIONS,
+    )
+    def archive_stage_directory(
+        path: str,
+        reason: str = "",
+    ) -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        arguments = {"path": path, "reason": reason}
+
+        def operation() -> dict[str, object]:
+            return {
+                "request_id": request_id,
+                **archive_mutations.stage_directory(path, reason=reason),
+            }
+
+        return guarded(
+            "archive.stage_directory",
+            arguments,
+            operation,
+            request_id=request_id,
+        )
+
+    @server.tool(
         name="archive.stage_list",
         title="List canonical Archive stages",
         description=(
@@ -581,6 +657,229 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         )
 
     @server.tool(
+        name="archive.promote_directory",
+        title="Promote a staged canonical Archive directory",
+        description=(
+            "Create the nested directory tree captured by one durable stage. Promotion requires "
+            "the exact proposal digest, an active deployment prefix grant, and every planned "
+            "directory to remain absent. Each mkdir is atomic; a failed tree is rolled back where "
+            "the newly created directories remain empty."
+        ),
+        annotations=CANONICAL_WRITE_ANNOTATIONS,
+    )
+    def archive_promote_directory(
+        stage_id: str,
+        proposal_sha256: str,
+    ) -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        arguments = {
+            "stage_id": stage_id,
+            "proposal_sha256": proposal_sha256,
+        }
+
+        def operation() -> dict[str, object]:
+            return {
+                "request_id": request_id,
+                **archive_mutations.promote_directory(stage_id, proposal_sha256),
+            }
+
+        return guarded(
+            "archive.promote_directory",
+            arguments,
+            operation,
+            request_id=request_id,
+        )
+
+    @server.tool(
+        name="mount.status",
+        title="Inspect named filesystem mounts",
+        description=(
+            "Inspect the operator-configured external read-only roots available by mount ID. "
+            "Named mounts expose bounded relative-path perception and never acquire canonical "
+            "Archive semantics."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def mount_status(include_stats: bool = False) -> dict[str, object]:
+        arguments = {"include_stats": include_stats}
+        return guarded(
+            "mount.status",
+            arguments,
+            lambda: mounts.status(include_stats=include_stats),
+        )
+
+    @server.tool(
+        name="mount.list",
+        title="List paths in a named mount",
+        description=(
+            "List a cursor-paged relative path view inside one operator-named read-only root. "
+            "Pass next_cursor back unchanged to continue the same stable view."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def mount_list(
+        mount_id: str,
+        prefix: str = "",
+        limit: int = 500,
+        cursor: str | None = None,
+    ) -> dict[str, object]:
+        arguments = {
+            "mount_id": mount_id,
+            "prefix": prefix,
+            "limit": limit,
+            "cursor": cursor,
+        }
+
+        def operation() -> dict[str, object]:
+            mount = mounts.get(mount_id)
+            return {
+                "mount_id": mount_id,
+                "provenance": "operator_named_read_only_root",
+                **mount.source().list_paths(prefix=prefix, limit=limit, cursor=cursor),
+            }
+
+        return guarded("mount.list", arguments, operation)
+
+    @server.tool(
+        name="mount.read_text",
+        title="Read text from a named mount",
+        description=(
+            "Read one cursor-paged UTF-8 text-like file from a named read-only root. The "
+            "response includes the selected mount ID and content hash as explicit provenance."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def mount_read_text(
+        mount_id: str,
+        path: str,
+        cursor: str | None = None,
+        page_bytes: int = 64_000,
+    ) -> dict[str, object]:
+        arguments = {
+            "mount_id": mount_id,
+            "path": path,
+            "cursor": cursor,
+            "page_bytes": page_bytes,
+        }
+
+        def operation() -> dict[str, object]:
+            mount = mounts.get(mount_id)
+            return {
+                "mount_id": mount_id,
+                "provenance": "operator_named_read_only_root",
+                **mount.source().read_text_page(
+                    path,
+                    mount.text_max_bytes,
+                    page_bytes=page_bytes,
+                    cursor=cursor,
+                ),
+            }
+
+        return guarded("mount.read_text", arguments, operation)
+
+    @server.tool(
+        name="mount.read_media",
+        title="View an image from a named mount",
+        description=(
+            "Read one bounded, signature-checked PNG, JPEG, GIF, or WebP from a named read-only "
+            "root. Absolute paths, symlinks, active formats, and unsupported signatures are refused."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def mount_read_media(
+        mount_id: str,
+        path: str,
+    ) -> list[TextContent | ImageContent]:
+        arguments = {"mount_id": mount_id, "path": path}
+
+        def operation() -> list[TextContent | ImageContent]:
+            mount = mounts.get(mount_id)
+            media = mount.source().read_media(path, max_bytes=mount.media_max_bytes)
+            metadata = {
+                "mount_id": mount_id,
+                "provenance": "operator_named_read_only_root",
+                "path": media.path,
+                "size": media.size,
+                "sha256": media.sha256,
+                "mime_type": media.mime_type,
+                "byte_ceiling": mount.media_max_bytes,
+            }
+            return [
+                TextContent(text=json.dumps(metadata, ensure_ascii=False, sort_keys=True)),
+                ImageContent(
+                    data=base64.b64encode(media.data).decode("ascii"),
+                    mimeType=media.mime_type,
+                ),
+            ]
+
+        return guarded("mount.read_media", arguments, operation)
+
+    @server.tool(
+        name="mount.search_text",
+        title="Search text in a named mount",
+        description=(
+            "Search cursor-paged literal line evidence inside one named read-only root. This is "
+            "bounded retrieval, not semantic search or canonical Archive interpretation."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def mount_search_text(
+        mount_id: str,
+        query: str,
+        prefix: str = "",
+        limit: int = 50,
+        case_sensitive: bool = False,
+        cursor: str | None = None,
+    ) -> dict[str, object]:
+        arguments = {
+            "mount_id": mount_id,
+            "query": query,
+            "prefix": prefix,
+            "limit": limit,
+            "case_sensitive": case_sensitive,
+            "cursor": cursor,
+        }
+
+        def operation() -> dict[str, object]:
+            mount = mounts.get(mount_id)
+            result = mount.source().search_text(
+                query,
+                prefix=prefix,
+                limit=limit,
+                max_bytes=mount.text_max_bytes,
+                case_sensitive=case_sensitive,
+                cursor=cursor,
+            )
+            result["hits"] = [
+                {
+                    "mount_id": mount_id,
+                    "provenance": "operator_named_read_only_root",
+                    **hit,
+                }
+                for hit in result["hits"]
+            ]
+            return {
+                "mount_id": mount_id,
+                "provenance": "operator_named_read_only_root",
+                **result,
+            }
+
+        return guarded("mount.search_text", arguments, operation)
+
+    @server.tool(
+        name="runtime.list",
+        title="List connected Runtime houses",
+        description=(
+            "Inspect the operator-defined Runtime registry, its default route, and the live "
+            "status of each named house. Legacy single-home environment configuration remains "
+            "available as the default route."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def runtime_list() -> dict[str, object]:
+        return guarded("runtime.list", {}, runtime_registry.list)
+
+    @server.tool(
         name="runtime.status",
         title="Inspect Runtime linkage",
         description=(
@@ -590,8 +889,13 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         ),
         annotations=READ_ONLY_ANNOTATIONS,
     )
-    def runtime_status() -> dict[str, object]:
-        return guarded("runtime.status", {}, runtime_bridge.status)
+    def runtime_status(runtime_id: str | None = None) -> dict[str, object]:
+        arguments = {"runtime_id": runtime_id}
+        return guarded(
+            "runtime.status",
+            arguments,
+            lambda: runtime_registry.status(runtime_id),
+        )
 
     @server.tool(
         name="runtime.capabilities",
@@ -604,12 +908,15 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         ),
         annotations=READ_ONLY_ANNOTATIONS,
     )
-    def runtime_capabilities(target: str | None = None) -> dict[str, object]:
-        arguments = {"target": target}
+    def runtime_capabilities(
+        target: str | None = None,
+        runtime_id: str | None = None,
+    ) -> dict[str, object]:
+        arguments = {"target": target, "runtime_id": runtime_id}
         return guarded(
             "runtime.capabilities",
             arguments,
-            lambda: runtime_bridge.capabilities(target),
+            lambda: runtime_registry.capabilities(target, runtime_id=runtime_id),
         )
 
     @server.tool(
@@ -627,16 +934,22 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     def runtime_call(
         action: str,
         arguments: dict[str, Any] | None = None,
+        runtime_id: str | None = None,
     ) -> dict[str, object]:
         request_id = f"mcp_req_{uuid.uuid4()}"
-        audit_arguments = {"action": action, "arguments": arguments or {}}
+        audit_arguments = {
+            "action": action,
+            "arguments": arguments or {},
+            "runtime_id": runtime_id,
+        }
         return guarded(
             "runtime.call",
             audit_arguments,
-            lambda: runtime_bridge.call(
+            lambda: runtime_registry.call(
                 action=action,
                 arguments=arguments,
                 request_id=request_id,
+                runtime_id=runtime_id,
             ),
             request_id=request_id,
         )
@@ -654,12 +967,15 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     )
     def runtime_write_capabilities(
         target: str | None = None,
+        runtime_id: str | None = None,
     ) -> dict[str, object]:
-        arguments = {"target": target}
+        arguments = {"target": target, "runtime_id": runtime_id}
         return guarded(
             "runtime.write_capabilities",
             arguments,
-            lambda: runtime_bridge.write_capabilities(target),
+            lambda: runtime_registry.write_capabilities(
+                target, runtime_id=runtime_id
+            ),
         )
 
     @server.tool(
@@ -677,16 +993,22 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     def runtime_write(
         action: str,
         arguments: dict[str, Any] | None = None,
+        runtime_id: str | None = None,
     ) -> dict[str, object]:
         request_id = f"mcp_req_{uuid.uuid4()}"
-        audit_arguments = {"action": action, "arguments": arguments or {}}
+        audit_arguments = {
+            "action": action,
+            "arguments": arguments or {},
+            "runtime_id": runtime_id,
+        }
         return guarded(
             "runtime.write",
             audit_arguments,
-            lambda: runtime_bridge.write(
+            lambda: runtime_registry.write(
                 action=action,
                 arguments=arguments,
                 request_id=request_id,
+                runtime_id=runtime_id,
             ),
             request_id=request_id,
         )
@@ -761,7 +1083,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 settings=settings,
                 policy=policy,
                 source_for=source_for,
-                runtime_status=runtime_bridge.status,
+                runtime_status=runtime_registry.status,
             ),
         )
 
@@ -829,7 +1151,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             except ArchiveError as exc:
                 warnings.append({"family": "archive_health", "detail": str(exc)})
 
-            runtime = runtime_bridge.status()
+            runtime = runtime_registry.status()
             if runtime.get("configured") and not runtime.get("available"):
                 warnings.append(
                     {
@@ -841,7 +1163,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             staged_patch_support = False
             if runtime.get("available"):
                 try:
-                    runtime_bridge.capabilities("fs.patch_list")
+                    runtime_registry.capabilities("fs.patch_list")
                     staged_patch_support = True
                 except RuntimeBridgeError:
                     staged_patch_support = False
@@ -873,6 +1195,8 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 "archive": archive_view,
                 "archive_health": quick_health,
                 "runtime": runtime,
+                "runtimes": runtime_registry.list(),
+                "mounts": mounts.status(),
                 "audit": {
                     "recent_events": recent.get("events", []),
                     "recent_errors": recent_errors.get("events", []),
@@ -889,7 +1213,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     "supported": staged_patch_support,
                     "open_count": None,
                     "stage_granted": "fs.stage_patch"
-                    in settings.runtime_write_actions,
+                    in runtime_registry.write_actions,
                     "surface": (
                         "fs.stage_patch / fs.patch_list / fs.patch_preview / "
                         "fs.patch_validate / fs.patch_discard"
@@ -902,8 +1226,9 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     "promotion_configured": archive_write["promotion_configured"],
                     "write_prefixes": archive_write["write_prefixes"],
                     "surface": (
-                        "archive.stage_text / archive.stage_list / "
-                        "archive.stage_inspect / archive.stage_discard / archive.promote"
+                        "archive.stage_text / archive.stage_directory / archive.stage_list / "
+                        "archive.stage_inspect / archive.stage_discard / archive.promote / "
+                        "archive.promote_directory"
                     ),
                 },
                 "watch_subscriptions": {
@@ -937,7 +1262,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                         if settings.archive_write_prefixes
                         else (
                             "bounded_local_act"
-                            if settings.runtime_write_actions
+                            if runtime_registry.any_write_actions
                             else "perceive"
                         )
                     ),
@@ -951,16 +1276,18 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     "write_prefixes": list(settings.archive_write_prefixes),
                     "write_max_bytes": settings.archive_write_max_bytes,
                 },
+                "mounts": mounts.status(),
                 "runtime": {
-                    "configured": runtime_bridge.configured,
-                    "home": runtime_bridge.configured_home,
-                    "env_file": runtime_bridge.configured_env_file,
+                    "configured": runtime_registry.configured,
+                    "home": runtime_registry.configured_home,
+                    "env_file": runtime_registry.configured_env_file,
+                    "registry": runtime_registry.list(),
                     "projection": (
                         "runtime_owned_read_plus_opt_in_local_mutation"
-                        if settings.runtime_write_actions
+                        if runtime_registry.any_write_actions
                         else "runtime_owned_read_only"
                     ),
-                    "write_actions": list(settings.runtime_write_actions),
+                    "write_actions": list(runtime_registry.write_actions),
                 },
                 "policy": {
                     "capability_count": len(capabilities),
@@ -980,10 +1307,18 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                         "archive.health",
                         "archive.write_capabilities",
                         "archive.stage_text",
+                        "archive.stage_directory",
                         "archive.stage_list",
                         "archive.stage_inspect",
                         "archive.stage_discard",
                         "archive.promote",
+                        "archive.promote_directory",
+                        "mount.status",
+                        "mount.list",
+                        "mount.read_text",
+                        "mount.read_media",
+                        "mount.search_text",
+                        "runtime.list",
                         "audit.show",
                         "system.identity",
                         "house.glance",
