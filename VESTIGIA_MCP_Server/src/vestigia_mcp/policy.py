@@ -199,6 +199,8 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         Decision.ALLOW,
         "Start a GameTable lobby with server-side shuffle commitments and private opening hands.",
     ),
+    Capability("game.mulligan", EffectClass.PREPARE, Decision.ALLOW, "Privately replace one seat's opening hand while opening hands are being resolved."),
+    Capability("game.keep", EffectClass.PREPARE, Decision.ALLOW, "Mark one seat's opening hand kept; activate play when all seats have kept."),
     Capability(
         "game.act",
         EffectClass.PREPARE,
