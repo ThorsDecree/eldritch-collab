@@ -41,8 +41,10 @@ def test_named_mount_is_read_only_relative_and_paged(tmp_path: Path) -> None:
     second = mount.source().list_paths(limit=1, cursor=first["next_cursor"])
     assert second["paths"] == ["two.md"]
 
-    with pytest.raises(ArchiveError, match="Absolute paths"):
-        mount.source().read_text(str(root / "one.md"), 1000)
+    with pytest.raises(ArchiveError, match="Absolute paths are not allowed"):
+        mount.source().read_text("/outside/one.md", 1000)
+    with pytest.raises(ArchiveError, match="Drive-qualified paths are not allowed"):
+        mount.source().read_text("C:/outside/one.md", 1000)
 
 
 def test_named_mount_registry_rejects_unsafe_configuration(tmp_path: Path) -> None:
