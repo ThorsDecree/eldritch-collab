@@ -30,6 +30,15 @@ def test_archive_stage_and_promotion_have_distinct_effect_classes() -> None:
     assert engine.require_allowed("archive.promote_directory").effect is EffectClass.ACT
 
 
+def test_gametable_keeps_views_and_local_turn_state_distinct() -> None:
+    engine = PolicyEngine()
+    assert engine.require_allowed("game.view").effect is EffectClass.PERCEIVE
+    assert engine.require_allowed("game.events").effect is EffectClass.PERCEIVE
+    assert engine.require_allowed("game.create").effect is EffectClass.PREPARE
+    assert engine.require_allowed("game.load_deck").effect is EffectClass.PREPARE
+    assert engine.require_allowed("game.act").effect is EffectClass.PREPARE
+
+
 def test_confirm_or_deny_is_not_treated_as_allow() -> None:
     engine = PolicyEngine(
         (

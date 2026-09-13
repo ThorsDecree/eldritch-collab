@@ -16,6 +16,8 @@ def test_media_ceiling_and_runtime_write_grants_are_explicit_env(monkeypatch) ->
     monkeypatch.setenv("VESTIGIA_MCP_ARCHIVE_WRITE_MAX_BYTES", "54321")
     monkeypatch.setenv("VESTIGIA_MCP_MOUNTS_FILE", "/tmp/vestigia-mounts.json")
     monkeypatch.setenv("VESTIGIA_MCP_RUNTIMES_FILE", "/tmp/vestigia-runtimes.json")
+    monkeypatch.setenv("VESTIGIA_MCP_GAMETABLE_ENABLED", "yes")
+    monkeypatch.setenv("VESTIGIA_MCP_GAMETABLE_STATE_DIR", "/tmp/vestigia-games")
 
     settings = Settings.from_env()
 
@@ -29,11 +31,15 @@ def test_media_ceiling_and_runtime_write_grants_are_explicit_env(monkeypatch) ->
     assert settings.archive_write_max_bytes == 54321
     assert settings.mounts_file == Path("/tmp/vestigia-mounts.json")
     assert settings.runtimes_file == Path("/tmp/vestigia-runtimes.json")
+    assert settings.gametable_enabled is True
+    assert settings.gametable_state_dir == Path("/tmp/vestigia-games")
 
 
 def test_runtime_write_grants_default_to_empty(monkeypatch) -> None:
     monkeypatch.delenv("VESTIGIA_MCP_RUNTIME_WRITE_ACTIONS", raising=False)
     monkeypatch.delenv("VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES", raising=False)
+    monkeypatch.delenv("VESTIGIA_MCP_GAMETABLE_ENABLED", raising=False)
     settings = Settings.from_env()
     assert settings.runtime_write_actions == ()
     assert settings.archive_write_prefixes == ()
+    assert settings.gametable_enabled is False

@@ -24,9 +24,10 @@ from .health import (
     registry_status as inspect_registry_status,
     source_clock,
 )
+from .gametable import GameTableError, GameTableStore
 from .identity import system_identity as build_system_identity
 from .mounts import MountRegistry
-from .policy import PolicyDenied, PolicyEngine
+from .policy import DEFAULT_CAPABILITIES, PolicyDenied, PolicyEngine
 from .runtime_registry import RuntimeRegistry
 
 
@@ -73,7 +74,13 @@ def _live_archive_exclusions(settings: Settings) -> tuple[str, ...]:
 
 def create_server(settings: Settings | None = None) -> MCPServer:
     settings = settings or Settings.from_env()
-    policy = PolicyEngine()
+    policy = PolicyEngine(
+        tuple(
+            capability
+            for capability in DEFAULT_CAPABILITIES
+            if settings.gametable_enabled or not capability.name.startswith("game.")
+        )
+    )
     ledger = AuditLedger(settings.state_dir, settings.deployment_id)
     runtime_registry = RuntimeRegistry(
         settings.runtimes_file,
@@ -93,6 +100,14 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         settings.mounts_file,
         default_text_max_bytes=settings.archive_text_max_bytes,
         default_media_max_bytes=settings.archive_media_max_bytes,
+    )
+    gametable = (
+        GameTableStore(
+            settings.gametable_state_dir or settings.state_dir / "gametable",
+            settings.deployment_id,
+        )
+        if settings.gametable_enabled
+        else None
     )
     server = MCPServer(
         "VESTIGIA MCP",
@@ -139,7 +154,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             raise ToolError(str(exc)) from exc
         try:
             result = operation()
-        except (ArchiveError, AuditError, RuntimeBridgeError) as exc:
+        except (ArchiveError, AuditError, RuntimeBridgeError, GameTableError) as exc:
             ledger.record(
                 capability,
                 arguments,
@@ -866,6 +881,300 @@ def create_server(settings: Settings | None = None) -> MCPServer:
 
         return guarded("mount.search_text", arguments, operation)
 
+    if gametable is not None:
+
+        @server.tool(
+            name="game.profiles",
+            title="Inspect GameTable profiles",
+            description=(
+                "Inspect the installed tabletop profiles before creating a game. Profiles define "
+                "zones, starting resources, and turn flow; they do not claim to adjudicate a "
+                "complete card game's rules."
+            ),
+            annotations=READ_ONLY_ANNOTATIONS,
+        )
+        def game_profiles() -> dict[str, object]:
+            return guarded("game.profiles", {}, gametable.profiles)
+
+        @server.tool(
+            name="game.status",
+            title="Inspect GameTable module status",
+            description=(
+                "Inspect aggregate non-secret GameTable state and the module's explicit privacy "
+                "qualification. This does not enumerate games or expose seats, decks, or hands."
+            ),
+            annotations=READ_ONLY_ANNOTATIONS,
+        )
+        def game_status() -> dict[str, object]:
+            return guarded("game.status", {}, gametable.status)
+
+        @server.tool(
+            name="game.create",
+            title="Create a private GameTable lobby",
+            description=(
+                "Create an MCP-owned tabletop lobby from a named profile and explicit seats. The "
+                "response returns one bearer development seat token per seat; deliver each token "
+                "privately, then have each seat load its own deck. This creates game state only, "
+                "not canonical Archive or external-platform state."
+            ),
+            annotations=LOCAL_WRITE_ANNOTATIONS,
+        )
+        def game_create(
+            title: str,
+            seats: list[dict[str, Any]],
+            profile_id: str = "magic.commander.v0.1",
+        ) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            arguments = {
+                "title": title,
+                "profile_id": profile_id,
+                "seats": seats,
+            }
+            return guarded(
+                "game.create",
+                arguments,
+                lambda: {"request_id": request_id, **gametable.create_game(title=title, profile_id=profile_id, seats=seats)},
+                request_id=request_id,
+            )
+
+        @server.tool(
+            name="game.load_deck",
+            title="Load a private GameTable deck",
+            description=(
+                "Load one seat's deck into an open lobby using that seat's development token and "
+                "an exact expected revision. The decklist is not returned in public table views "
+                "or public events; every seat must load a deck before game.start."
+            ),
+            annotations=LOCAL_WRITE_ANNOTATIONS,
+        )
+        def game_load_deck(
+            game_id: str,
+            seat_token: str,
+            expected_revision: int,
+            deck: list[str],
+            command: list[str] | None = None,
+        ) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            arguments = {
+                "game_id": game_id,
+                "seat_token": seat_token,
+                "expected_revision": expected_revision,
+                "deck": deck,
+                "command": command,
+            }
+            return guarded(
+                "game.load_deck",
+                arguments,
+                lambda: {
+                    "request_id": request_id,
+                    **gametable.load_deck(
+                        game_id=game_id,
+                        seat_token=seat_token,
+                        expected_revision=expected_revision,
+                        deck=deck,
+                        command=command,
+                    ),
+                },
+                request_id=request_id,
+            )
+
+        @server.tool(
+            name="game.start",
+            title="Start a GameTable lobby",
+            description=(
+                "Start a lobby with a seated development token and an exact expected revision. "
+                "The server shuffles each library, emits public shuffle commitments, and returns "
+                "opening-hand card details only to the seat that supplied the token."
+            ),
+            annotations=LOCAL_WRITE_ANNOTATIONS,
+        )
+        def game_start(
+            game_id: str,
+            seat_token: str,
+            expected_revision: int,
+        ) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            arguments = {
+                "game_id": game_id,
+                "seat_token": seat_token,
+                "expected_revision": expected_revision,
+            }
+            return guarded(
+                "game.start",
+                arguments,
+                lambda: {
+                    "request_id": request_id,
+                    **gametable.start_game(
+                        game_id=game_id,
+                        seat_token=seat_token,
+                        expected_revision=expected_revision,
+                    ),
+                },
+                request_id=request_id,
+            )
+
+        @server.tool(
+            name="game.view",
+            title="View a GameTable",
+            description=(
+                "View public table state without a token, or the private hand/count projection for "
+                "the holder of one valid seat token. Opponent hands and all library order stay out "
+                "of every ordinary MCP response."
+            ),
+            annotations=READ_ONLY_ANNOTATIONS,
+        )
+        def game_view(
+            game_id: str,
+            seat_token: str | None = None,
+        ) -> dict[str, object]:
+            arguments = {"game_id": game_id, "seat_token": seat_token}
+            return guarded(
+                "game.view",
+                arguments,
+                lambda: gametable.view(game_id=game_id, seat_token=seat_token),
+            )
+
+        @server.tool(
+            name="game.events",
+            title="Read GameTable events",
+            description=(
+                "Read a sequence-paged event log for one GameTable. The public event chain is "
+                "visible to everyone; a valid seat token adds only details explicitly addressed "
+                "to that seat, such as cards it drew."
+            ),
+            annotations=READ_ONLY_ANNOTATIONS,
+        )
+        def game_events(
+            game_id: str,
+            after_sequence: int = 0,
+            limit: int = 50,
+            seat_token: str | None = None,
+        ) -> dict[str, object]:
+            arguments = {
+                "game_id": game_id,
+                "after_sequence": after_sequence,
+                "limit": limit,
+                "seat_token": seat_token,
+            }
+            return guarded(
+                "game.events",
+                arguments,
+                lambda: gametable.events(
+                    game_id=game_id,
+                    after_sequence=after_sequence,
+                    limit=limit,
+                    seat_token=seat_token,
+                ),
+            )
+
+        @server.tool(
+            name="game.act",
+            title="Apply a GameTable action",
+            description=(
+                "Apply one revision-bound action as the current priority seat. Supported action "
+                "types are draw, play, move, tap, untap, counter, damage, and life. The GameTable "
+                "checks zone/control/turn bounds but does not adjudicate card text or the full "
+                "rules of Magic."
+            ),
+            annotations=LOCAL_WRITE_ANNOTATIONS,
+        )
+        def game_act(
+            game_id: str,
+            seat_token: str,
+            expected_revision: int,
+            action: dict[str, Any],
+        ) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            arguments = {
+                "game_id": game_id,
+                "seat_token": seat_token,
+                "expected_revision": expected_revision,
+                "action": action,
+            }
+            return guarded(
+                "game.act",
+                arguments,
+                lambda: {
+                    "request_id": request_id,
+                    **gametable.act(
+                        game_id=game_id,
+                        seat_token=seat_token,
+                        expected_revision=expected_revision,
+                        action=action,
+                    ),
+                },
+                request_id=request_id,
+            )
+
+        @server.tool(
+            name="game.pass_priority",
+            title="Pass GameTable priority",
+            description=(
+                "Pass priority with a valid seat token and current revision. Once every remaining "
+                "seat passes, GameTable advances one configured turn step and returns priority to "
+                "the active seat."
+            ),
+            annotations=LOCAL_WRITE_ANNOTATIONS,
+        )
+        def game_pass_priority(
+            game_id: str,
+            seat_token: str,
+            expected_revision: int,
+        ) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            arguments = {
+                "game_id": game_id,
+                "seat_token": seat_token,
+                "expected_revision": expected_revision,
+            }
+            return guarded(
+                "game.pass_priority",
+                arguments,
+                lambda: {
+                    "request_id": request_id,
+                    **gametable.pass_priority(
+                        game_id=game_id,
+                        seat_token=seat_token,
+                        expected_revision=expected_revision,
+                    ),
+                },
+                request_id=request_id,
+            )
+
+        @server.tool(
+            name="game.concede",
+            title="Concede a GameTable game",
+            description=(
+                "Record the token holder's concession at one exact revision. The result preserves "
+                "the event chain and ends a game only when one or no seats remain."
+            ),
+            annotations=LOCAL_WRITE_ANNOTATIONS,
+        )
+        def game_concede(
+            game_id: str,
+            seat_token: str,
+            expected_revision: int,
+        ) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            arguments = {
+                "game_id": game_id,
+                "seat_token": seat_token,
+                "expected_revision": expected_revision,
+            }
+            return guarded(
+                "game.concede",
+                arguments,
+                lambda: {
+                    "request_id": request_id,
+                    **gametable.concede(
+                        game_id=game_id,
+                        seat_token=seat_token,
+                        expected_revision=expected_revision,
+                    ),
+                },
+                request_id=request_id,
+            )
+
     @server.tool(
         name="runtime.list",
         title="List connected Runtime houses",
@@ -1197,6 +1506,15 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 "runtime": runtime,
                 "runtimes": runtime_registry.list(),
                 "mounts": mounts.status(),
+                "gametable": (
+                    gametable.status()
+                    if gametable is not None
+                    else {
+                        "schema_version": "vestigia.gametable.v0.1",
+                        "enabled": False,
+                        "reason": "VESTIGIA_MCP_GAMETABLE_ENABLED is not enabled for this deployment.",
+                    }
+                ),
                 "audit": {
                     "recent_events": recent.get("events", []),
                     "recent_errors": recent_errors.get("events", []),
@@ -1262,7 +1580,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                         if settings.archive_write_prefixes
                         else (
                             "bounded_local_act"
-                            if runtime_registry.any_write_actions
+                            if runtime_registry.any_write_actions or gametable is not None
                             else "perceive"
                         )
                     ),
@@ -1277,6 +1595,14 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     "write_max_bytes": settings.archive_write_max_bytes,
                 },
                 "mounts": mounts.status(),
+                "gametable": (
+                    gametable.status()
+                    if gametable is not None
+                    else {
+                        "enabled": False,
+                        "reason": "VESTIGIA_MCP_GAMETABLE_ENABLED is not enabled for this deployment.",
+                    }
+                ),
                 "runtime": {
                     "configured": runtime_registry.configured,
                     "home": runtime_registry.configured_home,
@@ -1322,7 +1648,23 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                         "audit.show",
                         "system.identity",
                         "house.glance",
-                    ],
+                    ]
+                    + (
+                        [
+                            "game.profiles",
+                            "game.status",
+                            "game.create",
+                            "game.load_deck",
+                            "game.start",
+                            "game.view",
+                            "game.events",
+                            "game.act",
+                            "game.pass_priority",
+                            "game.concede",
+                        ]
+                        if gametable is not None
+                        else []
+                    ),
                     "tool_catalog_cache_note": (
                         "This live policy surface may be newer than a host/thread's cached MCP "
                         "tool catalog. Compare this list/count to host-visible descriptors."

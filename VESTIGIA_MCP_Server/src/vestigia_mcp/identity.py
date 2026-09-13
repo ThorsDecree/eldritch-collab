@@ -50,6 +50,8 @@ def config_fingerprint(settings: Settings) -> str:
             "runtime_write_actions": list(settings.runtime_write_actions),
             "mounts_file": _path(settings.mounts_file),
             "runtimes_file": _path(settings.runtimes_file),
+            "gametable_enabled": settings.gametable_enabled,
+            "gametable_state_dir": _path(settings.gametable_state_dir),
         }
     )
 

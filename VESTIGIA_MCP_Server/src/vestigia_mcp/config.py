@@ -23,6 +23,17 @@ def _positive_int_env(name: str, default: int) -> int:
     return value
 
 
+def _bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be one of 1/0, true/false, yes/no, or on/off")
+
+
 def _action_allowlist(name: str) -> tuple[str, ...]:
     values = {
         item.strip().lower()
@@ -56,6 +67,8 @@ class Settings:
     archive_write_max_bytes: int = 1_000_000
     mounts_file: Path | None = None
     runtimes_file: Path | None = None
+    gametable_enabled: bool = False
+    gametable_state_dir: Path | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -94,4 +107,6 @@ class Settings:
             ),
             mounts_file=_optional_path("VESTIGIA_MCP_MOUNTS_FILE"),
             runtimes_file=_optional_path("VESTIGIA_MCP_RUNTIMES_FILE"),
+            gametable_enabled=_bool_env("VESTIGIA_MCP_GAMETABLE_ENABLED"),
+            gametable_state_dir=_optional_path("VESTIGIA_MCP_GAMETABLE_STATE_DIR"),
         )

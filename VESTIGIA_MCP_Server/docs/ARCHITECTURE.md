@@ -103,6 +103,19 @@ Named mounts are a parallel sensory namespace for operator-configured directorie
 Archive. A mount ID resolves server-side to an absolute root; clients provide only relative
 paths. Mounts are read-only and never inherit canonical Archive semantics.
 
+## Optional modules and GameTable
+
+Optional modules are bounded applications, not a back door around MCP policy. A disabled module
+registers no tools and contributes no executable capability. An enabled module owns only its
+explicit non-canonical state under MCP state, and its tools remain in the same audited policy and
+effect-class surface as first-party tools.
+
+GameTable is the first reference module. It owns an SQLite-backed event/state store for
+hidden-information tabletop games; MCP provides tool transport and coarse receipts. GameTable
+profiles define table flow and state shape, not a card/rules oracle. Public and seat-filtered
+views are produced by the store; neither Archive nor Runtime is used as a shared game database.
+See `GAMETABLE.md`.
+
 The server is intentionally honest about cost: a full `archive.diff` hashes the files it
 compares. Caching can be added later, but a stale hidden cache should not masquerade as the
 current Archive.
