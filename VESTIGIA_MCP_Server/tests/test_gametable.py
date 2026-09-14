@@ -239,4 +239,7 @@ def test_consented_shortcut_and_initial_play_state(tmp_path) -> None:
     assert completed["event"]["public"]["automatic"] == {
         "actions": [{"type": "draw", "seat_id": "liora", "count": 1}]
     }
-    assert "Liora private card" not in json.dumps(completed)
+    assert completed["view"]["viewer"] == {"kind": "public"}
+    private_hand = store.view(game_id=game_id, seat_token=liora_token)["private"]["hand"]
+    completed_json = json.dumps(completed)
+    assert all(card["definition_ref"] not in completed_json for card in private_hand)
