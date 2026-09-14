@@ -146,7 +146,7 @@ def test_actions_are_revision_bound_and_cannot_control_an_opponent_card(tmp_path
         store.act(
             game_id=game_id,
             seat_token=jeff_token,
-            expected_revision=5,
+            expected_revision=7,
             action={"type": "tap", "card_id": card_id},
         )
 
