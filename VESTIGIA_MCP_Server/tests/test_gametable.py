@@ -113,11 +113,13 @@ def test_actions_are_revision_bound_and_cannot_control_an_opponent_card(tmp_path
         deck=_deck("Jeff"),
     )
     store.start_game(game_id=game_id, seat_token=liora_token, expected_revision=2)
+    store.keep_opening_hand(game_id=game_id, seat_token=liora_token, expected_revision=3)
+    store.keep_opening_hand(game_id=game_id, seat_token=jeff_token, expected_revision=4)
     liora_view = store.view(game_id=game_id, seat_token=liora_token)
     liora_hand = liora_view["private"]["hand"]
     card_id = liora_hand[0]["instance_id"]
 
-    with pytest.raises(GameConflictError, match="expected 0, current 3"):
+    with pytest.raises(GameConflictError, match="expected 0, current 5"):
         store.act(
             game_id=game_id,
             seat_token=liora_token,
@@ -128,23 +130,23 @@ def test_actions_are_revision_bound_and_cannot_control_an_opponent_card(tmp_path
     played = store.act(
         game_id=game_id,
         seat_token=liora_token,
-        expected_revision=3,
+        expected_revision=5,
         action={"type": "play", "card_id": card_id},
     )
-    assert played["revision"] == 4
+    assert played["revision"] == 6
     assert played["event"]["public"]["card"]["definition_ref"].startswith("Liora")
 
     passed = store.pass_priority(
         game_id=game_id,
         seat_token=liora_token,
-        expected_revision=4,
+        expected_revision=6,
     )
     assert passed["view"]["turn"]["priority_seat"] == "jeff"
     with pytest.raises(GameTableError, match="Card action is not permitted"):
         store.act(
             game_id=game_id,
             seat_token=jeff_token,
-            expected_revision=5,
+            expected_revision=7,
             action={"type": "tap", "card_id": card_id},
         )
 

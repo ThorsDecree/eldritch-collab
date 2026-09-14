@@ -266,6 +266,8 @@ class GameTableStore:
                 "display_name": seat["display_name"],
                 "life": profile.starting_life,
                 "conceded": False,
+                "mulligan_count": 0,
+                "opening_hand_kept": False,
                 "deck_loaded": False,
                 "zones": {zone: [] for zone in profile.zones},
             }
@@ -313,7 +315,7 @@ class GameTableStore:
                 "token privately to its intended seat; they are never included in public views "
                 "or readable MCP audit receipts."
             ),
-            "next_step": "Each seat must call game.load_deck with its own token before game.start.",
+            "next_step": "Each seat must load a deck, then game.start deals opening hands for private evaluation.",
             "event": self._filtered_event(event, None),
         }
 
@@ -403,19 +405,11 @@ class GameTableStore:
                     "opening_hand": [self._private_card(state, card_id) for card_id in drawn]
                 }
             active = active_seats[0]
-            state["status"] = "active"
-            state["turn"] = {
-                "number": 1,
-                "active_seat": active,
-                "step": profile.turn_steps[0],
-                "priority_seat": active,
-                "consecutive_passes": 0,
-            }
+            state["status"] = "opening_hands"
+            state["turn"] = None
             return (
                 {
-                    "message": "The game began; each library was server-shuffled and opening hands were drawn.",
-                    "active_seat": active,
-                    "step": profile.turn_steps[0],
+                    "message": "Opening hands were dealt; each seat must keep or mulligan before play begins.",
                     "shuffle_commitments": dict(state["shuffle_commitments"]),
                 },
                 private,
@@ -428,6 +422,32 @@ class GameTableStore:
             kind="game_started",
             mutation=mutate,
         )
+
+    def mulligan(self, *, game_id: str, seat_token: str, expected_revision: int, reason: str | None = None) -> dict[str, object]:
+        if reason is not None:
+            _require_nonblank(reason, "reason", max_length=160)
+        def mutate(state: dict[str, Any], actor: str) -> tuple[dict[str, object], dict[str, object]]:
+            if state["status"] != "opening_hands": raise GameTableError("Mulligans are only permitted while opening hands are being resolved")
+            seat = state["seats"][actor]; hand = list(seat["zones"]["hand"]); library = seat["zones"]["library"]
+            for cid in hand: state["cards"][cid]["zone"] = "library"
+            library.extend(hand); seat["zones"]["hand"] = []
+            secrets.SystemRandom().shuffle(library); nonce = secrets.token_bytes(32)
+            state["shuffle_nonces"][actor] = nonce.hex(); state["shuffle_commitments"][actor] = _sha256(nonce + _json({"game_id": state["game_id"], "seat_id": actor, "order": library}).encode("utf-8"))
+            seat["mulligan_count"] += 1; seat["opening_hand_kept"] = False
+            drawn = self._draw_cards(state, actor, min(self._profile_for_state(state).opening_hand_size, len(library)))
+            return ({"message": f"{seat['display_name']} took a mulligan.", "seat_id": actor, "shuffle_commitment": state["shuffle_commitments"][actor]}, {actor: {"opening_hand": [self._private_card(state, c) for c in drawn], "mulligan_count": seat["mulligan_count"], "reason": reason}})
+        return self._mutate(game_id=game_id, seat_token=seat_token, expected_revision=expected_revision, kind="opening_hand_mulliganed", mutation=mutate)
+
+    def keep_opening_hand(self, *, game_id: str, seat_token: str, expected_revision: int) -> dict[str, object]:
+        def mutate(state: dict[str, Any], actor: str) -> tuple[dict[str, object], dict[str, object]]:
+            if state["status"] != "opening_hands": raise GameTableError("Opening hands are not being resolved")
+            state["seats"][actor]["opening_hand_kept"] = True
+            if all(state["seats"][s]["opening_hand_kept"] or state["seats"][s]["conceded"] for s in state["seat_order"]):
+                active = next(s for s in state["seat_order"] if not state["seats"][s]["conceded"]); p = self._profile_for_state(state)
+                state["status"] = "active"; state["turn"] = {"number": 1, "active_seat": active, "step": p.turn_steps[0], "priority_seat": active, "consecutive_passes": 0}
+                return ({"message": "All seats kept opening hands; the game is active.", "active_seat": active, "step": p.turn_steps[0]}, {})
+            return ({"message": f"{state['seats'][actor]['display_name']} kept an opening hand.", "seat_id": actor}, {})
+        return self._mutate(game_id=game_id, seat_token=seat_token, expected_revision=expected_revision, kind="opening_hand_kept", mutation=mutate)
 
     def view(self, *, game_id: str, seat_token: str | None = None) -> dict[str, object]:
         with self._lock, self._connect() as connection:
@@ -904,6 +924,7 @@ class GameTableStore:
                     "display_name": seat["display_name"],
                     "life": seat["life"],
                     "conceded": seat["conceded"],
+                    "mulligan_count": seat.get("mulligan_count", 0),
                     "zone_counts": {zone: len(cards) for zone, cards in zones.items()},
                     "battlefield": [self._public_card(state, card_id) for card_id in zones.get("battlefield", [])],
                     "graveyard": [self._public_card(state, card_id) for card_id in zones.get("graveyard", [])],

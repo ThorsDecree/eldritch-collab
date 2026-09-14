@@ -1013,6 +1013,16 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 request_id=request_id,
             )
 
+        @server.tool(name="game.mulligan", title="Mulligan a private opening hand", annotations=LOCAL_WRITE_ANNOTATIONS)
+        def game_mulligan(game_id: str, seat_token: str, expected_revision: int, reason: str | None = None) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            return guarded("game.mulligan", {"game_id": game_id, "seat_token": seat_token, "expected_revision": expected_revision, "reason": reason}, lambda: {"request_id": request_id, **gametable.mulligan(game_id=game_id, seat_token=seat_token, expected_revision=expected_revision, reason=reason)}, request_id=request_id)
+
+        @server.tool(name="game.keep", title="Keep a private opening hand", annotations=LOCAL_WRITE_ANNOTATIONS)
+        def game_keep(game_id: str, seat_token: str, expected_revision: int) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            return guarded("game.keep", {"game_id": game_id, "seat_token": seat_token, "expected_revision": expected_revision}, lambda: {"request_id": request_id, **gametable.keep_opening_hand(game_id=game_id, seat_token=seat_token, expected_revision=expected_revision)}, request_id=request_id)
+
         @server.tool(
             name="game.view",
             title="View a GameTable",
