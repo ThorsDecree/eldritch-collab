@@ -445,7 +445,8 @@ class GameTableStore:
             if all(state["seats"][s]["opening_hand_kept"] or state["seats"][s]["conceded"] for s in state["seat_order"]):
                 active = next(s for s in state["seat_order"] if not state["seats"][s]["conceded"]); p = self._profile_for_state(state)
                 state["status"] = "active"; state["turn"] = {"number": 1, "active_seat": active, "step": p.turn_steps[0], "priority_seat": active, "consecutive_passes": 0}
-                return ({"message": "All seats kept opening hands; the game is active.", "active_seat": active, "step": p.turn_steps[0]}, {})
+                automatic_public, automatic_private = self._resolve_turn_based_step(state)
+                return ({"message": "All seats kept opening hands; the game is active.", "active_seat": active, "step": state["turn"]["step"], "automatic": automatic_public}, automatic_private)
             return ({"message": f"{state['seats'][actor]['display_name']} kept an opening hand.", "seat_id": actor}, {})
         return self._mutate(game_id=game_id, seat_token=seat_token, expected_revision=expected_revision, kind="opening_hand_kept", mutation=mutate)
 
@@ -505,6 +506,7 @@ class GameTableStore:
         seat_token: str,
         expected_revision: int,
         action: object,
+        response_view: str = "public",
     ) -> dict[str, object]:
         if not isinstance(action, dict):
             raise GameTableError("action must be an object")
@@ -526,6 +528,7 @@ class GameTableStore:
                 card_id = self._action_card_id(action)
                 card = self._controlled_card(state, actor_seat, card_id, allowed_zones={"hand"})
                 self._move_card(state, card, "battlefield")
+                self._apply_initial_state(card, action.get("initial_state"))
                 self._reset_priority(state, actor_seat)
                 return (
                     {
@@ -623,10 +626,11 @@ class GameTableStore:
             expected_revision=expected_revision,
             kind=f"action.{action_type}",
             mutation=mutate,
+            response_view=response_view,
         )
 
     def pass_priority(
-        self, *, game_id: str, seat_token: str, expected_revision: int
+        self, *, game_id: str, seat_token: str, expected_revision: int, response_view: str = "public"
     ) -> dict[str, object]:
         def mutate(state: dict[str, Any], actor_seat: str) -> tuple[dict[str, object], dict[str, object]]:
             self._require_active_priority(state, actor_seat)
@@ -636,13 +640,14 @@ class GameTableStore:
                 1 for seat_id in state["seat_order"] if not state["seats"][seat_id]["conceded"]
             )
             if turn["consecutive_passes"] >= active_seat_count:
-                self._advance_step(state)
+                automatic_public, automatic_private = self._advance_step(state)
                 return (
                     {
                         "message": "All remaining seats passed priority; GameTable advanced the turn step.",
                         "turn": dict(state["turn"]),
+                        "automatic": automatic_public,
                     },
-                    {},
+                    automatic_private,
                 )
             turn["priority_seat"] = self._next_active_seat(state, actor_seat)
             return (
@@ -660,6 +665,117 @@ class GameTableStore:
             expected_revision=expected_revision,
             kind="priority_passed",
             mutation=mutate,
+            response_view=response_view,
+        )
+
+    def propose_shortcut(
+        self,
+        *,
+        game_id: str,
+        seat_token: str,
+        expected_revision: int,
+        target: object,
+        response_view: str = "public",
+    ) -> dict[str, object]:
+        def mutate(state: dict[str, Any], actor_seat: str) -> tuple[dict[str, object], dict[str, object]]:
+            self._require_active_priority(state, actor_seat)
+            if state.get("shortcut") is not None:
+                raise GameTableError("A shortcut proposal is already awaiting responses")
+            normalized_target = self._normalize_shortcut_target(state, target)
+            state["shortcut"] = {
+                "proposal_id": f"shortcut_{uuid.uuid4().hex}",
+                "proposed_by": actor_seat,
+                "target": normalized_target,
+                "accepted_by": [actor_seat],
+            }
+            return (
+                {
+                    "message": f"{state['seats'][actor_seat]['display_name']} proposed a shortcut.",
+                    "shortcut": self._public_shortcut(state["shortcut"]),
+                },
+                {},
+            )
+
+        return self._mutate(
+            game_id=game_id,
+            seat_token=seat_token,
+            expected_revision=expected_revision,
+            kind="shortcut_proposed",
+            mutation=mutate,
+            response_view=response_view,
+        )
+
+    def respond_shortcut(
+        self,
+        *,
+        game_id: str,
+        seat_token: str,
+        expected_revision: int,
+        proposal_id: str,
+        accept: bool,
+        response_view: str = "public",
+    ) -> dict[str, object]:
+        proposal_id = _require_nonblank(proposal_id, "proposal_id", max_length=128)
+        if not isinstance(accept, bool):
+            raise GameTableError("accept must be a boolean")
+
+        def mutate(state: dict[str, Any], actor_seat: str) -> tuple[dict[str, object], dict[str, object]]:
+            self._require_active_seat(state, actor_seat)
+            shortcut = state.get("shortcut")
+            if not isinstance(shortcut, dict) or shortcut.get("proposal_id") != proposal_id:
+                raise GameTableError("Shortcut proposal is unavailable")
+            accepted_by = shortcut.get("accepted_by")
+            if not isinstance(accepted_by, list):
+                raise GameTableError("Shortcut proposal is inconsistent")
+            if actor_seat in accepted_by:
+                raise GameTableError("This seat has already responded to the shortcut")
+            if not accept:
+                del state["shortcut"]
+                return (
+                    {
+                        "message": f"{state['seats'][actor_seat]['display_name']} declined a shortcut.",
+                        "proposal_id": proposal_id,
+                        "status": "declined",
+                    },
+                    {},
+                )
+            accepted_by.append(actor_seat)
+            remaining = [
+                seat_id for seat_id in state["seat_order"]
+                if not state["seats"][seat_id]["conceded"] and seat_id not in accepted_by
+            ]
+            if remaining:
+                return (
+                    {
+                        "message": f"{state['seats'][actor_seat]['display_name']} accepted a shortcut.",
+                        "shortcut": self._public_shortcut(shortcut),
+                        "awaiting_seats": remaining,
+                    },
+                    {},
+                )
+            target_state = dict(shortcut["target"])
+            del state["shortcut"]
+            automatic_public, automatic_private, skipped = self._advance_to_shortcut_target(state, target_state)
+            return (
+                {
+                    "message": "Every active seat accepted the shortcut; GameTable advanced the agreed turn flow.",
+                    "proposal_id": proposal_id,
+                    "status": "completed",
+                    "target": target_state,
+                    "skipped": skipped,
+                    "turn": dict(state["turn"]),
+                    "automatic": automatic_public,
+                },
+                automatic_private,
+            )
+
+        return self._mutate(
+            game_id=game_id,
+            seat_token=seat_token,
+            expected_revision=expected_revision,
+            kind="shortcut_responded",
+            mutation=mutate,
+            response_view=response_view,
         )
 
     def concede(
@@ -764,9 +880,12 @@ class GameTableStore:
         expected_revision: int,
         kind: str,
         mutation: Any,
+        response_view: str = "public",
     ) -> dict[str, object]:
         if not isinstance(expected_revision, int) or isinstance(expected_revision, bool) or expected_revision < 0:
             raise GameTableError("expected_revision must be a zero-or-positive integer")
+        if response_view not in {"public", "seat"}:
+            raise GameTableError("response_view must be 'public' or 'seat'")
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             state = self._load_state(connection, game_id)
@@ -797,7 +916,7 @@ class GameTableStore:
             "game_id": game_id,
             "revision": state["revision"],
             "event": self._filtered_event(event, actor_seat),
-            "view": self._view_for(state, actor_seat),
+            "view": self._view_for(state, actor_seat if response_view == "seat" else None),
         }
 
     @staticmethod
@@ -951,6 +1070,9 @@ class GameTableStore:
                 "server_operator": "outside this view boundary; can inspect local game state",
             },
         }
+        shortcut = state.get("shortcut")
+        if isinstance(shortcut, dict):
+            result["shortcut"] = self._public_shortcut(shortcut)
         if viewer_seat:
             own = state["seats"][viewer_seat]
             result["private"] = {
@@ -1032,13 +1154,57 @@ class GameTableStore:
             card["damage"] = 0
 
     @staticmethod
+    def _apply_initial_state(card: dict[str, Any], value: object) -> None:
+        if value is None:
+            return
+        if not isinstance(value, dict):
+            raise GameTableError("action.initial_state must be an object")
+        unknown = set(value) - {"tapped", "counters", "damage", "status_tags"}
+        if unknown:
+            raise GameTableError("action.initial_state contains unsupported fields")
+        if "tapped" in value:
+            if not isinstance(value["tapped"], bool):
+                raise GameTableError("action.initial_state.tapped must be a boolean")
+            card["tapped"] = value["tapped"]
+        if "damage" in value:
+            damage = value["damage"]
+            if not isinstance(damage, int) or isinstance(damage, bool) or not 0 <= damage <= 10000:
+                raise GameTableError("action.initial_state.damage must be an integer from 0 to 10000")
+            card["damage"] = damage
+        if "counters" in value:
+            counters = value["counters"]
+            if not isinstance(counters, dict) or any(
+                not isinstance(name, str) or not name.strip() or len(name.strip()) > 64
+                or not isinstance(count, int) or isinstance(count, bool) or count < 0 or count > 1000
+                for name, count in counters.items()
+            ):
+                raise GameTableError("action.initial_state.counters must map nonblank names to integers from 0 to 1000")
+            card["counters"] = {name.strip(): count for name, count in counters.items() if count}
+        if "status_tags" in value:
+            tags = value["status_tags"]
+            if not isinstance(tags, list) or len(tags) > 32 or any(
+                not isinstance(tag, str) or not tag.strip() or len(tag.strip()) > 64 for tag in tags
+            ):
+                raise GameTableError("action.initial_state.status_tags must be a list of up to 32 nonblank strings")
+            card["status_tags"] = list(dict.fromkeys(tag.strip() for tag in tags))
+
+    @staticmethod
     def _require_active_priority(state: dict[str, Any], actor_seat: str) -> None:
         if state.get("status") != "active" or not isinstance(state.get("turn"), dict):
             raise GameTableError("Game is not active")
         if state["seats"][actor_seat]["conceded"]:
             raise GameTableError("Conceded seats cannot act")
+        if state.get("shortcut") is not None:
+            raise GameTableError("A shortcut proposal is awaiting responses")
         if state["turn"]["priority_seat"] != actor_seat:
             raise GameTableError("It is not this seat's priority")
+
+    @staticmethod
+    def _require_active_seat(state: dict[str, Any], actor_seat: str) -> None:
+        if state.get("status") != "active" or not isinstance(state.get("turn"), dict):
+            raise GameTableError("Game is not active")
+        if state["seats"][actor_seat]["conceded"]:
+            raise GameTableError("Conceded seats cannot act")
 
     @staticmethod
     def _reset_priority(state: dict[str, Any], actor_seat: str) -> None:
@@ -1058,7 +1224,7 @@ class GameTableStore:
                 return candidate
         raise GameTableError("No active seats remain")
 
-    def _advance_step(self, state: dict[str, Any]) -> None:
+    def _advance_step(self, state: dict[str, Any]) -> tuple[dict[str, object], dict[str, object]]:
         profile = self._profile_for_state(state)
         turn = state["turn"]
         step_index = profile.turn_steps.index(turn["step"])
@@ -1068,5 +1234,78 @@ class GameTableStore:
             turn["step"] = profile.turn_steps[0]
         else:
             turn["step"] = profile.turn_steps[step_index + 1]
+        return self._resolve_turn_based_step(state)
+
+    def _resolve_turn_based_step(self, state: dict[str, Any]) -> tuple[dict[str, object], dict[str, object]]:
+        """Run profile-owned turn actions before creating the next priority window."""
+        turn = state["turn"]
+        profile = self._profile_for_state(state)
+        automatic: list[dict[str, object]] = []
+        private: dict[str, object] = {}
+        if profile.profile_id == "magic.commander.v0.1" and turn["step"] == "untap":
+            active = turn["active_seat"]
+            untapped = 0
+            for card_id in state["seats"][active]["zones"].get("battlefield", []):
+                card = state["cards"][card_id]
+                if card["tapped"] and "skip_untap" not in card.get("status_tags", []):
+                    card["tapped"] = False
+                    untapped += 1
+            automatic.append({"type": "untap", "seat_id": active, "untapped_count": untapped})
+            turn["step"] = profile.turn_steps[profile.turn_steps.index("untap") + 1]
+        if profile.profile_id == "magic.commander.v0.1" and turn["step"] == "draw":
+            active = turn["active_seat"]
+            drawn = self._draw_cards(state, active, 1)
+            automatic.append({"type": "draw", "seat_id": active, "count": len(drawn)})
+            private[active] = {"drawn_cards": [self._private_card(state, card_id) for card_id in drawn]}
         turn["priority_seat"] = turn["active_seat"]
         turn["consecutive_passes"] = 0
+        return {"actions": automatic}, private
+
+    def _normalize_shortcut_target(self, state: dict[str, Any], value: object) -> dict[str, object]:
+        if not isinstance(value, dict):
+            raise GameTableError("shortcut target must be an object")
+        if set(value) != {"turn_number", "step"}:
+            raise GameTableError("shortcut target must contain exactly turn_number and step")
+        turn_number = value.get("turn_number")
+        if not isinstance(turn_number, int) or isinstance(turn_number, bool):
+            raise GameTableError("shortcut target.turn_number must be an integer")
+        step = _require_nonblank(value.get("step"), "shortcut target.step", max_length=64)
+        turn = state["turn"]
+        profile = self._profile_for_state(state)
+        if step not in profile.turn_steps:
+            raise GameTableError("shortcut target.step is not part of this game profile")
+        if profile.profile_id == "magic.commander.v0.1" and step == "untap":
+            raise GameTableError("Magic shortcut targets cannot be untap because no priority window exists there")
+        current_number = turn["number"]
+        current_index = profile.turn_steps.index(turn["step"])
+        target_index = profile.turn_steps.index(step)
+        if turn_number == current_number and target_index <= current_index:
+            raise GameTableError("shortcut target must be later than the current turn step")
+        if turn_number not in {current_number, current_number + 1}:
+            raise GameTableError("shortcut targets may be in the current or next turn only")
+        return {"turn_number": turn_number, "step": step}
+
+    @staticmethod
+    def _public_shortcut(shortcut: dict[str, Any]) -> dict[str, object]:
+        return {
+            "proposal_id": shortcut["proposal_id"],
+            "proposed_by": shortcut["proposed_by"],
+            "target": dict(shortcut["target"]),
+            "accepted_by": list(shortcut["accepted_by"]),
+        }
+
+    def _advance_to_shortcut_target(
+        self, state: dict[str, Any], target: dict[str, object]
+    ) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]]]:
+        automatic: list[dict[str, object]] = []
+        private: dict[str, object] = {}
+        skipped: list[dict[str, object]] = []
+        while True:
+            public, private_delta = self._advance_step(state)
+            actions = public.get("actions")
+            if isinstance(actions, list):
+                automatic.extend(actions)
+            private.update(private_delta)
+            skipped.append({"turn_number": state["turn"]["number"], "step": state["turn"]["step"]})
+            if state["turn"]["number"] == target["turn_number"] and state["turn"]["step"] == target["step"]:
+                return {"actions": automatic}, private, skipped

@@ -161,3 +161,85 @@ def test_game_profiles_are_explicitly_rules_light(tmp_path) -> None:
     assert commander["starting_life"] == 40
     assert commander["opening_hand_size"] == 7
     assert "no card oracle" in commander["rules_enforcement"]
+
+
+def test_turn_based_actions_and_mutation_projection_keep_private_hands_private(tmp_path) -> None:
+    store = GameTableStore(tmp_path / "games", "test-deployment")
+    created = _create(store)
+    game_id = str(created["game_id"])
+    tokens = created["seat_tokens"]
+    assert isinstance(tokens, dict)
+    liora_token = str(tokens["liora"])
+    jeff_token = str(tokens["jeff"])
+    store.load_deck(game_id=game_id, seat_token=liora_token, expected_revision=0, deck=_deck("Liora"))
+    store.load_deck(game_id=game_id, seat_token=jeff_token, expected_revision=1, deck=_deck("Jeff"))
+    store.start_game(game_id=game_id, seat_token=liora_token, expected_revision=2)
+    store.keep_opening_hand(game_id=game_id, seat_token=liora_token, expected_revision=3)
+    activated = store.keep_opening_hand(game_id=game_id, seat_token=jeff_token, expected_revision=4)
+    assert activated["view"]["viewer"] == {"kind": "public"}
+    assert activated["view"]["turn"]["step"] == "upkeep"
+    assert "Liora private card" not in json.dumps(activated)
+
+    store.pass_priority(game_id=game_id, seat_token=liora_token, expected_revision=5)
+    drawn = store.pass_priority(game_id=game_id, seat_token=jeff_token, expected_revision=6)
+    assert drawn["view"]["turn"]["step"] == "draw"
+    assert drawn["event"]["public"]["automatic"] == {
+        "actions": [{"type": "draw", "seat_id": "liora", "count": 1}]
+    }
+    assert "Liora private card" not in json.dumps(drawn)
+    assert len(store.view(game_id=game_id, seat_token=liora_token)["private"]["hand"]) == 8
+
+
+def test_consented_shortcut_and_initial_play_state(tmp_path) -> None:
+    store = GameTableStore(tmp_path / "games", "test-deployment")
+    created = _create(store)
+    game_id = str(created["game_id"])
+    tokens = created["seat_tokens"]
+    assert isinstance(tokens, dict)
+    liora_token = str(tokens["liora"])
+    jeff_token = str(tokens["jeff"])
+    store.load_deck(game_id=game_id, seat_token=liora_token, expected_revision=0, deck=_deck("Liora"))
+    store.load_deck(game_id=game_id, seat_token=jeff_token, expected_revision=1, deck=_deck("Jeff"))
+    store.start_game(game_id=game_id, seat_token=liora_token, expected_revision=2)
+    store.keep_opening_hand(game_id=game_id, seat_token=liora_token, expected_revision=3)
+    store.keep_opening_hand(game_id=game_id, seat_token=jeff_token, expected_revision=4)
+
+    hand = store.view(game_id=game_id, seat_token=liora_token)["private"]["hand"]
+    card_id = hand[0]["instance_id"]
+    played = store.act(
+        game_id=game_id,
+        seat_token=liora_token,
+        expected_revision=5,
+        action={
+            "type": "play",
+            "card_id": card_id,
+            "initial_state": {"tapped": True, "counters": {"charge": 2}, "status_tags": ["skip_untap"]},
+        },
+    )
+    public_card = played["event"]["public"]["card"]
+    assert public_card["tapped"] is True
+    assert public_card["counters"] == {"charge": 2}
+
+    proposed = store.propose_shortcut(
+        game_id=game_id,
+        seat_token=liora_token,
+        expected_revision=6,
+        target={"turn_number": 1, "step": "precombat_main"},
+    )
+    proposal_id = proposed["event"]["public"]["shortcut"]["proposal_id"]
+    completed = store.respond_shortcut(
+        game_id=game_id,
+        seat_token=jeff_token,
+        expected_revision=7,
+        proposal_id=proposal_id,
+        accept=True,
+    )
+    assert completed["view"]["turn"]["step"] == "precombat_main"
+    assert completed["event"]["public"]["status"] == "completed"
+    assert completed["event"]["public"]["automatic"] == {
+        "actions": [{"type": "draw", "seat_id": "liora", "count": 1}]
+    }
+    assert completed["view"]["viewer"] == {"kind": "public"}
+    private_hand = store.view(game_id=game_id, seat_token=liora_token)["private"]["hand"]
+    completed_json = json.dumps(completed)
+    assert all(card["definition_ref"] not in completed_json for card in private_hand)
