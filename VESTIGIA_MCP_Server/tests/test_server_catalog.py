@@ -50,10 +50,14 @@ GAME_TOOLS = {
     "game.create",
     "game.load_deck",
     "game.start",
+    "game.mulligan",
+    "game.keep",
     "game.view",
     "game.events",
     "game.act",
     "game.pass_priority",
+    "game.shortcut_propose",
+    "game.shortcut_respond",
     "game.concede",
 }
 
@@ -345,7 +349,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             status_result = await client.call_tool("vestigia.status", {})
             assert status_result.is_error is False
             assert status_result.structured_content is not None
-            assert status_result.structured_content["server"]["version"] == "0.6.0.dev0"
+            assert status_result.structured_content["server"]["version"] == "0.7.0.dev0"
             assert status_result.structured_content["policy"]["capability_count"] == 33
             assert status_result.structured_content["runtime"]["configured"] is False
             assert status_result.structured_content["archive"]["promotion_configured"] is True

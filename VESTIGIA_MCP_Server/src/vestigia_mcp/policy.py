@@ -214,6 +214,18 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Pass GameTable priority with revision binding and advance the profile turn step after all pass.",
     ),
     Capability(
+        "game.shortcut_propose",
+        EffectClass.PREPARE,
+        Decision.ALLOW,
+        "Propose one explicit current-or-next-turn GameTable shortcut for unanimous active-seat consent.",
+    ),
+    Capability(
+        "game.shortcut_respond",
+        EffectClass.PREPARE,
+        Decision.ALLOW,
+        "Accept or decline a pending GameTable shortcut; unanimous acceptance executes one compact state transition.",
+    ),
+    Capability(
         "game.concede",
         EffectClass.PREPARE,
         Decision.ALLOW,

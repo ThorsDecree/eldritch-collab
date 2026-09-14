@@ -74,6 +74,13 @@ Every mutation requires the exact `expected_revision`. A stale caller is rejecte
 silently overwriting a newer table state. Events are append-only-ish records with a public hash
 chain; private event payloads are stored separately and filtered at read time.
 
+Mutation authorization and response projection are deliberately separate. A successful mutation
+returns a **public** table view by default, plus only the actor's explicitly addressed private
+event delta (for example, the cards that actor just drew). Callers can request
+`response_view="seat"` when they actually need their own full hand projection. Possessing a seat
+token therefore never makes it appropriate for a public/referee thread to receive that seat's
+whole hand as an incidental mutation result.
+
 The first `game.act` supports bounded table bookkeeping only:
 
 - `draw`
@@ -86,12 +93,29 @@ The first `game.act` supports bounded table bookkeeping only:
 
 Only the current priority seat may act or pass. After an action, that seat retains priority;
 when every non-conceded seat passes, GameTable advances the configured step and resets priority to
-the active seat. `game.concede` preserves the event record rather than deleting state.
+the active seat. The Commander profile has no priority window during untap: it performs its
+generic tagged untap, enters upkeep, and later draws one private card automatically on entering
+the draw step. `skip_untap` is an explicit table-state tag; card-specific exceptions remain
+player adjudication.
+
+`game.shortcut_propose` and `game.shortcut_respond` make routine speed explicit rather than
+heuristic. The priority holder proposes one exact target step in the current or next turn. Every
+non-conceded seat accepts or any seat declines; only unanimous acceptance advances there in a
+single compact event, including any generic automatic untap/draw actions. While a proposal is
+awaiting responses, ordinary priority actions pause. This records consent without claiming that an
+empty board proves nobody has a response.
+
+`play` accepts an optional `initial_state` with `tapped`, `counters`, `damage`, and `status_tags`.
+It records the state the table agrees a permanent entered with, without pretending to evaluate
+Oracle text or replacement effects.
 
 ## Next increments
 
-1. Replace development tokens with Keyring-backed caller/seat principals.
-2. Add consensual undo proposals and votes as compensating events.
-3. Add deck commitment/import adapters and a separately licensed card-data integration.
-4. Add game-specific profile packages (including Pokémon) without changing the generic reducer.
-5. Add an explicit replay export/stage path and optional visual tabletop client.
+1. Add standing yields and narrowly scoped shortcut presets without making absence of visible board
+   state into consent.
+2. Add London bottom-card selection and a profile-declared mulligan-cost policy.
+3. Replace development tokens with Keyring-backed caller/seat principals.
+4. Add consensual undo proposals and votes as compensating events.
+5. Add deck commitment/import adapters and a separately licensed card-data integration.
+6. Add game-specific profile packages (including Pokémon) without changing the generic reducer.
+7. Add an explicit replay export/stage path and optional visual tabletop client.

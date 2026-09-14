@@ -37,6 +37,8 @@ def test_gametable_keeps_views_and_local_turn_state_distinct() -> None:
     assert engine.require_allowed("game.create").effect is EffectClass.PREPARE
     assert engine.require_allowed("game.load_deck").effect is EffectClass.PREPARE
     assert engine.require_allowed("game.act").effect is EffectClass.PREPARE
+    assert engine.require_allowed("game.shortcut_propose").effect is EffectClass.PREPARE
+    assert engine.require_allowed("game.shortcut_respond").effect is EffectClass.PREPARE
 
 
 def test_confirm_or_deny_is_not_treated_as_allow() -> None:

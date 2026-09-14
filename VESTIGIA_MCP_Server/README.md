@@ -22,7 +22,7 @@ The native MCP capability vocabulary is deliberately split into three effect cla
 - **PREPARE** - create a draft, staged action, crop, queue item, or other reversible working state.
 - **ACT** - cause an externally consequential or canonical mutation.
 
-Version `0.6.0.dev0` adds an opt-in GameTable reference module: an event-sourced, seat-filtered
+Version `0.7.0.dev0` adds an opt-in GameTable reference module: an event-sourced, seat-filtered
 tabletop state engine with a rules-light Magic/Commander profile. It demonstrates that MCP can
 broker bounded shared state without becoming either a generic desktop controller or a second
 continuity runtime. Canonical Archive promotion remains independently staged and prefix-granted.
@@ -151,10 +151,14 @@ Tools:
 - `game.create`
 - `game.load_deck`
 - `game.start`
+- `game.mulligan`
+- `game.keep`
 - `game.view`
 - `game.events`
 - `game.act`
 - `game.pass_priority`
+- `game.shortcut_propose`
+- `game.shortcut_respond`
 - `game.concede`
 
 GameTable's state is an SQLite materialized view plus an event chain. `game.create` returns one
@@ -165,7 +169,11 @@ hand. Public events say, for example, “Jeff drew a card”; card details are a
 Jeff's event/view projection. Library order is never returned through ordinary views.
 
 The first profile deliberately checks only table flow and control bounds: revision matching,
-current priority, seat ownership/control, supported zones, counters, damage, life, and passes. It
+current priority, seat ownership/control, supported zones, counters, damage, life, passes, and
+explicitly consented shortcuts. Commander’s generic untap happens without a priority window and
+its normal draw happens privately on entering the draw step. Mutations return public state by
+default plus only the actor-addressed private event delta; `response_view="seat"` is explicit.
+It
 does **not** validate deck legality, ship card data, execute card text, resolve targets/triggers,
 or claim to enforce Magic's comprehensive rules. Players remain the rules authority.
 

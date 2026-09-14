@@ -1093,6 +1093,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             seat_token: str,
             expected_revision: int,
             action: dict[str, Any],
+            response_view: str = "public",
         ) -> dict[str, object]:
             request_id = f"mcp_req_{uuid.uuid4()}"
             arguments = {
@@ -1100,6 +1101,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 "seat_token": seat_token,
                 "expected_revision": expected_revision,
                 "action": action,
+                "response_view": response_view,
             }
             return guarded(
                 "game.act",
@@ -1111,6 +1113,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                         seat_token=seat_token,
                         expected_revision=expected_revision,
                         action=action,
+                        response_view=response_view,
                     ),
                 },
                 request_id=request_id,
@@ -1130,12 +1133,14 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             game_id: str,
             seat_token: str,
             expected_revision: int,
+            response_view: str = "public",
         ) -> dict[str, object]:
             request_id = f"mcp_req_{uuid.uuid4()}"
             arguments = {
                 "game_id": game_id,
                 "seat_token": seat_token,
                 "expected_revision": expected_revision,
+                "response_view": response_view,
             }
             return guarded(
                 "game.pass_priority",
@@ -1146,8 +1151,61 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                         game_id=game_id,
                         seat_token=seat_token,
                         expected_revision=expected_revision,
+                        response_view=response_view,
                     ),
                 },
+                request_id=request_id,
+            )
+
+        @server.tool(
+            name="game.shortcut_propose",
+            title="Propose a consented GameTable shortcut",
+            description=(
+                "As the current priority seat, propose an exact future turn/step target in the "
+                "current or next turn. Every active seat must explicitly accept before GameTable "
+                "advances there in one compact event; no heuristic skip is performed."
+            ),
+            annotations=LOCAL_WRITE_ANNOTATIONS,
+        )
+        def game_shortcut_propose(
+            game_id: str,
+            seat_token: str,
+            expected_revision: int,
+            target: dict[str, Any],
+            response_view: str = "public",
+        ) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            arguments = {"game_id": game_id, "seat_token": seat_token, "expected_revision": expected_revision, "target": target, "response_view": response_view}
+            return guarded(
+                "game.shortcut_propose",
+                arguments,
+                lambda: {"request_id": request_id, **gametable.propose_shortcut(game_id=game_id, seat_token=seat_token, expected_revision=expected_revision, target=target, response_view=response_view)},
+                request_id=request_id,
+            )
+
+        @server.tool(
+            name="game.shortcut_respond",
+            title="Accept or decline a GameTable shortcut",
+            description=(
+                "Accept or decline one public shortcut proposal with an exact revision. A decline "
+                "cancels it; unanimous active-seat consent executes the stated shortcut."
+            ),
+            annotations=LOCAL_WRITE_ANNOTATIONS,
+        )
+        def game_shortcut_respond(
+            game_id: str,
+            seat_token: str,
+            expected_revision: int,
+            proposal_id: str,
+            accept: bool,
+            response_view: str = "public",
+        ) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            arguments = {"game_id": game_id, "seat_token": seat_token, "expected_revision": expected_revision, "proposal_id": proposal_id, "accept": accept, "response_view": response_view}
+            return guarded(
+                "game.shortcut_respond",
+                arguments,
+                lambda: {"request_id": request_id, **gametable.respond_shortcut(game_id=game_id, seat_token=seat_token, expected_revision=expected_revision, proposal_id=proposal_id, accept=accept, response_view=response_view)},
                 request_id=request_id,
             )
 
