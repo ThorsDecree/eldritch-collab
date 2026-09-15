@@ -90,6 +90,7 @@ The first `game.act` supports bounded table bookkeeping only:
 - `counter`
 - `damage`
 - `life` (the acting seat's total)
+- `tap_bundle` (one atomic, caller-adjudicated payment/tap record)
 
 Only the current priority seat may act or pass. After an action, that seat retains priority;
 when every non-conceded seat passes, GameTable advances the configured step and resets priority to
@@ -109,13 +110,59 @@ empty board proves nobody has a response.
 It records the state the table agrees a permanent entered with, without pretending to evaluate
 Oracle text or replacement effects.
 
+### Standing yields
+
+`game.yield` is the explicit fast path for routine empty windows. A seat records one bounded
+scope: `{"kind":"step"}` yields to the next priority-bearing step, `{"kind":"turn"}` yields
+to the next turn's first priority-bearing step, and `{"kind":"target","turn_number":N,"step":"..."}`
+chooses an exact current/next-turn endpoint. Each active seat must record a yield. The reducer
+advances once, in one compact event, to the earliest endpoint requested by any seat; a longer
+yield can never carry a more cautious seat past its consent. Automatic profile work (including a
+turn draw) is included in the event while addressed private cards remain private. Any normal
+action, state repair/effect operation, shortcut, concession, or state-changing pass clears pending
+yields so they cannot become stale consent. Pending effects remain a hard blocker, and no heuristic
+absence-of-response inference is performed.
+
+## Pending effects, hidden zones, and repair
+
+`game.effect_declare` gives a spell, activated ability, triggered ability, or manual effect a
+first-class pending record: opaque label/targets, controller, optional source, originating
+revision, and lifecycle state. It does not parse or validate card text. Once every active seat
+passes, GameTable **does not advance the turn**: the top pending effect becomes `resolving` and
+its controller receives priority to record its adjudicated outcome.
+
+`game.effect_resolve` accepts an atomic bounded list of state operations. It can be used with
+`complete=false` for an intermediate batch—such as shuffle then reveal—while the effect remains
+resolving. A later completing call closes it as `resolved`, `countered`, or `fizzled` and returns
+priority to the active seat. Supported operations are:
+
+- `move`, including effect-driven movement into an owner’s private hand or library;
+- `shuffle`, using server RNG and publishing a fresh commitment rather than library order;
+- `reveal_top`, publicly or only to the owning seat, without moving the cards;
+- `random_int`, publicly or privately, with a bounded server-generated receipt.
+
+Private-zone moves deliberately return only a minimal public statement; the destination card is
+delivered only in the receiving seat’s private event details. A public reveal makes exactly the
+revealed card(s) public, never neighbouring library order. These are table-state primitives, not
+an assertion that GameTable knows why an effect made them legal.
+
+`game.repair_state` is the separate, visibly labeled recovery lane for an already human-adjudicated
+state mismatch. It is revision-bound, requires a reason, cannot run while an effect is pending,
+and can only repair cards/libraries owned or controlled by the token holder. It supports the same
+safe moves/shuffle plus `set_state` for a controlled battlefield card. This is an explicit local
+referee trust boundary, not a hidden direct-write bypass. Any zone change clears generic transient
+state (tapped, counters, damage, and status tags), so counters cannot become ghost state after a
+card changes zones.
+
 ## Next increments
 
-1. Add standing yields and narrowly scoped shortcut presets without making absence of visible board
-   state into consent.
+1. Add narrowly scoped shortcut presets and a seat-local “decision needed?” routing predicate so a
+   shared table never needs to receive a private hand merely to decide whether to route a player to
+   a private chair.
 2. Add London bottom-card selection and a profile-declared mulligan-cost policy.
-3. Replace development tokens with Keyring-backed caller/seat principals.
-4. Add consensual undo proposals and votes as compensating events.
+3. Add consensual undo proposals and votes as compensating events.
+4. Replace development tokens with Keyring-backed caller/seat principals.
 5. Add deck commitment/import adapters and a separately licensed card-data integration.
 6. Add game-specific profile packages (including Pokémon) without changing the generic reducer.
-7. Add an explicit replay export/stage path and optional visual tabletop client.
+7. Add an explicit replay/export checkpoint path and optional visual tabletop client.
+8. Add table telemetry receipts for latency/consent debugging without exposing hidden zones.

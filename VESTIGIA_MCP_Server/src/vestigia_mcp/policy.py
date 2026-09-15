@@ -214,6 +214,12 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Pass GameTable priority with revision binding and advance the profile turn step after all pass.",
     ),
     Capability(
+        "game.yield",
+        EffectClass.PREPARE,
+        Decision.ALLOW,
+        "Record a bounded standing GameTable yield; all active seats must consent before the earliest target is advanced.",
+    ),
+    Capability(
         "game.shortcut_propose",
         EffectClass.PREPARE,
         Decision.ALLOW,
