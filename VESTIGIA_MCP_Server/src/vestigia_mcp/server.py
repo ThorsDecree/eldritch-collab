@@ -1082,7 +1082,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             title="Apply a GameTable action",
             description=(
                 "Apply one revision-bound action as the current priority seat. Supported action "
-                "types are draw, play, move, tap, untap, counter, damage, and life. The GameTable "
+                "types are draw, play, move, tap, untap, tap_bundle, counter, damage, and life. The GameTable "
                 "checks zone/control/turn bounds but does not adjudicate card text or the full "
                 "rules of Magic."
             ),
@@ -1120,6 +1120,89 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             )
 
         @server.tool(
+            name="game.effect_declare",
+            title="Declare a pending GameTable effect",
+            description=(
+                "Declare a revision-bound spell, activated ability, triggered ability, or manual "
+                "effect without asking GameTable to adjudicate card text. Passing around a pending "
+                "effect makes it ready for its controller to resolve through explicit table-state operations."
+            ),
+            annotations=LOCAL_WRITE_ANNOTATIONS,
+        )
+        def game_effect_declare(
+            game_id: str,
+            seat_token: str,
+            expected_revision: int,
+            effect: dict[str, Any],
+            response_view: str = "public",
+        ) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            arguments = {"game_id": game_id, "seat_token": seat_token, "expected_revision": expected_revision, "effect": effect, "response_view": response_view}
+            return guarded(
+                "game.effect_declare",
+                arguments,
+                lambda: {"request_id": request_id, **gametable.declare_effect(game_id=game_id, seat_token=seat_token, expected_revision=expected_revision, effect=effect, response_view=response_view)},
+                request_id=request_id,
+            )
+
+        @server.tool(
+            name="game.effect_resolve",
+            title="Resolve a pending GameTable effect",
+            description=(
+                "Resolve the ready top effect with atomic, rules-light operations: effect-driven moves, "
+                "private-zone movement, shuffles, privacy-scoped top-card reveals, and bounded random choices. "
+                "Set complete=false to record an intermediate batch (for example, reveal then choose); the "
+                "controller keeps priority until a later completing call supplies the adjudicated outcome."
+            ),
+            annotations=LOCAL_WRITE_ANNOTATIONS,
+        )
+        def game_effect_resolve(
+            game_id: str,
+            seat_token: str,
+            expected_revision: int,
+            effect_id: str,
+            operations: list[dict[str, Any]],
+            outcome: str = "resolved",
+            complete: bool = True,
+            response_view: str = "public",
+        ) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            arguments = {"game_id": game_id, "seat_token": seat_token, "expected_revision": expected_revision, "effect_id": effect_id, "operations": operations, "outcome": outcome, "complete": complete, "response_view": response_view}
+            return guarded(
+                "game.effect_resolve",
+                arguments,
+                lambda: {"request_id": request_id, **gametable.resolve_effect(game_id=game_id, seat_token=seat_token, expected_revision=expected_revision, effect_id=effect_id, operations=operations, outcome=outcome, complete=complete, response_view=response_view)},
+                request_id=request_id,
+            )
+
+        @server.tool(
+            name="game.repair_state",
+            title="Record an explicit GameTable state repair",
+            description=(
+                "Record an atomic, revision-bound correction to cards or a library owned/controlled by the "
+                "token holder after human adjudication. This is a local referee trust boundary, not rules validation; "
+                "it is visibly labeled in the event chain and never returns an incidental full hand."
+            ),
+            annotations=LOCAL_WRITE_ANNOTATIONS,
+        )
+        def game_repair_state(
+            game_id: str,
+            seat_token: str,
+            expected_revision: int,
+            operations: list[dict[str, Any]],
+            reason: str,
+            response_view: str = "public",
+        ) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            arguments = {"game_id": game_id, "seat_token": seat_token, "expected_revision": expected_revision, "operations": operations, "reason": reason, "response_view": response_view}
+            return guarded(
+                "game.repair_state",
+                arguments,
+                lambda: {"request_id": request_id, **gametable.repair_state(game_id=game_id, seat_token=seat_token, expected_revision=expected_revision, operations=operations, reason=reason, response_view=response_view)},
+                request_id=request_id,
+            )
+
+        @server.tool(
             name="game.pass_priority",
             title="Pass GameTable priority",
             description=(
@@ -1151,6 +1234,48 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                         game_id=game_id,
                         seat_token=seat_token,
                         expected_revision=expected_revision,
+                        response_view=response_view,
+                    ),
+                },
+                request_id=request_id,
+            )
+
+        @server.tool(
+            name="game.yield",
+            title="Record a standing GameTable yield",
+            description=(
+                "Record a bounded standing yield as the current priority seat. Use scope kind="
+                "step or turn for the next safe window, or kind=target with an explicit current/next-turn "
+                "turn_number and step. All active seats must yield before the table advances to the earliest "
+                "agreed target; pending effects and shortcuts remain explicit blockers."
+            ),
+            annotations=LOCAL_WRITE_ANNOTATIONS,
+        )
+        def game_yield(
+            game_id: str,
+            seat_token: str,
+            expected_revision: int,
+            scope: dict[str, Any],
+            response_view: str = "public",
+        ) -> dict[str, object]:
+            request_id = f"mcp_req_{uuid.uuid4()}"
+            arguments = {
+                "game_id": game_id,
+                "seat_token": seat_token,
+                "expected_revision": expected_revision,
+                "scope": scope,
+                "response_view": response_view,
+            }
+            return guarded(
+                "game.yield",
+                arguments,
+                lambda: {
+                    "request_id": request_id,
+                    **gametable.yield_priority(
+                        game_id=game_id,
+                        seat_token=seat_token,
+                        expected_revision=expected_revision,
+                        scope=scope,
                         response_view=response_view,
                     ),
                 },
@@ -1728,6 +1853,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                             "game.events",
                             "game.act",
                             "game.pass_priority",
+                            "game.yield",
                             "game.concede",
                         ]
                         if gametable is not None

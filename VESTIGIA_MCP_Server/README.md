@@ -22,10 +22,11 @@ The native MCP capability vocabulary is deliberately split into three effect cla
 - **PREPARE** - create a draft, staged action, crop, queue item, or other reversible working state.
 - **ACT** - cause an externally consequential or canonical mutation.
 
-Version `0.7.0.dev0` adds an opt-in GameTable reference module: an event-sourced, seat-filtered
-tabletop state engine with a rules-light Magic/Commander profile. It demonstrates that MCP can
-broker bounded shared state without becoming either a generic desktop controller or a second
-continuity runtime. Canonical Archive promotion remains independently staged and prefix-granted.
+Version `0.9.0.dev0` expands the opt-in GameTable reference module with pending effects,
+seat-filtered hidden-zone operations, bounded randomness receipts, state repair, atomic
+tap bundles, and consented standing yields. It remains an event-sourced, rules-light Magic/Commander table engine: MCP brokers
+bounded shared state without becoming either a generic desktop controller or a second continuity
+runtime. Canonical Archive promotion remains independently staged and prefix-granted.
 
 Sensory tools advertise read-only/non-destructive/non-open-world annotations. Staging and
 Runtime workspace writes advertise local non-open-world mutation; `archive.promote` and
@@ -157,6 +158,7 @@ Tools:
 - `game.events`
 - `game.act`
 - `game.pass_priority`
+- `game.yield`
 - `game.shortcut_propose`
 - `game.shortcut_respond`
 - `game.concede`
@@ -169,13 +171,21 @@ hand. Public events say, for example, “Jeff drew a card”; card details are a
 Jeff's event/view projection. Library order is never returned through ordinary views.
 
 The first profile deliberately checks only table flow and control bounds: revision matching,
-current priority, seat ownership/control, supported zones, counters, damage, life, passes, and
-explicitly consented shortcuts. Commander’s generic untap happens without a priority window and
+current priority, seat ownership/control, supported zones, counters, damage, life, passes,
+standing yields, and explicitly consented shortcuts. Commander’s generic untap happens without a priority window and
 its normal draw happens privately on entering the draw step. Mutations return public state by
 default plus only the actor-addressed private event delta; `response_view="seat"` is explicit.
 It
 does **not** validate deck legality, ship card data, execute card text, resolve targets/triggers,
 or claim to enforce Magic's comprehensive rules. Players remain the rules authority.
+
+Standing yields provide the ergonomic fast path for routine empty windows without heuristic
+automation. `game.yield` accepts `{"kind":"step"}`, `{"kind":"turn"}`, or an explicit
+`{"kind":"target","turn_number":N,"step":"..."}` scope. Each active seat must record a
+yield; the reducer advances only to the earliest target any seat requested, preserving consent.
+The resulting event is compact and includes automatic profile actions (such as the private turn
+draw) without exposing hidden cards. A normal action, shortcut, concession, or state-changing
+priority pass clears outstanding yields, and pending effects remain a hard blocker.
 
 Development seat tokens are bearer credentials, not a completed multi-principal Keyring. They are
 stored only as SHA-256 verifiers and are absent from readable MCP audit receipts, but they do not

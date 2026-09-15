@@ -55,7 +55,11 @@ GAME_TOOLS = {
     "game.view",
     "game.events",
     "game.act",
+    "game.effect_declare",
+    "game.effect_resolve",
+    "game.repair_state",
     "game.pass_priority",
+    "game.yield",
     "game.shortcut_propose",
     "game.shortcut_respond",
     "game.concede",
@@ -349,7 +353,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             status_result = await client.call_tool("vestigia.status", {})
             assert status_result.is_error is False
             assert status_result.structured_content is not None
-            assert status_result.structured_content["server"]["version"] == "0.7.0.dev0"
+            assert status_result.structured_content["server"]["version"] == "0.9.0.dev0"
             assert status_result.structured_content["policy"]["capability_count"] == 33
             assert status_result.structured_content["runtime"]["configured"] is False
             assert status_result.structured_content["archive"]["promotion_configured"] is True
@@ -421,6 +425,9 @@ def test_wire_gametable_keeps_opponent_cards_out_of_a_seat_projection(
             assert tools["game.view"].annotations.read_only_hint is True
             assert tools["game.create"].annotations is not None
             assert tools["game.create"].annotations.read_only_hint is False
+            for name in {"game.effect_declare", "game.effect_resolve", "game.repair_state", "game.yield"}:
+                assert tools[name].annotations is not None
+                assert tools[name].annotations.read_only_hint is False
 
             profiles_result = await client.call_tool("game.profiles", {})
             assert profiles_result.is_error is False

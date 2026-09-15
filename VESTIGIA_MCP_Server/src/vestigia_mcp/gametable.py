@@ -256,6 +256,9 @@ class GameTableStore:
             "turn": None,
             "shuffle_commitments": {},
             "shuffle_nonces": {},
+            "pending_effects": [],
+            "random_receipts": {},
+            "yields": {},
         }
         raw_tokens: dict[str, str] = {}
         for seat in normalized_seats:
@@ -514,6 +517,7 @@ class GameTableStore:
 
         def mutate(state: dict[str, Any], actor_seat: str) -> tuple[dict[str, object], dict[str, object]]:
             self._require_active_priority(state, actor_seat)
+            self._clear_yields(state)
             if action_type == "draw":
                 count = action.get("count", 1)
                 if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 20:
@@ -562,6 +566,26 @@ class GameTableStore:
                     {
                         "message": f"{state['seats'][actor_seat]['display_name']} {action_type}ped a card.",
                         "card": self._public_card(state, card_id),
+                    },
+                    {},
+                )
+            if action_type == "tap_bundle":
+                card_ids = action.get("card_ids")
+                if not isinstance(card_ids, list) or not card_ids or len(card_ids) > 32:
+                    raise GameTableError("tap_bundle card_ids must be a list of 1 to 32 card IDs")
+                if len(set(card_ids)) != len(card_ids) or any(not isinstance(card_id, str) for card_id in card_ids):
+                    raise GameTableError("tap_bundle card_ids must be unique strings")
+                cards = [
+                    self._controlled_card(state, actor_seat, card_id, allowed_zones={"battlefield"})
+                    for card_id in card_ids
+                ]
+                for card in cards:
+                    card["tapped"] = True
+                self._reset_priority(state, actor_seat)
+                return (
+                    {
+                        "message": f"{state['seats'][actor_seat]['display_name']} recorded an atomic tap bundle.",
+                        "cards": [self._public_card(state, card_id) for card_id in card_ids],
                     },
                     {},
                 )
@@ -617,7 +641,7 @@ class GameTableStore:
                     {},
                 )
             raise GameTableError(
-                "Unsupported action.type. Supported actions are draw, play, move, tap, untap, counter, damage, and life."
+                "Unsupported action.type. Supported actions are draw, play, move, tap, untap, tap_bundle, counter, damage, and life."
             )
 
         return self._mutate(
@@ -640,6 +664,23 @@ class GameTableStore:
                 1 for seat_id in state["seat_order"] if not state["seats"][seat_id]["conceded"]
             )
             if turn["consecutive_passes"] >= active_seat_count:
+                pending = self._top_pending_effect(state)
+                if pending is not None:
+                    if pending["state"] != "pending":
+                        raise GameTableError("The pending effect must be resolved before priority can advance")
+                    pending["state"] = "resolving"
+                    pending["ready_revision"] = state["revision"] + 1
+                    turn["priority_seat"] = pending["controller_seat"]
+                    turn["consecutive_passes"] = 0
+                    return (
+                        {
+                            "message": "All remaining seats passed; the top pending effect is ready to resolve.",
+                            "effect": self._public_effect(state, pending),
+                            "turn": dict(turn),
+                        },
+                        {},
+                    )
+                self._clear_yields(state)
                 automatic_public, automatic_private = self._advance_step(state)
                 return (
                     {
@@ -668,6 +709,246 @@ class GameTableStore:
             response_view=response_view,
         )
 
+    def yield_priority(
+        self,
+        *,
+        game_id: str,
+        seat_token: str,
+        expected_revision: int,
+        scope: object,
+        response_view: str = "public",
+    ) -> dict[str, object]:
+        """Record a standing yield and advance only after every seat consents.
+
+        Yields are deliberately bounded to an explicit current/next-turn target. The
+        reducer composes multiple requests to the earliest target so a seat can never
+        be carried past a window it did not consent to skip.
+        """
+
+        def mutate(state: dict[str, Any], actor_seat: str) -> tuple[dict[str, object], dict[str, object]]:
+            self._require_active_priority(state, actor_seat)
+            if self._top_pending_effect(state) is not None:
+                raise GameTableError("Pending effects must be resolved before recording a standing yield")
+            normalized_scope, target = self._normalize_yield_scope(state, scope)
+            yields = state.setdefault("yields", {})
+            if not isinstance(yields, dict):
+                raise GameTableError("GameTable standing-yield state is unreadable")
+            record = {
+                "yield_id": f"yield_{uuid.uuid4().hex}",
+                "seat_id": actor_seat,
+                "scope": normalized_scope,
+                "target": target,
+                "originating_revision": state["revision"],
+            }
+            yields[actor_seat] = record
+            active_seats = [
+                seat_id for seat_id in state["seat_order"]
+                if not state["seats"][seat_id]["conceded"]
+            ]
+            awaiting = [seat_id for seat_id in active_seats if seat_id not in yields]
+            if awaiting:
+                state["turn"]["priority_seat"] = self._next_active_seat(state, actor_seat)
+                state["turn"]["consecutive_passes"] = 0
+                return (
+                    {
+                        "message": "Standing yield recorded; awaiting the remaining active seats.",
+                        "status": "pending",
+                        "yield": self._public_yield(record),
+                        "awaiting_seats": awaiting,
+                    },
+                    {},
+                )
+
+            target_state = min(
+                (dict(yields[seat_id]["target"]) for seat_id in active_seats),
+                key=lambda item: self._yield_target_position(state, item),
+            )
+            self._clear_yields(state)
+            automatic_public, automatic_private, skipped = self._advance_to_shortcut_target(state, target_state)
+            return (
+                {
+                    "message": "Every active seat recorded a standing yield; GameTable advanced the earliest agreed turn flow.",
+                    "status": "completed",
+                    "target": target_state,
+                    "skipped": skipped,
+                    "turn": dict(state["turn"]),
+                    "automatic": automatic_public,
+                },
+                automatic_private,
+            )
+
+        return self._mutate(
+            game_id=game_id,
+            seat_token=seat_token,
+            expected_revision=expected_revision,
+            kind="standing_yield_recorded",
+            mutation=mutate,
+            response_view=response_view,
+        )
+
+    def declare_effect(
+        self,
+        *,
+        game_id: str,
+        seat_token: str,
+        expected_revision: int,
+        effect: object,
+        response_view: str = "public",
+    ) -> dict[str, object]:
+        normalized = self._normalize_effect(effect)
+
+        def mutate(state: dict[str, Any], actor_seat: str) -> tuple[dict[str, object], dict[str, object]]:
+            self._require_active_priority(state, actor_seat)
+            self._clear_yields(state)
+            top = self._top_pending_effect(state)
+            if top is not None and top["state"] == "resolving":
+                raise GameTableError("The resolving effect must finish before another effect can be declared")
+            source_card_id = normalized.get("source_card_id")
+            if source_card_id is not None:
+                card = state["cards"].get(source_card_id)
+                if not isinstance(card, dict) or card.get("controller_seat") != actor_seat:
+                    raise GameTableError("Effect source card is not controlled by this seat")
+            pending = {
+                "effect_id": f"effect_{uuid.uuid4().hex}",
+                "kind": normalized["kind"],
+                "label": normalized["label"],
+                "controller_seat": actor_seat,
+                "source_card_id": source_card_id,
+                "targets": list(normalized["targets"]),
+                "state": "pending",
+                "originating_revision": state["revision"],
+                "declared_at": _now(),
+            }
+            state.setdefault("pending_effects", []).append(pending)
+            self._reset_priority(state, actor_seat)
+            return (
+                {
+                    "message": f"{state['seats'][actor_seat]['display_name']} declared a pending effect.",
+                    "effect": self._public_effect(state, pending),
+                },
+                {},
+            )
+
+        return self._mutate(
+            game_id=game_id,
+            seat_token=seat_token,
+            expected_revision=expected_revision,
+            kind="effect_declared",
+            mutation=mutate,
+            response_view=response_view,
+        )
+
+    def resolve_effect(
+        self,
+        *,
+        game_id: str,
+        seat_token: str,
+        expected_revision: int,
+        effect_id: str,
+        operations: object,
+        outcome: str = "resolved",
+        complete: bool = True,
+        response_view: str = "public",
+    ) -> dict[str, object]:
+        effect_id = _require_nonblank(effect_id, "effect_id", max_length=128)
+        if outcome not in {"resolved", "countered", "fizzled"}:
+            raise GameTableError("effect outcome must be resolved, countered, or fizzled")
+        if not isinstance(complete, bool):
+            raise GameTableError("effect complete must be a boolean")
+        if not complete and outcome != "resolved":
+            raise GameTableError("An incomplete effect operation batch cannot set an outcome")
+
+        def mutate(state: dict[str, Any], actor_seat: str) -> tuple[dict[str, object], dict[str, object]]:
+            self._require_active_seat(state, actor_seat)
+            self._clear_yields(state)
+            turn = state.get("turn")
+            if not isinstance(turn, dict) or turn.get("priority_seat") != actor_seat:
+                raise GameTableError("It is not this seat's priority")
+            pending = self._top_pending_effect(state)
+            if (
+                pending is None
+                or pending.get("effect_id") != effect_id
+                or pending.get("state") != "resolving"
+            ):
+                raise GameTableError("This effect is not ready to resolve")
+            if pending.get("controller_seat") != actor_seat:
+                raise GameTableError("Only the effect controller may record its resolution")
+            public_operations, private = self._apply_effect_operations(
+                state, actor_seat, operations, repair=False
+            )
+            if not complete:
+                self._reset_priority(state, actor_seat)
+                return (
+                    {
+                        "message": "Effect operations were recorded; the pending effect remains resolving.",
+                        "effect": self._public_effect(state, pending),
+                        "operations": public_operations,
+                        "turn": dict(state["turn"]),
+                    },
+                    private,
+                )
+            pending["state"] = outcome
+            completed = self._public_effect(state, pending)
+            state["pending_effects"].pop()
+            self._reset_priority(state, state["turn"]["active_seat"])
+            return (
+                {
+                    "message": "The pending effect was resolved by recorded table-state operations.",
+                    "effect": completed,
+                    "outcome": outcome,
+                    "operations": public_operations,
+                    "turn": dict(state["turn"]),
+                },
+                private,
+            )
+
+        return self._mutate(
+            game_id=game_id,
+            seat_token=seat_token,
+            expected_revision=expected_revision,
+            kind="effect_resolved" if complete else "effect_operations_recorded",
+            mutation=mutate,
+            response_view=response_view,
+        )
+
+    def repair_state(
+        self,
+        *,
+        game_id: str,
+        seat_token: str,
+        expected_revision: int,
+        operations: object,
+        reason: str,
+        response_view: str = "public",
+    ) -> dict[str, object]:
+        reason = _require_nonblank(reason, "reason", max_length=240)
+
+        def mutate(state: dict[str, Any], actor_seat: str) -> tuple[dict[str, object], dict[str, object]]:
+            self._require_active_seat(state, actor_seat)
+            self._clear_yields(state)
+            if self._top_pending_effect(state) is not None:
+                raise GameTableError("Pending effects must be resolved before recording a state repair")
+            public_operations, private = self._apply_effect_operations(
+                state, actor_seat, operations, repair=True
+            )
+            return (
+                {
+                    "message": "A referee/state repair was recorded.",
+                    "reason": reason,
+                    "operations": public_operations,
+                },
+                private,
+            )
+
+        return self._mutate(
+            game_id=game_id,
+            seat_token=seat_token,
+            expected_revision=expected_revision,
+            kind="state_repaired",
+            mutation=mutate,
+            response_view=response_view,
+        )
+
     def propose_shortcut(
         self,
         *,
@@ -679,6 +960,8 @@ class GameTableStore:
     ) -> dict[str, object]:
         def mutate(state: dict[str, Any], actor_seat: str) -> tuple[dict[str, object], dict[str, object]]:
             self._require_active_priority(state, actor_seat)
+            if state.get("yields"):
+                raise GameTableError("Standing yields are awaiting completion")
             if state.get("shortcut") is not None:
                 raise GameTableError("A shortcut proposal is already awaiting responses")
             normalized_target = self._normalize_shortcut_target(state, target)
@@ -721,6 +1004,7 @@ class GameTableStore:
 
         def mutate(state: dict[str, Any], actor_seat: str) -> tuple[dict[str, object], dict[str, object]]:
             self._require_active_seat(state, actor_seat)
+            self._clear_yields(state)
             shortcut = state.get("shortcut")
             if not isinstance(shortcut, dict) or shortcut.get("proposal_id") != proposal_id:
                 raise GameTableError("Shortcut proposal is unavailable")
@@ -784,6 +1068,7 @@ class GameTableStore:
         def mutate(state: dict[str, Any], actor_seat: str) -> tuple[dict[str, object], dict[str, object]]:
             if state["status"] not in {"lobby", "active"}:
                 raise GameTableError("Only an open game can be conceded")
+            self._clear_yields(state)
             state["seats"][actor_seat]["conceded"] = True
             remaining = [
                 seat_id for seat_id in state["seat_order"] if not state["seats"][seat_id]["conceded"]
@@ -930,6 +1215,18 @@ class GameTableStore:
             raise GameTableError("GameTable state is unreadable") from exc
         if not isinstance(state, dict) or state.get("schema_version") != GAME_SCHEMA_VERSION:
             raise GameTableError("GameTable state schema is unsupported")
+        if "pending_effects" not in state:
+            state["pending_effects"] = []
+        if not isinstance(state["pending_effects"], list):
+            raise GameTableError("GameTable pending-effect state is unreadable")
+        if "random_receipts" not in state:
+            state["random_receipts"] = {}
+        if not isinstance(state["random_receipts"], dict):
+            raise GameTableError("GameTable randomness state is unreadable")
+        if "yields" not in state:
+            state["yields"] = {}
+        if not isinstance(state["yields"], dict):
+            raise GameTableError("GameTable standing-yield state is unreadable")
         return state
 
     @staticmethod
@@ -1073,6 +1370,20 @@ class GameTableStore:
         shortcut = state.get("shortcut")
         if isinstance(shortcut, dict):
             result["shortcut"] = self._public_shortcut(shortcut)
+        pending = state.get("pending_effects")
+        if isinstance(pending, list) and pending:
+            result["pending_effects"] = [
+                self._public_effect(state, effect)
+                for effect in pending
+                if isinstance(effect, dict)
+            ]
+        yields = state.get("yields")
+        if isinstance(yields, dict) and yields:
+            result["yields"] = [
+                self._public_yield(record)
+                for record in yields.values()
+                if isinstance(record, dict)
+            ]
         if viewer_seat:
             own = state["seats"][viewer_seat]
             result["private"] = {
@@ -1149,9 +1460,13 @@ class GameTableStore:
         previous.remove(card["instance_id"])
         state["seats"][owner]["zones"][destination].append(card["instance_id"])
         card["zone"] = destination
-        if destination != "battlefield":
-            card["tapped"] = False
-            card["damage"] = 0
+        # A new zone is a new game object for the table's generic state.  Card
+        # text can rebuild a state through the caller-supplied initial state,
+        # but counters, damage, tags, and tapped state must not become ghosts.
+        card["tapped"] = False
+        card["counters"] = {}
+        card["damage"] = 0
+        card["status_tags"] = []
 
     @staticmethod
     def _apply_initial_state(card: dict[str, Any], value: object) -> None:
@@ -1189,6 +1504,221 @@ class GameTableStore:
             card["status_tags"] = list(dict.fromkeys(tag.strip() for tag in tags))
 
     @staticmethod
+    def _normalize_effect(value: object) -> dict[str, object]:
+        if not isinstance(value, dict):
+            raise GameTableError("effect must be an object")
+        unknown = set(value) - {"kind", "label", "source_card_id", "targets"}
+        if unknown:
+            raise GameTableError("effect contains unsupported fields")
+        kind = _require_nonblank(value.get("kind"), "effect.kind", max_length=64)
+        if kind not in {"spell", "activated_ability", "triggered_ability", "manual_effect"}:
+            raise GameTableError("effect.kind must be spell, activated_ability, triggered_ability, or manual_effect")
+        label = _require_nonblank(value.get("label", kind), "effect.label", max_length=240)
+        source_card_id = value.get("source_card_id")
+        if source_card_id is not None:
+            source_card_id = _require_nonblank(source_card_id, "effect.source_card_id", max_length=128)
+        targets = value.get("targets", [])
+        if not isinstance(targets, list) or len(targets) > 20:
+            raise GameTableError("effect.targets must be a list of at most 20 opaque references")
+        normalized_targets = [
+            _require_nonblank(target, "effect target", max_length=256) for target in targets
+        ]
+        return {
+            "kind": kind,
+            "label": label,
+            "source_card_id": source_card_id,
+            "targets": normalized_targets,
+        }
+
+    @staticmethod
+    def _top_pending_effect(state: dict[str, Any]) -> dict[str, Any] | None:
+        pending = state.get("pending_effects")
+        if pending is None:
+            return None
+        if not isinstance(pending, list) or any(not isinstance(effect, dict) for effect in pending):
+            raise GameTableError("GameTable pending-effect state is unreadable")
+        return pending[-1] if pending else None
+
+    def _public_effect(self, state: dict[str, Any], effect: dict[str, Any]) -> dict[str, object]:
+        visible: dict[str, object] = {
+            "effect_id": str(effect["effect_id"]),
+            "kind": str(effect["kind"]),
+            "label": str(effect["label"]),
+            "controller_seat": str(effect["controller_seat"]),
+            "state": str(effect["state"]),
+            "originating_revision": int(effect["originating_revision"]),
+        }
+        source_card_id = effect.get("source_card_id")
+        source = state["cards"].get(source_card_id) if isinstance(source_card_id, str) else None
+        if isinstance(source, dict) and source.get("zone") not in {"hand", "library"}:
+            visible["source_card"] = self._public_card(state, source_card_id)
+        return visible
+
+    def _apply_effect_operations(
+        self,
+        state: dict[str, Any],
+        actor_seat: str,
+        operations: object,
+        *,
+        repair: bool,
+    ) -> tuple[list[dict[str, object]], dict[str, object]]:
+        if not isinstance(operations, list) or len(operations) > 50:
+            raise GameTableError("operations must be a list of at most 50 operations")
+        public: list[dict[str, object]] = []
+        private: dict[str, object] = {}
+        profile = self._profile_for_state(state)
+        for raw in operations:
+            if not isinstance(raw, dict):
+                raise GameTableError("Each operation must be an object")
+            operation_type = _require_nonblank(raw.get("type"), "operation.type", max_length=64)
+            if operation_type == "move":
+                if set(raw) - {"type", "card_id", "destination", "initial_state"}:
+                    raise GameTableError("move operation contains unsupported fields")
+                card_id = self._action_card_id(raw)
+                destination = _require_nonblank(raw.get("destination"), "operation.destination", max_length=64)
+                if destination not in profile.zones:
+                    raise GameTableError("move destination is not part of this game profile")
+                card = state["cards"].get(card_id)
+                if not isinstance(card, dict) or card.get("zone") not in profile.zones:
+                    raise GameTableError("move operation card is unavailable")
+                if repair and actor_seat not in {card.get("owner_seat"), card.get("controller_seat")}:
+                    raise GameTableError("State repair can only move a card owned or controlled by this seat")
+                self._move_card(state, card, destination)
+                if destination == "battlefield":
+                    self._apply_initial_state(card, raw.get("initial_state"))
+                    public.append({"type": "move", "card": self._public_card(state, card_id)})
+                elif destination in {"hand", "library"}:
+                    owner = str(card["owner_seat"])
+                    private.setdefault(owner, {}).setdefault("moved_cards", []).append(
+                        self._private_card(state, card_id)
+                    )
+                    public.append(
+                        {
+                            "type": "move_to_private_zone",
+                            "owner_seat": owner,
+                            "destination": "private",
+                        }
+                    )
+                else:
+                    public.append({"type": "move", "card": self._public_card(state, card_id)})
+                continue
+            if operation_type == "shuffle":
+                if set(raw) != {"type", "seat_id"}:
+                    raise GameTableError("shuffle operation must contain exactly type and seat_id")
+                seat_id = _require_nonblank(raw.get("seat_id"), "operation.seat_id", max_length=32)
+                if seat_id not in state["seats"]:
+                    raise GameTableError("shuffle operation seat is unavailable")
+                if repair and seat_id != actor_seat:
+                    raise GameTableError("State repair can only shuffle this seat's library")
+                commitment = self._shuffle_library(state, seat_id)
+                public.append({"type": "shuffle", "seat_id": seat_id, "shuffle_commitment": commitment})
+                continue
+            if operation_type == "reveal_top":
+                if repair or set(raw) - {"type", "seat_id", "count", "visibility"}:
+                    raise GameTableError("reveal_top is only available while resolving an effect")
+                seat_id = _require_nonblank(raw.get("seat_id"), "operation.seat_id", max_length=32)
+                if seat_id not in state["seats"]:
+                    raise GameTableError("reveal_top operation seat is unavailable")
+                count = raw.get("count", 1)
+                if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 20:
+                    raise GameTableError("reveal_top count must be an integer from 1 to 20")
+                visibility = raw.get("visibility", "public")
+                if visibility not in {"public", "seat"}:
+                    raise GameTableError("reveal_top visibility must be public or seat")
+                cards = state["seats"][seat_id]["zones"]["library"][:count]
+                revealed = [self._revealed_card(state, card_id) for card_id in cards]
+                if visibility == "public":
+                    public.append({"type": "reveal_top", "seat_id": seat_id, "cards": revealed})
+                else:
+                    private.setdefault(seat_id, {})["revealed_cards"] = revealed
+                    public.append({"type": "reveal_top", "seat_id": seat_id, "count": len(revealed), "visibility": "seat"})
+                continue
+            if operation_type == "random_int":
+                if repair or set(raw) - {"type", "minimum", "maximum", "visibility", "seat_id"}:
+                    raise GameTableError("random_int is only available while resolving an effect")
+                minimum = raw.get("minimum")
+                maximum = raw.get("maximum")
+                if (
+                    not isinstance(minimum, int)
+                    or isinstance(minimum, bool)
+                    or not isinstance(maximum, int)
+                    or isinstance(maximum, bool)
+                    or minimum < -1_000_000
+                    or maximum > 1_000_000
+                    or minimum > maximum
+                ):
+                    raise GameTableError("random_int requires integer minimum and maximum within -1000000..1000000")
+                visibility = raw.get("visibility", "public")
+                if visibility not in {"public", "seat"}:
+                    raise GameTableError("random_int visibility must be public or seat")
+                seat_id = raw.get("seat_id", actor_seat)
+                seat_id = _require_nonblank(seat_id, "operation.seat_id", max_length=32)
+                if seat_id not in state["seats"]:
+                    raise GameTableError("random_int operation seat is unavailable")
+                result = minimum + secrets.randbelow(maximum - minimum + 1)
+                random_id = f"random_{uuid.uuid4().hex}"
+                nonce = secrets.token_hex(32)
+                receipt = _sha256(_json({"random_id": random_id, "nonce": nonce, "minimum": minimum, "maximum": maximum, "result": result}))
+                state.setdefault("random_receipts", {})[random_id] = {
+                    "nonce": nonce,
+                    "minimum": minimum,
+                    "maximum": maximum,
+                    "result": result,
+                    "visibility": visibility,
+                    "seat_id": seat_id,
+                    "receipt": receipt,
+                }
+                event = {"type": "random_int", "random_id": random_id, "minimum": minimum, "maximum": maximum, "receipt": receipt}
+                if visibility == "public":
+                    event["result"] = result
+                else:
+                    event["visibility"] = "seat"
+                    private.setdefault(seat_id, {}).setdefault("random_results", []).append({**event, "result": result})
+                public.append(event)
+                continue
+            if operation_type == "set_state":
+                if not repair or set(raw) != {"type", "card_id", "state"}:
+                    raise GameTableError("set_state is only available in a state repair")
+                card_id = self._action_card_id(raw)
+                card = state["cards"].get(card_id)
+                if (
+                    not isinstance(card, dict)
+                    or card.get("zone") != "battlefield"
+                    or actor_seat not in {card.get("owner_seat"), card.get("controller_seat")}
+                ):
+                    raise GameTableError("State repair can only set a controlled battlefield card")
+                self._apply_initial_state(card, raw.get("state"))
+                public.append({"type": "set_state", "card": self._public_card(state, card_id)})
+                continue
+            raise GameTableError("Unsupported operation.type. Supported operations are move, shuffle, reveal_top, random_int, and set_state.")
+        return public, private
+
+    @staticmethod
+    def _revealed_card(state: dict[str, Any], card_id: str) -> dict[str, object]:
+        card = state["cards"][card_id]
+        return {
+            "instance_id": card["instance_id"],
+            "definition_ref": card["definition_ref"],
+            "owner_seat": card["owner_seat"],
+            "zone": card["zone"],
+        }
+
+    @staticmethod
+    def _shuffle_library(state: dict[str, Any], seat_id: str) -> str:
+        library = state["seats"][seat_id]["zones"]["library"]
+        secrets.SystemRandom().shuffle(library)
+        nonce = secrets.token_bytes(32)
+        state["shuffle_nonces"][seat_id] = nonce.hex()
+        commitment = _sha256(
+            nonce
+            + _json(
+                {"game_id": state["game_id"], "seat_id": seat_id, "order": library}
+            ).encode("utf-8")
+        )
+        state["shuffle_commitments"][seat_id] = commitment
+        return commitment
+
+    @staticmethod
     def _require_active_priority(state: dict[str, Any], actor_seat: str) -> None:
         if state.get("status") != "active" or not isinstance(state.get("turn"), dict):
             raise GameTableError("Game is not active")
@@ -1196,8 +1726,30 @@ class GameTableStore:
             raise GameTableError("Conceded seats cannot act")
         if state.get("shortcut") is not None:
             raise GameTableError("A shortcut proposal is awaiting responses")
+        pending = state.get("pending_effects")
+        if isinstance(pending, list) and pending:
+            top = pending[-1]
+            if not isinstance(top, dict):
+                raise GameTableError("GameTable pending-effect state is unreadable")
+            if top.get("state") == "resolving":
+                raise GameTableError("The top pending effect must resolve before another priority action")
         if state["turn"]["priority_seat"] != actor_seat:
             raise GameTableError("It is not this seat's priority")
+
+    @staticmethod
+    def _clear_yields(state: dict[str, Any]) -> None:
+        yields = state.get("yields")
+        if isinstance(yields, dict):
+            yields.clear()
+
+    @staticmethod
+    def _public_yield(record: dict[str, Any]) -> dict[str, object]:
+        return {
+            "yield_id": record["yield_id"],
+            "seat_id": record["seat_id"],
+            "scope": dict(record["scope"]),
+            "target": dict(record["target"]),
+        }
 
     @staticmethod
     def _require_active_seat(state: dict[str, Any], actor_seat: str) -> None:
@@ -1284,6 +1836,53 @@ class GameTableStore:
         if turn_number not in {current_number, current_number + 1}:
             raise GameTableError("shortcut targets may be in the current or next turn only")
         return {"turn_number": turn_number, "step": step}
+
+    def _normalize_yield_scope(
+        self, state: dict[str, Any], value: object
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        if not isinstance(value, dict):
+            raise GameTableError("yield scope must be an object")
+        kind = _require_nonblank(value.get("kind"), "yield scope.kind", max_length=32)
+        profile = self._profile_for_state(state)
+        if kind == "target":
+            if set(value) != {"kind", "turn_number", "step"}:
+                raise GameTableError("target yield scope must contain exactly kind, turn_number, and step")
+            target = self._normalize_shortcut_target(
+                state, {"turn_number": value["turn_number"], "step": value["step"]}
+            )
+            return {"kind": kind, "turn_number": target["turn_number"], "step": target["step"]}, target
+        if set(value) != {"kind"}:
+            raise GameTableError("step and turn yield scopes contain exactly kind")
+        turn = state["turn"]
+        current_index = profile.turn_steps.index(turn["step"])
+        if kind == "step":
+            number = turn["number"]
+            index = current_index + 1
+            if index >= len(profile.turn_steps):
+                number += 1
+                index = 0
+            target = self._priority_target(profile, number, index)
+        elif kind == "turn":
+            target = self._priority_target(profile, turn["number"] + 1, 0)
+        else:
+            raise GameTableError("Unsupported yield scope.kind; use target, step, or turn")
+        return {"kind": kind}, target
+
+    @staticmethod
+    def _priority_target(
+        profile: GameProfile, turn_number: int, index: int
+    ) -> dict[str, object]:
+        if profile.profile_id == "magic.commander.v0.1" and profile.turn_steps[index] == "untap":
+            index += 1
+            if index >= len(profile.turn_steps):
+                turn_number += 1
+                index = 0
+        return {"turn_number": turn_number, "step": profile.turn_steps[index]}
+
+    def _yield_target_position(self, state: dict[str, Any], target: dict[str, object]) -> int:
+        profile = self._profile_for_state(state)
+        turn = state["turn"]
+        return (int(target["turn_number"]) - int(turn["number"])) * len(profile.turn_steps) + profile.turn_steps.index(str(target["step"]))
 
     @staticmethod
     def _public_shortcut(shortcut: dict[str, Any]) -> dict[str, object]:
