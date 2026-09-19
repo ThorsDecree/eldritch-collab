@@ -55,6 +55,7 @@ Tools:
 - `archive.registry_status`
 - `archive.write_capabilities`
 - `archive.stage_text`
+- `archive.stage_porchlight`
 - `archive.stage_directory`
 - `archive.stage_list`
 - `archive.stage_inspect`
@@ -125,6 +126,13 @@ and attempts to roll back newly created empty directories if a later component f
 
 Delete, move, binary/media writes, arbitrary paths, and a direct-write bypass remain excluded.
 See `docs/CANONICAL_ARCHIVE_WRITES.md`.
+
+`archive.stage_porchlight` stages a bounded, readable browser snapshot as a latest body, an
+explicit history copy, and a JSON provenance receipt under the `Porchlight/` prefixes. It keeps
+control metadata separate from the searchable body and supports `selection`, `page`, and `update`
+captures. It does not read a browser or change live bytes; provision the three `Porchlight` parent
+directories first, then inspect and promote the returned stage IDs individually. See
+`docs/PORCHLIGHT.md`.
 
 Resources:
 

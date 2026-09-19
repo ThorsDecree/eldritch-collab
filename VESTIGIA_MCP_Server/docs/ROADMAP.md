@@ -370,6 +370,12 @@ but never let a successful middle-layer call masquerade as proof of external acc
 
 **Goal:** browser/desktop perception with staged interaction before submission.
 
+The Archive-facing Porchlight warm-snapshot contract is now present: a producer can submit bounded
+readable selection/page/update text, keep control metadata in a separate receipt, and stage
+latest/history/receipt artifacts without changing canonical bytes. The normal retrieval prefix is
+`Porchlight/latest`; history and receipts remain explicit provenance shelves. See
+`docs/PORCHLIGHT.md`.
+
 Potential browser/local bridge:
 
 - current page/thread context;
@@ -380,6 +386,10 @@ Potential browser/local bridge:
 - stage reply into a textbox without sending;
 - stage attachments;
 - explicit publish path through Keyring/final-dispatch gates.
+
+The remaining browser work is a Chrome/Chromium extension or native messaging host that produces
+this contract. The server should receive readable snapshots rather than raw HTML or ambient page
+activity.
 
 Capture only context requested by the capability. Do not turn convenience into ambient
 surveillance.
