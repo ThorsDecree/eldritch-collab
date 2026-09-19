@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Iterator, Literal
 
+from ..browse import BrowseCursorError, BrowseSession, BrowseSessionStore
 from ..pagination import (
     CursorError,
     canonical_sha256,
@@ -72,6 +75,20 @@ def _sha256_stream(handle: BinaryIO) -> str:
     return digest.hexdigest()
 
 
+def _utf8_safe_prefix(data: bytes) -> bytes:
+    """Trim only an incomplete final UTF-8 sequence from a raw page."""
+    end = len(data)
+    while end:
+        try:
+            data[:end].decode("utf-8", errors="strict")
+            return data[:end]
+        except UnicodeDecodeError as exc:
+            if exc.reason != "unexpected end of data":
+                raise ArchiveError("Archive text is not valid UTF-8") from exc
+            end = exc.start
+    return b""
+
+
 def _image_mime_from_signature(data: bytes) -> str | None:
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
@@ -107,6 +124,16 @@ class ArchiveMedia:
     sha256: str
     mime_type: str
     data: bytes
+
+
+@dataclass(frozen=True)
+class SnapshotSlice:
+    raw: bytes
+    size: int
+    sha256: str
+    source_revision: str
+    line_start: int | None = None
+    line_end: int | None = None
 
 
 @dataclass(frozen=True)
@@ -324,6 +351,93 @@ class ArchiveSource:
             raise ArchiveError(f"Archive path is not a file: {relative}")
         return resolved
 
+    @contextmanager
+    def _stream_member(self, relative: str) -> Iterator[tuple[BinaryIO, int, str]]:
+        """Open one regular source member without admitting its full content."""
+        if self._is_excluded(relative):
+            raise ArchiveError(f"Archive file is excluded from this source: {relative}")
+        if self.kind == "directory":
+            path = self._resolve_directory_file(relative)
+            stat = path.stat()
+            revision = f"directory:{stat.st_dev}:{stat.st_ino}:{stat.st_mtime_ns}:{stat.st_size}"
+            with path.open("rb") as handle:
+                yield handle, stat.st_size, revision
+            return
+
+        members = dict(self._zip_members())
+        info = members.get(relative)
+        if info is None:
+            raise ArchiveError(f"Archive file not found: {relative}")
+        revision = (
+            f"zip:{info.header_offset}:{info.CRC}:{info.file_size}:"
+            f"{info.date_time!r}"
+        )
+        with zipfile.ZipFile(self.root, "r") as archive:
+            with archive.open(info, "r") as handle:
+                yield handle, info.file_size, revision
+
+    def _snapshot_and_slice(
+        self,
+        relative: str,
+        *,
+        offset: int,
+        page_bytes: int,
+        text: bool,
+    ) -> SnapshotSlice:
+        if offset < 0 or page_bytes <= 0:
+            raise ArchiveError("Page offset and page size must be positive")
+        requested_end = offset + page_bytes
+        digest = hashlib.sha256()
+        page = bytearray()
+        seen = 0
+        lines_before = 0
+
+        with self._stream_member(relative) as (handle, declared_size, revision):
+            while chunk := handle.read(1024 * 1024):
+                chunk_start = seen
+                chunk_end = seen + len(chunk)
+                digest.update(chunk)
+                if chunk_start < offset:
+                    prefix_end = min(len(chunk), offset - chunk_start)
+                    lines_before += chunk[:prefix_end].count(b"\n")
+                overlap_start = max(offset, chunk_start)
+                overlap_end = min(requested_end, chunk_end)
+                if overlap_start < overlap_end:
+                    page.extend(
+                        chunk[overlap_start - chunk_start : overlap_end - chunk_start]
+                    )
+                seen = chunk_end
+
+        if seen != declared_size:
+            raise ArchiveError("Archive file size changed while it was being read")
+        if offset > seen:
+            raise ArchiveError("Cursor offset exceeds the current Archive file")
+
+        raw = bytes(page)
+        if text:
+            raw = _utf8_safe_prefix(raw)
+            if not raw and offset < seen:
+                raise ArchiveError(
+                    "Text page is too small to contain the next UTF-8 character"
+                )
+            try:
+                raw.decode("utf-8", errors="strict")
+            except UnicodeDecodeError as exc:
+                raise ArchiveError(f"Archive text is not valid UTF-8: {relative}") from exc
+            line_start = lines_before + 1
+            line_end = line_start + raw.count(b"\n")
+        else:
+            line_start = None
+            line_end = None
+        return SnapshotSlice(
+            raw=raw,
+            size=seen,
+            sha256=digest.hexdigest(),
+            source_revision=revision,
+            line_start=line_start,
+            line_end=line_end,
+        )
+
     def _read_text_bytes(self, relative: str, max_bytes: int) -> tuple[str, bytes]:
         normalized = normalize_relative_path(relative)
         if PurePosixPath(normalized).suffix.lower() not in TEXT_SUFFIXES:
@@ -365,7 +479,7 @@ class ArchiveSource:
         _, data = self._read_text_bytes(relative, max_bytes)
         return data.decode("utf-8")
 
-    def read_text_page(
+    def _read_text_page_legacy(
         self,
         relative: str,
         max_bytes: int,
@@ -439,6 +553,176 @@ class ArchiveSource:
                 "unit": "utf8_bytes",
                 "byte_start": offset,
                 "byte_end": end,
+            },
+        }
+
+    def read_text_page(
+        self,
+        relative: str,
+        max_bytes: int | None = None,
+        *,
+        page_bytes: int = 64_000,
+        cursor: str | None = None,
+        browse_store: BrowseSessionStore | None = None,
+        policy_scope: str | None = None,
+    ) -> dict[str, object]:
+        """Read either legacy bounded text pages or snapshot-bound browse pages."""
+        if browse_store is None:
+            if max_bytes is None:
+                raise ArchiveError("Legacy text pages require a total byte ceiling")
+            return self._read_text_page_legacy(
+                relative, max_bytes, page_bytes=page_bytes, cursor=cursor
+            )
+        if not policy_scope:
+            raise ArchiveError("Snapshot text pages require an authorization scope")
+        normalized = normalize_relative_path(relative)
+        if PurePosixPath(normalized).suffix.lower() not in TEXT_SUFFIXES:
+            raise ArchiveError(
+                "archive.read_text only exposes configured text-like suffixes"
+            )
+        return self._read_browse_page(
+            kind="archive.read_text",
+            relative=normalized,
+            page_bytes=page_bytes,
+            cursor=cursor,
+            browse_store=browse_store,
+            policy_scope=policy_scope,
+            text=True,
+        )
+
+    def read_bytes_page(
+        self,
+        relative: str,
+        *,
+        page_bytes: int = 48_000,
+        cursor: str | None = None,
+        browse_store: BrowseSessionStore,
+        policy_scope: str,
+    ) -> dict[str, object]:
+        """Read one snapshot-bound base64 page from any regular Archive file."""
+        if not policy_scope:
+            raise ArchiveError("Snapshot byte pages require an authorization scope")
+        return self._read_browse_page(
+            kind="archive.read_bytes",
+            relative=normalize_relative_path(relative),
+            page_bytes=page_bytes,
+            cursor=cursor,
+            browse_store=browse_store,
+            policy_scope=policy_scope,
+            text=False,
+        )
+
+    def _read_browse_page(
+        self,
+        *,
+        kind: str,
+        relative: str,
+        page_bytes: int,
+        cursor: str | None,
+        browse_store: BrowseSessionStore,
+        policy_scope: str,
+        text: bool,
+    ) -> dict[str, object]:
+        if page_bytes <= 0:
+            raise ArchiveError("Page byte budget must be positive")
+        source = self._cursor_source_sha256()
+        offset = 0
+        session = None
+        if cursor is not None:
+            try:
+                claims = browse_store.decode(cursor, kind)
+                session = browse_store.validate_continuation(
+                    claims, policy_scope=policy_scope, page_bytes=page_bytes
+                )
+            except BrowseCursorError as exc:
+                raise ArchiveError(str(exc)) from exc
+            if session.path != relative:
+                raise ArchiveError("Browse cursor path does not match this request")
+            if session.source != source:
+                raise ArchiveError("Browse cursor belongs to a different Archive source")
+            offset = claims["offset"]
+            if not isinstance(offset, int) or isinstance(offset, bool):
+                raise ArchiveError("Browse cursor offset is invalid")
+
+        try:
+            snapshot = self._snapshot_and_slice(
+                relative, offset=offset, page_bytes=page_bytes, text=text
+            )
+        except ArchiveError as exc:
+            if session is not None and str(exc).startswith("Archive file not found:"):
+                return self._file_changed_result(
+                    relative, session, offset, page_bytes, current_content_sha256=None
+                )
+            raise
+        if session is None:
+            session = browse_store.create(
+                kind=kind,
+                source=source,
+                path=relative,
+                policy_scope=policy_scope,
+                page_bytes=page_bytes,
+                snapshot_sha256=snapshot.sha256,
+                size=snapshot.size,
+                source_revision=snapshot.source_revision,
+            )
+        elif (
+            session.snapshot_sha256 != snapshot.sha256
+            or session.size != snapshot.size
+            or session.source_revision != snapshot.source_revision
+        ):
+            return self._file_changed_result(
+                relative, session, offset, page_bytes, current_content_sha256=snapshot.sha256
+            )
+
+        end = offset + len(snapshot.raw)
+        next_cursor = (
+            browse_store.cursor_for(session, offset=end)
+            if end < snapshot.size
+            else None
+        )
+        result: dict[str, object] = {
+            "path": relative,
+            "size": snapshot.size,
+            "byte_start": offset,
+            "byte_end": end,
+            "content_sha256": snapshot.sha256,
+            "snapshot_status": "same_snapshot",
+            "next_cursor": next_cursor,
+            "budget": {
+                "requested_bytes": page_bytes,
+                "returned_bytes": len(snapshot.raw),
+                "truncated": end < snapshot.size,
+                "remaining_bytes": snapshot.size - end,
+            },
+        }
+        if text:
+            result["content"] = snapshot.raw.decode("utf-8")
+            result["line_start"] = snapshot.line_start
+            result["line_end"] = snapshot.line_end
+        else:
+            result["data"] = base64.b64encode(snapshot.raw).decode("ascii")
+        return result
+
+    @staticmethod
+    def _file_changed_result(
+        relative: str,
+        session: BrowseSession,
+        offset: int,
+        page_bytes: int,
+        *,
+        current_content_sha256: str | None,
+    ) -> dict[str, object]:
+        return {
+            "path": relative,
+            "content_sha256": session.snapshot_sha256,
+            "current_content_sha256": current_content_sha256,
+            "snapshot_status": "file_changed_during_browse",
+            "next_cursor": None,
+            "budget": {
+                "requested_bytes": page_bytes,
+                "returned_bytes": 0,
+                "truncated": True,
+                "remaining_bytes": max(session.size - offset, 0),
             },
         }
 

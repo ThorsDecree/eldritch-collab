@@ -70,3 +70,14 @@ authority, tier, status, and whether the bounded context layer included or omitt
 Pass a `turn_id` to inspect an earlier preserved context receipt. The inspector reports
 deterministic context assembly; it does not claim which supplied passage caused a model output.
 
+## Bell retrieval provenance
+
+Bell receipts additionally record the requested and effective retrieval policy, semantic source,
+normalized query terms, selected source scopes, exclusions, and whether a retrieval request was
+deferred. Control-plane bell fields are displayed and audited but excluded from retrieval terms.
+
+Each context-source receipt reports availability, result count, requested/returned/included/
+remaining token budgets, returned evidence, and omissions. `unavailable` means the source could
+not be reached or satisfy its contract; it is not a zero-result search. Included context is not
+evidence of causal influence or adoption. Receipt fields retain `causal_influence: "unknown"`
+unless an independently grounded system adds different evidence.

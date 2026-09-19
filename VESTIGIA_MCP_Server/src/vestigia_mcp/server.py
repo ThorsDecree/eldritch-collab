@@ -18,6 +18,7 @@ from .adapters.archive import ArchiveError, ArchiveSource, normalize_relative_pa
 from .adapters.runtime import RuntimeBridgeError
 from .archive_mutation import ArchiveMutationStore
 from .audit import AuditError, AuditLedger
+from .browse import BrowseSessionStore
 from .config import Settings
 from .health import (
     archive_health as inspect_archive_health,
@@ -82,6 +83,10 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         )
     )
     ledger = AuditLedger(settings.state_dir, settings.deployment_id)
+    browse_sessions = BrowseSessionStore(
+        settings.state_dir,
+        ttl_seconds=settings.archive_browse_ttl_seconds,
+    )
     runtime_registry = RuntimeRegistry(
         settings.runtimes_file,
         legacy_home=settings.runtime_home,
@@ -180,6 +185,40 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         )
         return result
 
+    def browse_policy_scope(capability_name: str) -> str:
+        capability = policy.capability(capability_name)
+        if capability is None:
+            raise ArchiveError(f"Unknown archive capability: {capability_name}")
+        policy_shape = {
+            "deployment_id": settings.deployment_id,
+            "capability": capability.name,
+            "effect": capability.effect.value,
+            "default": capability.default.value,
+        }
+        digest = hashlib.sha256(
+            json.dumps(policy_shape, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        return f"{capability_name}:{digest}"
+
+    def text_page_budget(page_bytes: int) -> None:
+        if page_bytes <= 0 or page_bytes > settings.archive_page_max_bytes:
+            raise ArchiveError(
+                "Text page_bytes must be between 1 and "
+                f"{settings.archive_page_max_bytes}"
+            )
+
+    def bytes_page_budget(page_bytes: int) -> None:
+        if page_bytes <= 0:
+            raise ArchiveError("Byte page_bytes must be positive")
+        encoded_bytes = 4 * ((page_bytes + 2) // 3)
+        if encoded_bytes > settings.archive_page_max_bytes:
+            raise ArchiveError(
+                "Byte page base64 output exceeds configured page ceiling "
+                f"({encoded_bytes} > {settings.archive_page_max_bytes})"
+            )
+
     @server.tool(
         name="archive.status",
         title="Inspect Archive status",
@@ -246,8 +285,9 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         title="Read Archive text",
         description=(
             "Use this when you know the relative path of one UTF-8 text-like Archive file and "
-            "need its bounded contents. Long files return UTF-8-safe pages; pass next_cursor "
-            "back unchanged to continue the same file hash."
+            "need bounded evidence from it. Long files return UTF-8-safe, snapshot-bound, "
+            "expiry-limited pages; pass next_cursor back unchanged to continue the same "
+            "snapshot. A successful page is not a claim that the whole file was read."
         ),
         annotations=READ_ONLY_ANNOTATIONS,
     )
@@ -265,11 +305,13 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         }
 
         def operation() -> dict[str, object]:
+            text_page_budget(page_bytes)
             page = source_for(source).read_text_page(
                 path,
-                max_bytes=settings.archive_text_max_bytes,
                 page_bytes=page_bytes,
                 cursor=cursor,
+                browse_store=browse_sessions,
+                policy_scope=browse_policy_scope("archive.read_text"),
             )
             return {
                 "source": source,
@@ -277,6 +319,42 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             }
 
         return guarded("archive.read_text", arguments, operation)
+
+    @server.tool(
+        name="archive.read_bytes",
+        title="Read Archive bytes",
+        description=(
+            "Use this when you need bounded raw evidence from one regular Archive file, "
+            "including a database. It returns base64 transport bytes, not a database query, "
+            "with snapshot-bound and expiry-limited continuation state."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def archive_read_bytes(
+        source: str,
+        path: str,
+        cursor: str | None = None,
+        page_bytes: int = 48_000,
+    ) -> dict[str, object]:
+        arguments = {
+            "source": source,
+            "path": path,
+            "cursor": cursor,
+            "page_bytes": page_bytes,
+        }
+
+        def operation() -> dict[str, object]:
+            bytes_page_budget(page_bytes)
+            page = source_for(source).read_bytes_page(
+                path,
+                page_bytes=page_bytes,
+                cursor=cursor,
+                browse_store=browse_sessions,
+                policy_scope=browse_policy_scope("archive.read_bytes"),
+            )
+            return {"source": source, **page}
+
+        return guarded("archive.read_bytes", arguments, operation)
 
     @server.tool(
         name="archive.read_media",

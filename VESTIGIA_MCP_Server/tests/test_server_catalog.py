@@ -1,10 +1,12 @@
 import asyncio
+import base64
 import json
 from pathlib import Path
 
 from mcp import Client
 
 from vestigia_mcp.config import Settings
+from vestigia_mcp.policy import DEFAULT_CAPABILITIES, Decision, EffectClass
 from vestigia_mcp.server import create_server
 
 
@@ -12,6 +14,7 @@ EXPECTED_TOOLS = {
     "archive.status",
     "archive.list",
     "archive.read_text",
+    "archive.read_bytes",
     "archive.read_media",
     "archive.search_text",
     "archive.diff",
@@ -176,7 +179,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert text_result.structured_content is not None
             assert text_result.structured_content["content"] == "lantern lit"
             assert text_result.structured_content["size"] == len(b"lantern lit")
-            assert len(text_result.structured_content["sha256"]) == 64
+            assert len(text_result.structured_content["content_sha256"]) == 64
 
             registry_result = await client.call_tool(
                 "archive.registry_status",
@@ -340,7 +343,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert identity_result.structured_content["archive"]["live"]["available"] is True
             assert (
                 identity_result.structured_content["capability_registry"]["capability_count"]
-                == 33
+                == 34
             )
 
             glance_result = await client.call_tool("house.glance", {})
@@ -354,7 +357,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert status_result.is_error is False
             assert status_result.structured_content is not None
             assert status_result.structured_content["server"]["version"] == "0.9.0.dev0"
-            assert status_result.structured_content["policy"]["capability_count"] == 33
+            assert status_result.structured_content["policy"]["capability_count"] == 34
             assert status_result.structured_content["runtime"]["configured"] is False
             assert status_result.structured_content["archive"]["promotion_configured"] is True
             assert (
@@ -400,6 +403,54 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert show_result.structured_content["receipt_is_memory"] is False
 
     asyncio.run(exercise())
+
+
+def test_archive_paging_server_contract_and_byte_capability(tmp_path: Path) -> None:
+    live = tmp_path / "live"
+    (live / "logs").mkdir(parents=True)
+    (live / "db").mkdir()
+    (live / "logs" / "huge.md").write_text("entry\n" * 250_000, encoding="utf-8")
+    fixture = b"SQLite format 3\x00" + bytes(range(256)) * 4
+    (live / "db" / "runtime.sqlite").write_bytes(fixture)
+    settings = Settings(
+        live_archive_root=live,
+        snapshot_archive_root=None,
+        state_dir=tmp_path / "state",
+        deployment_id="paging-contract",
+        archive_text_max_bytes=100,
+        archive_page_max_bytes=1_024,
+    )
+    server = create_server(settings)
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            text_result = await client.call_tool(
+                "archive.read_text",
+                {"source": "live", "path": "logs/huge.md", "page_bytes": 512},
+            )
+            assert text_result.is_error is False
+            assert text_result.structured_content is not None
+            assert text_result.structured_content["budget"]["requested_bytes"] == 512
+            assert text_result.structured_content["snapshot_status"] == "same_snapshot"
+
+            byte_result = await client.call_tool(
+                "archive.read_bytes",
+                {"source": "live", "path": "db/runtime.sqlite", "page_bytes": 512},
+            )
+            assert byte_result.is_error is False
+            assert byte_result.structured_content is not None
+            assert base64.b64decode(byte_result.structured_content["data"]) == fixture[:512]
+
+    asyncio.run(exercise())
+
+    capabilities = [
+        capability
+        for capability in DEFAULT_CAPABILITIES
+        if capability.name == "archive.read_bytes"
+    ]
+    assert len(capabilities) == 1
+    assert capabilities[0].effect is EffectClass.PERCEIVE
+    assert capabilities[0].default is Decision.ALLOW
 
 
 def test_wire_gametable_keeps_opponent_cards_out_of_a_seat_projection(

@@ -282,6 +282,22 @@ class CoreRuntime:
                 ),
             },
         )
+        bell_no_change = message.interface == "bell" and any(
+            receipt.startswith("tool_action:ok:make.nothing.happen:")
+            for receipt in house_receipts
+        )
+        bell_outcome = (
+            {
+                "state": "no_change",
+                "curation_eligible": False,
+                "memory_candidate_created": False,
+                "preference_inferred": False,
+            }
+            if bell_no_change
+            else None
+        )
+        if bell_outcome is not None:
+            house_receipts.append("bell_outcome:no_change")
         if queued_reflections:
             self.curator.mark_reflections_delivered(
                 [str(item["id"]) for item in queued_reflections]
@@ -316,6 +332,7 @@ class CoreRuntime:
         if (
             bool(self.config.get("memory.auto_extract_conservative_candidates", True))
             and not bool(message.metadata.get("contextual_listening", False))
+            and not bell_no_change
         ):
             extraction_text = (
                 message.participant_text
@@ -338,16 +355,21 @@ class CoreRuntime:
                 "usage": reply.usage,
                 "response_hash": sha256_text(visible),
                 "proposal_ids": proposal_ids,
+                **({"bell_outcome": bell_outcome} if bell_outcome else {}),
                 "house_tool_receipts": house_receipts,
                 "resident_control_receipts": resident_receipts,
             },
         )
         try:
-            surfaced_now = self._run_curation_if_due(
-                input_turn_id=turn_id,
-                assistant_turn_id=assistant_turn,
-                interface=message.interface,
-                model_route=model_route,
+            surfaced_now = (
+                []
+                if bell_no_change
+                else self._run_curation_if_due(
+                    input_turn_id=turn_id,
+                    assistant_turn_id=assistant_turn,
+                    interface=message.interface,
+                    model_route=model_route,
+                )
             )
         except Exception as exc:
             # Background continuity work must never swallow an already completed

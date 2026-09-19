@@ -47,6 +47,7 @@ Tools:
 - `archive.status`
 - `archive.list`
 - `archive.read_text`
+- `archive.read_bytes`
 - `archive.read_media`
 - `archive.search_text`
 - `archive.diff`
@@ -69,14 +70,22 @@ were skipped.
 Each search hit repeats its source ID and provenance class so extracted hits remain attributable
 outside the surrounding response envelope.
 
-`archive.list`, `archive.read_text`, and `archive.search_text` return `page` metadata and an
-opaque `next_cursor` when more results remain. Pass that cursor back unchanged with the same
-query. Cursors bind the source, query, offset, and result/file digest; a changed view is rejected
-as stale instead of silently mixing pages. Text pages are split only on UTF-8 boundaries.
+`archive.list` and `archive.search_text` retain their existing digest-bound cursors. Archive
+browse cursors from `archive.read_text` and `archive.read_bytes` are a separate, signed,
+expiry-limited continuation format. They bind the source, normalized path, operation,
+authorization-policy scope, snapshot hash, offset, and page size. Pass one back unchanged with
+the same request. A valid continuation reports `same_snapshot`; if the file changes during the
+browse, it reports `file_changed_during_browse` and returns no mixed-revision data.
 
-`archive.read_text` returns bounded UTF-8 content together with the whole file's byte size and
-SHA-256. Pass that digest as `expected_base_sha256` when staging a replacement to bind the
-proposal to the version that was actually read.
+Each browse page reports `budget.requested_bytes`, `returned_bytes`, `truncated`, and
+`remaining_bytes`. A successful page is bounded evidence, not a statement that the whole file
+was read. Text pages preserve UTF-8 and include exact raw byte spans plus best-effort line spans.
+Byte pages return base64 transport data for regular files (including SQLite files); they are not
+database queries, and their base64 expansion is included in the configured output ceiling.
+
+`archive.search_text` remains literal and bounded. Its `skipped_oversize` and
+`skipped_non_utf8` counters describe material it did not scan; paging does not make that search
+exhaustive.
 
 `archive.read_media(source, path)` returns one PNG, JPEG, GIF, or WebP as a native MCP image
 content block plus bounded metadata. It enforces an independent byte ceiling and checks the
