@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from vestigia_mcp.policy import DEFAULT_CAPABILITIES
 from vestigia_mcp.porchlight import build_snapshot, is_latest_path
 
 
@@ -66,3 +67,8 @@ def test_snapshot_rejects_oversize_body_and_bad_predecessor_hash() -> None:
 def test_snapshot_rejects_non_web_urls() -> None:
     with pytest.raises(ValueError):
         build_snapshot("javascript:alert(1)", "", "body", "page", None, None)
+
+
+def test_policy_catalog_exposes_porchlight_staging() -> None:
+    names = {capability.name for capability in DEFAULT_CAPABILITIES}
+    assert "archive.stage_porchlight" in names
