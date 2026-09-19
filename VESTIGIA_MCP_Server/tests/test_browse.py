@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import vestigia_mcp.browse as browse
 from vestigia_mcp.browse import BrowseCursorError, BrowseSessionStore
 
 
@@ -92,6 +93,17 @@ def test_session_load_survives_a_second_store(tmp_path: Path) -> None:
     assert loaded.id == session.id
     assert loaded.snapshot_sha256 == "a" * 64
     assert loaded.size == 4096
+
+
+def test_session_store_persists_without_posix_fchmod(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delattr(browse.os, "fchmod")
+    store = BrowseSessionStore(tmp_path, ttl_seconds=60, secret=b"x" * 32)
+
+    session = _create(store)
+
+    assert store.load(session.id).id == session.id
 
 
 def test_cursor_input_has_a_size_ceiling(tmp_path: Path) -> None:
