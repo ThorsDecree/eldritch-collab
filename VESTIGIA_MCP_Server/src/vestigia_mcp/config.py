@@ -59,6 +59,8 @@ class Settings:
     state_dir: Path
     deployment_id: str
     archive_text_max_bytes: int = 1_000_000
+    archive_browse_ttl_seconds: int = 900
+    archive_page_max_bytes: int = 64_000
     archive_media_max_bytes: int = 20_000_000
     runtime_home: Path | None = None
     runtime_env_file: Path | None = None
@@ -90,6 +92,12 @@ class Settings:
             deployment_id=deployment_id,
             archive_text_max_bytes=_positive_int_env(
                 "VESTIGIA_MCP_ARCHIVE_TEXT_MAX_BYTES", 1_000_000
+            ),
+            archive_browse_ttl_seconds=_positive_int_env(
+                "VESTIGIA_MCP_ARCHIVE_BROWSE_TTL_SECONDS", 900
+            ),
+            archive_page_max_bytes=_positive_int_env(
+                "VESTIGIA_MCP_ARCHIVE_PAGE_MAX_BYTES", 64_000
             ),
             archive_media_max_bytes=_positive_int_env(
                 "VESTIGIA_MCP_ARCHIVE_MEDIA_MAX_BYTES", 20_000_000

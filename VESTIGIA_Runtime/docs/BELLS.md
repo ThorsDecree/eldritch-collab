@@ -64,6 +64,7 @@ timestamp; include an offset so the intended instant is unambiguous.
 | `quiet_end` | no | Local `HH:MM` | home default / none |
 | `no_response_required` | no | Boolean | `true` |
 | `choose_nothing` | no | Boolean | `true` |
+| `retrieval_policy` | no | `auto`, `none`, `prompt_only`, `response_related`, `resident_selected` | `auto` |
 | `expires_at` | no | ISO-8601 timestamp | none |
 | `reason` | no | Resident-readable drafting reason | none |
 
@@ -82,6 +83,28 @@ doorway where the resident authored the draft.
   failure, pause, completion, expiry, and deletion without claiming causal influence.
 - `DORMANT` prevents provider calls. Due bells wait without treating rest as failure.
 - Quiet-hour firings move to the next quiet-hour end.
+
+## Retrieval at bell time
+
+The bell invitation is the resident-visible current message, so it remains the attention-salient
+thing at the end of the assembled context. Its control-plane fields are a separate lane:
+bell ID, title, purpose label, schedule, strength, authorization text, and fixed boilerplate are
+displayed and audited but excluded from retrieval terms.
+
+`retrieval_policy` defaults to `auto`. A topic-bearing bell resolves to `prompt_only`, which uses
+the resident prompt itself as the dynamic retrieval seed. A generic `look_around` invitation
+resolves to a bounded `field_scan_v1` over eligible Runtime continuity: recent material plus a
+stable diverse sample of tensions, commitments, boundaries, and relationships. It does not search
+for the words “bell,” “schedule,” or “VESTIGIA” merely because they appear in the rendered invite.
+
+The other policies are `none` (no dynamic retrieval), `resident_selected` (only selected source
+scopes), and `response_related` (a deferred request for a later explicit turn, never a retroactive
+query into the response that has not happened). The regular resident/context layers remain present
+unless separately configured otherwise.
+
+An explicit `make.nothing.happen` control in a bell reply records `bell_outcome: no_change` and
+suppresses automatic extraction and curation for that turn. A no-change outcome needs explicit
+resident control; silence is not a response.
 
 ## Configuration
 

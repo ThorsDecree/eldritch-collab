@@ -24,6 +24,13 @@ PURPOSES = {
 }
 STRENGTHS = {"gentle", "repeated", "urgent", "outward_confirmation"}
 SCHEDULE_KINDS = {"once", "interval", "daily", "weekly"}
+RETRIEVAL_POLICIES = {
+    "auto",
+    "none",
+    "prompt_only",
+    "response_related",
+    "resident_selected",
+}
 ACKNOWLEDGEMENTS = {"seen", "ignored", "deferred", "answered"}
 CONTROL_PATTERN = re.compile(r"^\[\[BELL_CONTROL\s+(\{.*\})\]\]\s*$")
 DRAFT_PATTERN = re.compile(r"^\[\[BELL_DRAFT\s+(\{.*\})\]\]\s*$")
@@ -45,6 +52,7 @@ CREATE TABLE IF NOT EXISTS bells (
     quiet_end TEXT,
     no_response_required INTEGER NOT NULL DEFAULT 1,
     choose_nothing INTEGER NOT NULL DEFAULT 1,
+    retrieval_policy TEXT NOT NULL DEFAULT 'auto',
     action_scope TEXT NOT NULL DEFAULT 'conversation_only',
     delivery_interface TEXT NOT NULL,
     delivery_target_json TEXT NOT NULL,
@@ -106,6 +114,7 @@ class Bell:
     quiet_end: str | None
     no_response_required: bool
     choose_nothing: bool
+    retrieval_policy: str
     action_scope: str
     delivery_interface: str
     delivery_target: dict[str, Any]
@@ -220,6 +229,18 @@ class BellService:
         self.room_id = room_id
         with self.db.connect() as connection:
             connection.executescript(BELL_SCHEMA)
+            self._migrate_schema(connection)
+
+    @staticmethod
+    def _migrate_schema(connection: Any) -> None:
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(bells)")
+        }
+        if "retrieval_policy" not in columns:
+            connection.execute(
+                "ALTER TABLE bells ADD COLUMN retrieval_policy TEXT NOT NULL DEFAULT 'auto'"
+            )
 
     def create(
         self,
@@ -238,6 +259,7 @@ class BellService:
         quiet_end: str | None = None,
         no_response_required: bool = True,
         choose_nothing: bool = True,
+        retrieval_policy: str = "auto",
         expires_at: str | None = None,
     ) -> Bell:
         title, prompt = title.strip(), prompt.strip()
@@ -249,6 +271,8 @@ class BellService:
             raise ValueError(f"Unknown bell strength: {strength}")
         if schedule_kind not in SCHEDULE_KINDS:
             raise ValueError(f"Unknown schedule kind: {schedule_kind}")
+        if retrieval_policy not in RETRIEVAL_POLICIES:
+            raise ValueError(f"Unknown retrieval policy: {retrieval_policy}")
         ZoneInfo(timezone)
         if quiet_start:
             _clock(quiet_start)
@@ -271,15 +295,16 @@ class BellService:
                 INSERT INTO bells (
                     id, resident_id, room_id, title, purpose, prompt, strength,
                     schedule_kind, schedule_json, timezone, quiet_start, quiet_end,
-                    no_response_required, choose_nothing, action_scope,
+                    no_response_required, choose_nothing, retrieval_policy, action_scope,
                     delivery_interface, delivery_target_json, status, next_fire_at,
                     expires_at, created_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
                 """,
                 (
                     bell_id, self.resident_id, self.room_id, title, purpose, prompt, strength,
                     schedule_kind, stable_json(schedule), timezone, quiet_start, quiet_end,
-                    int(no_response_required), int(choose_nothing), "conversation_only",
+                    int(no_response_required), int(choose_nothing), retrieval_policy,
+                    "conversation_only",
                     delivery_interface, stable_json(delivery_target), first.isoformat(),
                     expiry, created_by, stamp, stamp,
                 ),
@@ -300,7 +325,7 @@ class BellService:
         allowed = {
             "title", "purpose", "prompt", "strength", "schedule_kind", "schedule",
             "timezone", "quiet_start", "quiet_end", "no_response_required",
-            "choose_nothing", "expires_at", "reason",
+            "choose_nothing", "retrieval_policy", "expires_at", "reason",
         }
         unknown = set(payload) - allowed
         if unknown:
@@ -316,12 +341,15 @@ class BellService:
         candidate.setdefault("quiet_end", None)
         candidate.setdefault("no_response_required", True)
         candidate.setdefault("choose_nothing", True)
+        candidate.setdefault("retrieval_policy", "auto")
         if str(candidate["purpose"]) not in PURPOSES:
             raise ValueError(f"Unknown bell purpose: {candidate['purpose']}")
         if str(candidate["strength"]) not in STRENGTHS:
             raise ValueError(f"Unknown bell strength: {candidate['strength']}")
         if str(candidate["schedule_kind"]) not in SCHEDULE_KINDS:
             raise ValueError(f"Unknown schedule kind: {candidate['schedule_kind']}")
+        if str(candidate["retrieval_policy"]) not in RETRIEVAL_POLICIES:
+            raise ValueError(f"Unknown retrieval policy: {candidate['retrieval_policy']}")
         ZoneInfo(str(candidate["timezone"]))
         if candidate["quiet_start"]:
             _clock(str(candidate["quiet_start"]))
@@ -475,7 +503,7 @@ class BellService:
     def revise(self, bell_id: str, *, actor: str, **changes: Any) -> Bell:
         allowed = {
             "title", "purpose", "prompt", "strength", "quiet_start", "quiet_end",
-            "no_response_required", "choose_nothing", "expires_at",
+            "no_response_required", "choose_nothing", "retrieval_policy", "expires_at",
             "schedule_kind", "schedule", "timezone",
         }
         unknown = set(changes) - allowed
@@ -488,6 +516,8 @@ class BellService:
             raise ValueError("Invalid purpose or strength")
         if values["schedule_kind"] not in SCHEDULE_KINDS:
             raise ValueError("Invalid schedule kind")
+        if values["retrieval_policy"] not in RETRIEVAL_POLICIES:
+            raise ValueError("Invalid retrieval policy")
         ZoneInfo(str(values["timezone"]))
         if not str(values["prompt"]).strip() or not str(values["title"]).strip():
             raise ValueError("Bell title and prompt may not be empty")
@@ -666,6 +696,24 @@ Actions: pause, delete, defer (with "minutes"), or revise (with any of "prompt",
 bell registry and is recorded."""
 
     @staticmethod
+    def retrieval_envelope(bell: Bell) -> dict[str, object]:
+        """Separate retrieval-bearing prompt text from bell control-plane fields."""
+        return {
+            "resident_prompt": bell.prompt,
+            "requested_policy": bell.retrieval_policy,
+            "selected_sources": (),
+            "control_plane": {
+                "bell_id": bell.id,
+                "title": bell.title,
+                "purpose": bell.purpose,
+                "strength": bell.strength,
+                "schedule_kind": bell.schedule_kind,
+                "schedule": bell.schedule,
+            },
+            "control_plane_excluded": True,
+        }
+
+    @staticmethod
     def _row(row: Any) -> Bell:
         return Bell(
             id=str(row["id"]),
@@ -682,6 +730,7 @@ bell registry and is recorded."""
             quiet_end=str(row["quiet_end"]) if row["quiet_end"] else None,
             no_response_required=bool(row["no_response_required"]),
             choose_nothing=bool(row["choose_nothing"]),
+            retrieval_policy=str(row["retrieval_policy"]),
             action_scope=str(row["action_scope"]),
             delivery_interface=str(row["delivery_interface"]),
             delivery_target=json.loads(row["delivery_target_json"]),

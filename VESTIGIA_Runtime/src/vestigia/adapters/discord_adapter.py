@@ -446,6 +446,7 @@ def run_discord(
                     "bell_id": bell.id,
                     "bell_purpose": bell.purpose,
                     "bell_strength": bell.strength,
+                    "bell_retrieval": bell_service.retrieval_envelope(bell),
                     "causal_influence": "unknown",
                 },
             )
