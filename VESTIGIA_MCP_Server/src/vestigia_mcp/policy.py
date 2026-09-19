@@ -44,6 +44,12 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Read one bounded UTF-8 text file from a configured Archive source.",
     ),
     Capability(
+        "archive.read_bytes",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Read one bounded base64 byte page from a configured Archive source.",
+    ),
+    Capability(
         "archive.read_media",
         EffectClass.PERCEIVE,
         Decision.ALLOW,

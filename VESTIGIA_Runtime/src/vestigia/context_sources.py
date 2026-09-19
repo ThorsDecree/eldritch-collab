@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from .bell_retrieval import RetrievalRequest, field_scan_v1
 from .config import ResolvedConfig
 from .db import ContinuityDB
 from .models import MemoryRecord, RetrievedMemory
@@ -37,6 +38,7 @@ class ContextSourceRequest:
     model_route: str
     turn_id: str
     limit: int
+    retrieval_request: RetrievalRequest
     include_inherited: bool = False
 
 
@@ -175,13 +177,24 @@ class RuntimeMemoryContextSource:
 
     def retrieve(self, request: ContextSourceRequest) -> ContextSourceResult:
         limit = max(1, int(request.limit))
-        retrieved = self.retriever.retrieve(
-            request.query,
-            resident_id=request.resident_id,
-            room_id=request.room_id,
-            limit=limit,
-            include_inherited=request.include_inherited,
-        )
+        if request.retrieval_request.policy_effective == "field_scan_v1":
+            retrieved = list(
+                field_scan_v1(
+                    self.db,
+                    resident_id=request.resident_id,
+                    room_id=request.room_id,
+                    limit=limit,
+                    include_inherited=request.include_inherited,
+                )
+            )
+        else:
+            retrieved = self.retriever.retrieve(
+                request.query,
+                resident_id=request.resident_id,
+                room_id=request.room_id,
+                limit=limit,
+                include_inherited=request.include_inherited,
+            )
         # Core records are already carried by the protected identity/core layers. The
         # historical retrieved_continuity layer deliberately omitted them, so the
         # compatibility source does the same.
@@ -227,6 +240,7 @@ class RuntimeMemoryContextSource:
             metadata={
                 "backend": "sqlite_continuity_ledger",
                 "retrieval_limit": limit,
+                "retrieval_policy": request.retrieval_request.policy_effective,
                 "returned_before_core_filter": len(retrieved),
                 "returned_to_layer": len(items),
                 "core_records_omitted_from_retrieval_layer": len(retrieved) - len(items),

@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+import re
 from typing import Iterable
 
+from .bell_retrieval import RetrievalRequest, resolve_retrieval_request
 from .composition import build_context_sources
 from .config import ResolvedConfig
 from .context_controls import load_context_controls_verbose
@@ -85,8 +87,9 @@ class ContextAssembler:
                 )
             )
         )
+        retrieval_request = resolve_retrieval_request(message)
         source_results = self._retrieve_context_sources(
-            message.content,
+            retrieval_request,
             state=state,
             model_route=model_route,
             turn_id=actual_turn_id,
@@ -208,6 +211,17 @@ class ContextAssembler:
                 self._context_source_receipt(result, layer_by_name.get(result.layer_name))
                 for result in source_results
             ],
+            "retrieval": {
+                "requested_policy": retrieval_request.policy_requested,
+                "effective_policy": retrieval_request.policy_effective,
+                "semantic_source": retrieval_request.semantic_source,
+                "query_terms": list(retrieval_request.query_terms),
+                "control_plane_excluded": retrieval_request.control_plane_excluded,
+                "selected_sources": list(retrieval_request.selected_sources),
+                "deferred": retrieval_request.deferred,
+                "warnings": list(retrieval_request.warnings),
+                "causal_influence": "unknown",
+            },
             "budget": {
                 "maximum": configured_maximum,
                 "used": total,
@@ -270,13 +284,16 @@ class ContextAssembler:
 
     def _retrieve_context_sources(
         self,
-        query: str,
+        retrieval_request: RetrievalRequest,
         *,
         state: str,
         model_route: str,
         turn_id: str,
         include_inherited: bool,
     ) -> list[ContextSourceResult]:
+        if retrieval_request.policy_effective == "none" or retrieval_request.deferred:
+            return []
+        query = retrieval_request.semantic_seed or ""
         request = ContextSourceRequest(
             query=query,
             resident_id=self.resident_id,
@@ -285,6 +302,7 @@ class ContextAssembler:
             model_route=model_route,
             turn_id=turn_id,
             limit=max(1, int(self.config.get("retrieval.limit", 18))),
+            retrieval_request=retrieval_request,
             include_inherited=include_inherited,
         )
         results: list[ContextSourceResult] = []
@@ -301,6 +319,17 @@ class ContextAssembler:
         for source in self.context_sources:
             required = bool(getattr(source, "required", False))
             source_name = str(getattr(source, "name", "")).strip().lower()
+            if (
+                retrieval_request.policy_requested == "resident_selected"
+                and source_name not in retrieval_request.selected_sources
+            ):
+                continue
+            if (
+                retrieval_request.policy_effective == "field_scan_v1"
+                and source_name != "runtime_memory"
+                and source_name not in retrieval_request.selected_sources
+            ):
+                continue
             try:
                 result = source.retrieve(request)
             except Exception as exc:
@@ -405,12 +434,29 @@ class ContextAssembler:
             "name": result.source_name,
             "layer": result.layer_name,
             "available": result.available,
+            "availability": "available" if result.available else "unavailable",
             "required": result.required,
             "authority": result.authority,
             "advisory": result.advisory,
             "query": result.query,
+            "query_terms": re.findall(r"[\w#-]{2,}", result.query.casefold()),
             "budget_tokens": result.budget_tokens,
             "item_count": len(result.items),
+            "result_count": len(result.items),
+            "reason": (
+                result.truncation_reason
+                or (result.warnings[0] if result.warnings else "zero_results")
+            ),
+            "budget": {
+                "requested_tokens": result.budget_tokens,
+                "returned_tokens": sum(
+                    TokenCounter("gpt-4o-mini").count(item.text) for item in result.items
+                ),
+                "included_tokens": layer.used_tokens if layer else 0,
+                "remaining_tokens": max(
+                    0, result.budget_tokens - (layer.used_tokens if layer else 0)
+                ),
+            },
             "included_item_ids": list(layer.item_ids if layer else ()),
             "omitted_item_ids": omitted,
             "post_total_cap_item_boundary_unknown": total_cap_applied,

@@ -1,12 +1,21 @@
+import base64
 from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
 
 from vestigia_mcp.adapters.archive import ArchiveError, ArchiveSource
+from vestigia_mcp.browse import BrowseSessionStore
+from vestigia_mcp.pagination import encode_cursor
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"bounded-fixture"
+
+
+def _store(tmp_path: Path) -> BrowseSessionStore:
+    return BrowseSessionStore(
+        tmp_path / "state", ttl_seconds=300, secret=b"b" * 32
+    )
 
 
 def write_zip(path: Path, files: dict[str, str]) -> None:
@@ -254,6 +263,140 @@ def test_read_text_pages_are_utf8_safe_and_hash_bound(tmp_path: Path) -> None:
             1000,
             page_bytes=256,
             cursor=str(first["next_cursor"]),
+        )
+
+
+def test_large_utf8_text_pages_ignore_total_admission_ceiling_and_preserve_lines(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "logs" / "huge.md"
+    path.parent.mkdir()
+    path.write_text(("α\n" * 600_000) + "tail\n", encoding="utf-8")
+    source = ArchiveSource(tmp_path)
+
+    first = source.read_text_page(
+        "logs/huge.md",
+        page_bytes=257,
+        browse_store=_store(tmp_path),
+        policy_scope="archive.read_text:test",
+    )
+    assert first["budget"]["returned_bytes"] <= 257
+    assert first["line_start"] == 1
+    assert first["snapshot_status"] == "same_snapshot"
+
+    second = source.read_text_page(
+        "logs/huge.md",
+        page_bytes=257,
+        cursor=str(first["next_cursor"]),
+        browse_store=_store(tmp_path),
+        policy_scope="archive.read_text:test",
+    )
+    assert second["byte_start"] == first["byte_end"]
+    assert str(second["content"]).encode("utf-8")
+    assert second["line_start"] >= first["line_start"]
+
+
+def test_changed_artifact_returns_condition_without_mixed_page(tmp_path: Path) -> None:
+    path = tmp_path / "logs" / "changing.md"
+    path.parent.mkdir()
+    path.write_text("first page\nsecond page\n", encoding="utf-8")
+    source = ArchiveSource(tmp_path)
+    store = _store(tmp_path)
+
+    first = source.read_text_page(
+        "logs/changing.md",
+        page_bytes=12,
+        browse_store=store,
+        policy_scope="archive.read_text:test",
+    )
+    path.write_text("FIRST page\nsecond page\n", encoding="utf-8")
+
+    changed = source.read_text_page(
+        "logs/changing.md",
+        page_bytes=12,
+        cursor=str(first["next_cursor"]),
+        browse_store=store,
+        policy_scope="archive.read_text:test",
+    )
+    assert changed["snapshot_status"] == "file_changed_during_browse"
+    assert "data" not in changed
+    assert "content" not in changed
+
+
+def test_removed_artifact_returns_changed_browse_condition(tmp_path: Path) -> None:
+    path = tmp_path / "logs" / "removed.md"
+    path.parent.mkdir()
+    path.write_text("first page\nsecond page\n", encoding="utf-8")
+    source = ArchiveSource(tmp_path)
+    store = _store(tmp_path)
+    first = source.read_text_page(
+        "logs/removed.md",
+        page_bytes=12,
+        browse_store=store,
+        policy_scope="archive.read_text:test",
+    )
+    path.unlink()
+
+    changed = source.read_text_page(
+        "logs/removed.md",
+        page_bytes=12,
+        cursor=str(first["next_cursor"]),
+        browse_store=store,
+        policy_scope="archive.read_text:test",
+    )
+    assert changed["snapshot_status"] == "file_changed_during_browse"
+    assert changed["current_content_sha256"] is None
+    assert "content" not in changed
+
+
+def test_read_bytes_pages_return_bounded_base64_slices(tmp_path: Path) -> None:
+    path = tmp_path / "db" / "runtime.sqlite"
+    path.parent.mkdir()
+    fixture = b"SQLite format 3\x00" + bytes(range(256))
+    path.write_bytes(fixture)
+    source = ArchiveSource(tmp_path)
+    store = _store(tmp_path)
+
+    first = source.read_bytes_page(
+        "db/runtime.sqlite",
+        page_bytes=48,
+        browse_store=store,
+        policy_scope="archive.read_bytes:test",
+    )
+    assert base64.b64decode(str(first["data"])) == fixture[:48]
+    assert len(str(first["data"])) <= 64
+
+    second = source.read_bytes_page(
+        "db/runtime.sqlite",
+        page_bytes=48,
+        cursor=str(first["next_cursor"]),
+        browse_store=store,
+        policy_scope="archive.read_bytes:test",
+    )
+    assert base64.b64decode(str(second["data"])) == fixture[48:96]
+
+
+def test_legacy_read_text_cursor_is_rejected_by_snapshot_browse(tmp_path: Path) -> None:
+    path = tmp_path / "logs" / "legacy.md"
+    path.parent.mkdir()
+    path.write_text("first\nsecond\n", encoding="utf-8")
+    legacy_cursor = encode_cursor(
+        "archive.read_text",
+        {
+            "path": "logs/legacy.md",
+            "offset": 6,
+            "sha256": "a" * 64,
+            "source_sha256": "b" * 64,
+        },
+    )
+
+    with pytest.raises(ArchiveError, match="unsupported legacy"):
+        ArchiveSource(tmp_path).read_text_page(
+            "logs/legacy.md",
+            page_bytes=6,
+            cursor=legacy_cursor,
+            browse_store=_store(tmp_path),
+            policy_scope="archive.read_text:test",
         )
 
 

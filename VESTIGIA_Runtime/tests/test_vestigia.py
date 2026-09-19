@@ -262,6 +262,102 @@ class ContextTests(HomeCase):
         self.assertEqual(4, receipt["budget"]["resident_context_controls"]["verbatim_turns"])
 
 
+class BellRetrievalContextTests(HomeCase):
+    def _receipt(self, assembly):
+        return json.loads(assembly.receipt_path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _bell_message(prompt: str, *, policy: str) -> NormalizedMessage:
+        return NormalizedMessage(
+            content=(
+                "[VESTIGIA BELL — invitation, not instruction]\n"
+                "Bell ID: scheduler-123\nPurpose: look_around\n\n"
+                + prompt
+                + "\n\nSilence is not failure or consent."
+            ),
+            interface="bell",
+            metadata={
+                "bell_retrieval": {
+                    "resident_prompt": prompt,
+                    "requested_policy": policy,
+                    "control_plane": {
+                        "bell_id": "scheduler-123",
+                        "purpose": "look_around",
+                        "schedule": {"time": "09:00"},
+                    },
+                    "control_plane_excluded": True,
+                }
+            },
+        )
+
+    def test_prompt_only_bell_excludes_control_plane_from_query_terms(self) -> None:
+        prompt = "Review the active bridge work."
+        first = ContextAssembler(self.config, self.db).assemble(
+            self._bell_message(prompt, policy="prompt_only"), state="ACTIVE"
+        )
+        second = ContextAssembler(self.config, self.db).assemble(
+            NormalizedMessage(
+                content="[VESTIGIA BELL] Bell ID: different-999\\n" + prompt,
+                interface="bell",
+                metadata={
+                    "bell_retrieval": {
+                        "resident_prompt": prompt,
+                        "requested_policy": "prompt_only",
+                        "control_plane": {"bell_id": "different-999"},
+                        "control_plane_excluded": True,
+                    }
+                },
+            ),
+            state="ACTIVE",
+        )
+        first_receipt = self._receipt(first)
+        second_receipt = self._receipt(second)
+        self.assertEqual(
+            first_receipt["retrieval"]["query_terms"],
+            second_receipt["retrieval"]["query_terms"],
+        )
+        self.assertTrue(first_receipt["retrieval"]["control_plane_excluded"])
+        self.assertNotIn("scheduler", first_receipt["retrieval"]["query_terms"])
+
+    def test_auto_generic_bell_uses_field_scan_and_none_skips_dynamic_sources(self) -> None:
+        generic = ContextAssembler(self.config, self.db).assemble(
+            self._bell_message("Notice what wants attention.", policy="auto"),
+            state="ACTIVE",
+        )
+        generic_receipt = self._receipt(generic)
+        self.assertEqual("field_scan_v1", generic_receipt["retrieval"]["effective_policy"])
+
+        disabled = ContextAssembler(self.config, self.db).assemble(
+            self._bell_message("Notice what wants attention.", policy="none"),
+            state="ACTIVE",
+        )
+        disabled_receipt = self._receipt(disabled)
+        self.assertEqual([], disabled_receipt["context_sources"])
+        self.assertIn(
+            "identity_core", {layer["name"] for layer in disabled_receipt["layers"]}
+        )
+
+    def test_unavailable_context_source_has_unavailable_receipt(self) -> None:
+        class UnavailableSource:
+            name = "archive_probe"
+            required = False
+
+            def retrieve(self, request):
+                raise TimeoutError("bridge timed out")
+
+        assembly = ContextAssembler(
+            self.config, self.db, additional_sources=(UnavailableSource(),)
+        ).assemble(NormalizedMessage(content="bridge work"), state="ACTIVE")
+        source = next(
+            item
+            for item in self._receipt(assembly)["context_sources"]
+            if item["name"] == "archive_probe"
+        )
+        self.assertEqual("unavailable", source["availability"])
+        self.assertEqual(0, source["result_count"])
+        self.assertTrue(source["reason"])
+
+
 class RuntimeStateTests(HomeCase):
     def test_dormancy_records_input_without_provider_or_memory_mutation(self) -> None:
         provider = FakeProvider(["should not be used"])
@@ -526,6 +622,60 @@ class BellSchedulerTests(HomeCase):
         self.assertIn("does not prove it caused anything", invitation)
         self.assertIn("leave everything alone", invitation)
 
+    def test_bell_retrieval_policy_defaults_to_auto_and_builds_envelope(self) -> None:
+        service = self.service()
+        bell = service.create(
+            title="Archive glance",
+            purpose="archive_review",
+            prompt="Check the archive trail.",
+            schedule_kind="once",
+            schedule={"at": (datetime.now(UTC) + timedelta(hours=2)).isoformat()},
+            timezone="UTC",
+            created_by="Jeff",
+            delivery_interface="discord",
+            delivery_target={"kind": "dm", "id": "123"},
+        )
+        self.assertEqual("auto", bell.retrieval_policy)
+        envelope = service.retrieval_envelope(bell)
+        self.assertEqual("Check the archive trail.", envelope["resident_prompt"])
+        self.assertEqual("auto", envelope["requested_policy"])
+        self.assertTrue(envelope["control_plane_excluded"])
+        self.assertNotIn("Bell ID:", envelope["resident_prompt"])
+        self.assertEqual(bell.id, envelope["control_plane"]["bell_id"])
+
+    def test_bell_retrieval_policy_is_validated_and_revisable(self) -> None:
+        service = self.service()
+        bell = service.create(
+            title="Windowsill",
+            purpose="look_around",
+            prompt="Notice what wandered in.",
+            schedule_kind="once",
+            schedule={"at": (datetime.now(UTC) + timedelta(hours=2)).isoformat()},
+            timezone="UTC",
+            created_by="Jeff",
+            delivery_interface="discord",
+            delivery_target={"kind": "dm", "id": "123"},
+            retrieval_policy="resident_selected",
+        )
+        self.assertEqual("resident_selected", bell.retrieval_policy)
+        revised = service.revise(
+            bell.id, actor="resident:Liora", retrieval_policy="none"
+        )
+        self.assertEqual("none", revised.retrieval_policy)
+        with self.assertRaisesRegex(ValueError, "retrieval policy"):
+            service.create(
+                title="Bad policy",
+                purpose="hello",
+                prompt="Nope.",
+                schedule_kind="once",
+                schedule={"at": (datetime.now(UTC) + timedelta(hours=2)).isoformat()},
+                timezone="UTC",
+                created_by="Jeff",
+                delivery_interface="discord",
+                delivery_target={"kind": "dm", "id": "123"},
+                retrieval_policy="semantic_boilerplate",
+            )
+
     def test_recurring_bell_never_escalates_and_can_be_revised_paused_or_deleted(self) -> None:
         service = self.service()
         bell = service.create(
@@ -711,6 +861,72 @@ class BellSchedulerTests(HomeCase):
         self.assertEqual([bell.id], service.expire_stale(now + timedelta(hours=3)))
         self.assertEqual("expired", service.get(bell.id).status)
         self.assertEqual("expired", service.events(bell.id)[0]["event_type"])
+
+
+class BellNoChangeRuntimeTests(HomeCase):
+    def _bell_message(self) -> NormalizedMessage:
+        service = BellService(self.db, "test-resident", "hearth")
+        bell = service.create(
+            title="Windowsill",
+            purpose="look_around",
+            prompt="Notice what wants attention.",
+            schedule_kind="once",
+            schedule={"at": (datetime.now(UTC) + timedelta(hours=2)).isoformat()},
+            timezone="UTC",
+            created_by="Jeff",
+            delivery_interface="discord",
+            delivery_target={"kind": "dm", "id": "123"},
+        )
+        return NormalizedMessage(
+            content=service.invitation_text(bell),
+            interface="bell",
+            speaker_id=f"bell:{bell.id}",
+            metadata={
+                "bell_id": bell.id,
+                "bell_retrieval": service.retrieval_envelope(bell),
+            },
+        )
+
+    def test_explicit_bell_no_change_has_outcome_and_skips_curation(self) -> None:
+        provider = FakeProvider(
+            ['[[TOOL_ACTION {"action":"make.nothing.happen","after":"finish"}]]']
+        )
+        runtime = CoreRuntime(self.config, provider=provider)
+        message = self._bell_message()
+        result = runtime.chat(message)
+
+        self.assertEqual(message.content, provider.requests[0].messages[-1]["content"])
+        context = json.loads(result.receipt_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            ["notice", "what", "wants", "attention"],
+            context["retrieval"]["query_terms"],
+        )
+        trace = json.loads(
+            (self.home / "traces" / f"{result.turn_id}.result.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual("no_change", trace["bell_outcome"]["state"])
+        self.assertEqual([], trace["proposal_ids"])
+        self.assertFalse(trace["bell_outcome"]["curation_eligible"])
+        with self.db.connect() as connection:
+            count = connection.execute("SELECT COUNT(*) FROM curation_batches").fetchone()[0]
+        self.assertEqual(0, count)
+
+    def test_non_bell_no_change_has_no_bell_outcome(self) -> None:
+        runtime = CoreRuntime(
+            self.config,
+            provider=FakeProvider(
+                ['[[TOOL_ACTION {"action":"make.nothing.happen","after":"finish"}]]']
+            ),
+        )
+        result = runtime.chat(NormalizedMessage(content="Leave this ordinary turn alone."))
+        trace = json.loads(
+            (self.home / "traces" / f"{result.turn_id}.result.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertNotIn("bell_outcome", trace)
 
 
 class OnboardingTests(unittest.TestCase):
