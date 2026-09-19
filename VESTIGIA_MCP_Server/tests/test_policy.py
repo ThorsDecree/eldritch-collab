@@ -30,6 +30,13 @@ def test_archive_stage_and_promotion_have_distinct_effect_classes() -> None:
     assert engine.require_allowed("archive.promote_directory").effect is EffectClass.ACT
 
 
+def test_porchlight_staging_is_prepare_only_and_not_canonical_write() -> None:
+    engine = PolicyEngine()
+    capability = engine.require_allowed("archive.stage_porchlight")
+    assert capability.effect is EffectClass.PREPARE
+    assert capability.default is Decision.ALLOW
+
+
 def test_gametable_keeps_views_and_local_turn_state_distinct() -> None:
     engine = PolicyEngine()
     assert engine.require_allowed("game.view").effect is EffectClass.PERCEIVE
