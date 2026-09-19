@@ -25,8 +25,9 @@ def _create(store: BrowseSessionStore):
 
 
 def _tamper(token: str) -> str:
-    replacement = "x" if token[-1] != "x" else "y"
-    return token[:-1] + replacement
+    payload, signature = token.split(".", 1)
+    replacement = "A" if signature[0] != "A" else "B"
+    return f"{payload}.{replacement}{signature[1:]}"
 
 
 def test_cursor_is_signed_expiring_and_operation_bound(tmp_path: Path) -> None:
@@ -98,7 +99,7 @@ def test_session_load_survives_a_second_store(tmp_path: Path) -> None:
 def test_session_store_persists_without_posix_fchmod(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delattr(browse.os, "fchmod")
+    monkeypatch.delattr(browse.os, "fchmod", raising=False)
     store = BrowseSessionStore(tmp_path, ttl_seconds=60, secret=b"x" * 32)
 
     session = _create(store)
