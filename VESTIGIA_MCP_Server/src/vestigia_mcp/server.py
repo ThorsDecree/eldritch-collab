@@ -32,6 +32,8 @@ from .policy import DEFAULT_CAPABILITIES, PolicyDenied, PolicyEngine
 from .porchlight import build_snapshot
 from .porchlight_share import PorchlightShareRequest, PorchlightShareService
 from .runtime_registry import RuntimeRegistry
+from .receipt_garden import ReceiptGarden
+from .sense_registry import SenseOrganRegistry
 
 
 T = TypeVar("T")
@@ -108,6 +110,8 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         default_text_max_bytes=settings.archive_text_max_bytes,
         default_media_max_bytes=settings.archive_media_max_bytes,
     )
+    sense_registry = SenseOrganRegistry()
+    receipt_garden = ReceiptGarden(settings.state_dir, settings.deployment_id)
     gametable = (
         GameTableStore(
             settings.gametable_state_dir or settings.state_dir / "gametable",
@@ -174,29 +178,32 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         try:
             result = operation()
         except (ArchiveError, AuditError, RuntimeBridgeError, GameTableError) as exc:
-            ledger.record(
+            event = ledger.record(
                 capability,
                 arguments,
                 "error",
                 request_id=request_id,
                 detail=type(exc).__name__,
             )
+            receipt_garden.record_audit_event(event)
             raise ToolError(str(exc)) from exc
         except Exception:
-            ledger.record(
+            event = ledger.record(
                 capability,
                 arguments,
                 "error",
                 request_id=request_id,
                 detail="unexpected_exception",
             )
+            receipt_garden.record_audit_event(event)
             raise
-        ledger.record(
+        event = ledger.record(
             capability,
             arguments,
             "ok",
             request_id=request_id,
         )
+        receipt_garden.record_audit_event(event)
         return result
 
     def browse_policy_scope(capability_name: str) -> str:
@@ -1614,6 +1621,51 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             )
 
     @server.tool(
+        name="sense.list",
+        title="List registered sense organs",
+        description=(
+            "Inspect bounded declarative perception contracts. This describes available organs; "
+            "it does not invoke observation."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def sense_list() -> dict[str, object]:
+        return guarded("sense.list", {}, sense_registry.list)
+
+    @server.tool(
+        name="sense.show",
+        title="Inspect a sense organ",
+        description=(
+            "Inspect one organ's modality, activation, consent, payload, retention, and semantic "
+            "boundaries without invoking it."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def sense_show(organ_id: str) -> dict[str, object]:
+        arguments = {"organ_id": organ_id}
+        return guarded("sense.show", arguments, lambda: sense_registry.show(organ_id))
+
+    @server.tool(
+        name="sense.can_perceive",
+        title="Check sense-organ scope",
+        description=(
+            "Check whether an explicitly invoked capture fits a registered organ's declared "
+            "consent and perception boundary."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def sense_can_perceive(
+        organ_id: str,
+        request: dict[str, Any],
+    ) -> dict[str, object]:
+        arguments = {"organ_id": organ_id, "request": request}
+        return guarded(
+            "sense.can_perceive",
+            arguments,
+            lambda: sense_registry.can_perceive(organ_id, request),
+        )
+
+    @server.tool(
         name="runtime.list",
         title="List connected Runtime houses",
         description=(
@@ -1791,6 +1843,24 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 outcome=outcome,
                 request_id=request_id,
             ),
+        )
+
+    @server.tool(
+        name="receipts.trace",
+        title="Trace MCP provenance edges",
+        description=(
+            "Inspect the MCP-owned Receipt Garden for one request ID. Results expose bounded "
+            "typed provenance edges and omissions; included evidence is not claimed to have "
+            "caused a response. Raw arguments and payloads are never returned."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def receipts_trace(request_id: str) -> dict[str, object]:
+        arguments = {"request_id": request_id}
+        return guarded(
+            "receipts.trace",
+            arguments,
+            lambda: receipt_garden.trace(request_id),
         )
 
     @server.tool(

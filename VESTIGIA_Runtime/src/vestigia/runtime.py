@@ -9,6 +9,7 @@ from .config import ResolvedConfig, load_config
 from .context import ContextAssembler
 from .curation import Curator
 from .db import ContinuityDB
+from .bell_observatory import BellObservatory
 from .home import ensure_v061_contract
 from .house_tools import HousePort, extract_action_envelopes
 from .images import ImageService
@@ -100,6 +101,7 @@ class CoreRuntime:
         ensure_v061_contract(self.home)
         self.db = ContinuityDB(self.home / "memory" / "continuity.db")
         self.db.initialize()
+        self.bell_observatory = BellObservatory(self.db, self.resident_id, self.room_id)
         self.memory = MemoryService(self.db, self.resident_id, self.room_id)
         self.curator = Curator(config, self.db)
         self.images = ImageService(config, self.db, fake=fake)
@@ -222,6 +224,15 @@ class CoreRuntime:
             model_route=model_route,
             turn_id=turn_id,
         )
+        bell_observatory_run_id: str | None = None
+        if message.interface == "bell":
+            bell_id = str(message.metadata.get("bell_id") or "").strip()
+            if bell_id:
+                bell_observatory_run_id = self.bell_observatory.start_run(
+                    turn_id=assembly.turn_id,
+                    bell_id=bell_id,
+                    context_receipt_path=assembly.receipt_path,
+                )
         messages = list(assembly.messages)
         # The editable runtime contract is context-budgeted and may be truncated,
         # especially on homes migrated from older releases where newer plaques were
@@ -328,6 +339,17 @@ class CoreRuntime:
                 "resident_control_receipts": resident_receipts,
             },
         )
+        if bell_observatory_run_id is not None:
+            self.bell_observatory.complete_run(
+                bell_observatory_run_id,
+                response_state="no_change" if bell_no_change else "completed",
+                curation_eligible=False if bell_no_change else None,
+                curation_suppression_reason=(
+                    "bell_no_change" if bell_no_change else None
+                ),
+                assistant_turn_id=assistant_turn,
+                response_hash=sha256_text(visible),
+            )
         proposal_ids: list[str] = []
         if (
             bool(self.config.get("memory.auto_extract_conservative_candidates", True))
@@ -356,6 +378,11 @@ class CoreRuntime:
                 "response_hash": sha256_text(visible),
                 "proposal_ids": proposal_ids,
                 **({"bell_outcome": bell_outcome} if bell_outcome else {}),
+                **(
+                    {"bell_observatory_run_id": bell_observatory_run_id}
+                    if bell_observatory_run_id
+                    else {}
+                ),
                 "house_tool_receipts": house_receipts,
                 "resident_control_receipts": resident_receipts,
             },

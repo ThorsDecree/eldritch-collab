@@ -176,6 +176,24 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Search paged literal text evidence inside a named read-only mount.",
     ),
     Capability(
+        "sense.list",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "List bounded declarative sense-organ manifests.",
+    ),
+    Capability(
+        "sense.show",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect one sense-organ manifest and its declared perception boundary.",
+    ),
+    Capability(
+        "sense.can_perceive",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Check whether an explicitly requested sense-organ capture fits its declared scope.",
+    ),
+    Capability(
         "game.profiles",
         EffectClass.PERCEIVE,
         Decision.ALLOW,
@@ -296,6 +314,12 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         EffectClass.PERCEIVE,
         Decision.ALLOW,
         "Read recent capability receipts without exposing raw tool arguments.",
+    ),
+    Capability(
+        "receipts.trace",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Trace bounded MCP provenance edges by request ID without exposing raw payloads.",
     ),
     Capability(
         "audit.show",
