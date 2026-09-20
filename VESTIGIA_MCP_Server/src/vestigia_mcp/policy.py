@@ -194,6 +194,42 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Check whether an explicitly requested sense-organ capture fits its declared scope.",
     ),
     Capability(
+        "lanternslide.status",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect the bounded Lanternslide catalog scan state without reading image payloads.",
+    ),
+    Capability(
+        "lanternslide.scan",
+        EffectClass.PREPARE,
+        Decision.ALLOW,
+        "Scan bounded Archive image metadata into an MCP-owned resumable Lanternslide catalog.",
+    ),
+    Capability(
+        "lanternslide.find",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Find cataloged images by literal path text without semantic image retrieval.",
+    ),
+    Capability(
+        "lanternslide.deal",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Return a deterministic bounded random deal from the Lanternslide catalog.",
+    ),
+    Capability(
+        "lanternslide.contact_sheet",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Build an in-memory PNG contact sheet from explicitly selected catalog image IDs.",
+    ),
+    Capability(
+        "lanternslide.stage_catalog",
+        EffectClass.PREPARE,
+        Decision.ALLOW,
+        "Stage the bounded Lanternslide JSON catalog through the canonical Archive proposal boundary.",
+    ),
+    Capability(
         "game.profiles",
         EffectClass.PERCEIVE,
         Decision.ALLOW,

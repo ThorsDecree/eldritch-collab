@@ -140,6 +140,28 @@ Chrome extension and loopback bridge. The resident’s explicit click is its con
 an atomic `Modules/Porchlight` text/receipt/optional-image bundle and returns hashes and paths
 without a promotion step. See `docs/PORCHLIGHT.md` for pairing and privacy behavior.
 
+### Lanternslide: explicit visual Archive cataloging
+
+Lanternslide is the Archive's first explicit visual sense organ. Its tools are:
+
+- `lanternslide.status`
+- `lanternslide.scan`
+- `lanternslide.find`
+- `lanternslide.deal`
+- `lanternslide.contact_sheet`
+- `lanternslide.stage_catalog`
+
+`lanternslide.scan` walks only passive PNG, JPEG, GIF, and WebP files beneath the configured
+source prefix (default `pics`). It stores bounded metadata and resumable state under
+`VESTIGIA_MCP_STATE_DIR/lanternslide/`; source images are never renamed, moved, deleted,
+captioned, deduplicated, or semantically searched. Image IDs are SHA-256 content IDs, so
+duplicate historical renders can be grouped without changing either source path.
+
+Deals are deterministic, seeded, and bounded to 16 images. Contact sheets are explicitly
+selected, in-memory PNG responses; they are not written to the Archive. Catalog export is a
+line-oriented JSON document and can be staged only through the existing directory-then-text
+Archive proposal flow. See `docs/LANTERNSLIDE.md`.
+
 Resources:
 
 - `vestigia://archive/live/manifest`
@@ -334,6 +356,24 @@ An empty prefix list disables both staging and promotion. Prefixes are path-segm
 granting `02_Journal` covers that directory, not similarly named siblings. The state directory
 must remain outside the live Archive. Text target parents must already exist; directory stages
 may propose missing descendants.
+
+### Optional Lanternslide visual catalog
+
+Lanternslide uses the live Archive only when it is configured. Its defaults are suitable for the
+historical render drawer:
+
+```text
+VESTIGIA_MCP_LANTERNSLIDE_SOURCE_PREFIX=pics
+VESTIGIA_MCP_LANTERNSLIDE_CATALOG_PATH=pics/Lanternslide/catalog.json
+VESTIGIA_MCP_LANTERNSLIDE_SCAN_BATCH_MAX=50
+VESTIGIA_MCP_LANTERNSLIDE_IMAGE_MAX_BYTES=25000000
+VESTIGIA_MCP_LANTERNSLIDE_CONTACT_SHEET_MAX_BYTES=4000000
+```
+
+The catalog path must remain inside the source prefix and end in `.json`. To stage the export,
+grant the source prefix in `VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES`; the first
+`lanternslide.stage_catalog` call proposes the missing `Lanternslide/` directory when needed.
+Promote that directory explicitly, then call the tool again to stage the catalog text.
 
 ### Optional Runtime linkage
 

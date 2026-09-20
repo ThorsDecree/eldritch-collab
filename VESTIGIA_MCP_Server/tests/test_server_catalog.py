@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from mcp import Client
+from PIL import Image
 
 from vestigia_mcp.config import Settings
 from vestigia_mcp.policy import DEFAULT_CAPABILITIES, Decision, EffectClass
@@ -40,6 +41,12 @@ EXPECTED_TOOLS = {
     "sense.list",
     "sense.show",
     "sense.can_perceive",
+    "lanternslide.status",
+    "lanternslide.scan",
+    "lanternslide.find",
+    "lanternslide.deal",
+    "lanternslide.contact_sheet",
+    "lanternslide.stage_catalog",
     "runtime.list",
     "runtime.status",
     "runtime.capabilities",
@@ -145,6 +152,8 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
                 "archive.stage_porchlight",
                 "archive.stage_directory",
                 "archive.stage_discard",
+                "lanternslide.scan",
+                "lanternslide.stage_catalog",
             }
             direct_writes = {"archive.share_porchlight"}
             canonical_writes = {"archive.promote", "archive.promote_directory"}
@@ -360,7 +369,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert identity_result.structured_content["archive"]["live"]["available"] is True
             assert (
                 identity_result.structured_content["capability_registry"]["capability_count"]
-                == 40
+                == 46
             )
 
             glance_result = await client.call_tool("house.glance", {})
@@ -374,7 +383,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert status_result.is_error is False
             assert status_result.structured_content is not None
             assert status_result.structured_content["server"]["version"] == "0.9.0.dev0"
-            assert status_result.structured_content["policy"]["capability_count"] == 40
+            assert status_result.structured_content["policy"]["capability_count"] == 46
             assert status_result.structured_content["runtime"]["configured"] is False
             assert status_result.structured_content["archive"]["promotion_configured"] is True
             assert (
@@ -510,6 +519,87 @@ def test_porchlight_stage_creates_latest_history_and_receipt_stages(tmp_path: Pa
                 "receipts",
             }
             assert all(item["status"] == "staged" for item in data["artifacts"])
+
+    asyncio.run(exercise())
+
+
+def test_wire_lanternslide_scans_deals_sheets_and_stages_catalog(tmp_path: Path) -> None:
+    live = tmp_path / "live"
+    (live / "pics").mkdir(parents=True)
+    for name, color in (("one.png", (255, 0, 0)), ("two.png", (0, 0, 255))):
+        image = Image.new("RGB", (24, 16), color)
+        image.save(live / "pics" / name, format="PNG")
+    settings = Settings(
+        live_archive_root=live,
+        snapshot_archive_root=None,
+        state_dir=tmp_path / "state",
+        deployment_id="lanternslide-wire",
+        archive_write_prefixes=("pics",),
+    )
+    server = create_server(settings)
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            scan = await client.call_tool("lanternslide.scan", {})
+            assert scan.is_error is False
+            assert scan.structured_content is not None
+            assert scan.structured_content["complete"] is True
+            assert scan.structured_content["indexed_total"] == 2
+            request_id = scan.structured_content["request_id"]
+
+            status = await client.call_tool("lanternslide.status", {})
+            assert status.is_error is False
+            assert status.structured_content["complete"] is True
+
+            found = await client.call_tool(
+                "lanternslide.find", {"query": "ONE.PNG"}
+            )
+            assert found.is_error is False
+            assert found.structured_content["entries"][0]["path"] == "pics/one.png"
+            deal = await client.call_tool(
+                "lanternslide.deal", {"count": 2, "seed": "wire-seed"}
+            )
+            assert deal.is_error is False
+            ids = deal.structured_content["image_ids"]
+            sheet = await client.call_tool(
+                "lanternslide.contact_sheet", {"image_ids": ids}
+            )
+            assert sheet.is_error is False
+            assert [item.type for item in sheet.content] == ["text", "image"]
+            assert sheet.content[1].mime_type == "image/png"
+
+            trace = await client.call_tool("receipts.trace", {"request_id": request_id})
+            assert trace.is_error is False
+            records = trace.structured_content["receipts"]
+            scan_receipt = next(
+                item
+                for item in records
+                if "raw_image_bytes" in item["omitted"]
+            )
+            assert scan_receipt["omitted"] == [
+                "raw_image_bytes",
+                "source_pixels",
+                "thumbnails",
+            ]
+
+            first_stage = await client.call_tool("lanternslide.stage_catalog", {})
+            assert first_stage.is_error is False
+            directory_stage = first_stage.structured_content["directory_stage"]
+            assert directory_stage["kind"] == "directory"
+            assert not (live / "pics" / "Lanternslide").exists()
+            promoted = await client.call_tool(
+                "archive.promote_directory",
+                {
+                    "stage_id": directory_stage["stage_id"],
+                    "proposal_sha256": directory_stage["proposal_sha256"],
+                },
+            )
+            assert promoted.is_error is False
+            second_stage = await client.call_tool("lanternslide.stage_catalog", {})
+            assert second_stage.is_error is False
+            stage = second_stage.structured_content["stage"]
+            assert stage["status"] == "staged"
+            assert not (live / "pics" / "Lanternslide" / "catalog.json").exists()
 
     asyncio.run(exercise())
 

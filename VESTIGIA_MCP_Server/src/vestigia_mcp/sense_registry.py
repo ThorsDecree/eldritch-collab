@@ -132,11 +132,62 @@ def _porchlight_manifest() -> SenseOrganManifest:
     )
 
 
+def _lanternslide_manifest() -> SenseOrganManifest:
+    return SenseOrganManifest.from_mapping(
+        {
+            "organ_id": "lanternslide",
+            "schema_version": "vestigia.sense-organ.v0.1",
+            "version": "0.1.0",
+            "display_name": "Lanternslide",
+            "modality": "archive_image",
+            "activation_topology": "explicit_invocation",
+            "invocation_surface": ["mcp_tool"],
+            "consent_basis": "explicit_user_invocation",
+            "perception_scope": {
+                "source": "configured_live_archive",
+                "formats": ["png", "jpeg", "gif", "webp"],
+                "path_prefix": "configured_at_runtime",
+                "operations": ["scan_metadata", "find_literal", "deal", "contact_sheet"],
+            },
+            "allowed_payloads": [
+                "image_metadata",
+                "explicitly_selected_contact_sheet",
+            ],
+            "prohibited_payloads": [
+                "raw_image_bytes",
+                "source_pixels",
+                "automatic_caption",
+                "identity_inference",
+                "preference_inference",
+                "semantic_image_search",
+            ],
+            "retention": {
+                "default": "mcp_owned_local_catalog",
+                "source_of_truth": "configured_live_archive",
+            },
+            "destinations": ["mcp_owned_local_catalog", "mcp_caller_response"],
+            "limits": {
+                "scan_batch_configurable": True,
+                "image_bytes_configurable": True,
+                "contact_sheet_bytes_configurable": True,
+                "contact_sheet_max_images": 16,
+            },
+            "receipt_schema": "vestigia.sense-receipt.v0.1",
+            "semantic_policy": {
+                "automatic_retrieval": "none",
+                "path_query": "literal_case_insensitive",
+                "inclusion_does_not_imply_causality": True,
+            },
+            "status": "active",
+        }
+    )
+
+
 class SenseOrganRegistry:
     """Small deterministic registry for declarative, bounded perception contracts."""
 
     def __init__(self, manifests: tuple[SenseOrganManifest, ...] | None = None):
-        entries = manifests or (_porchlight_manifest(),)
+        entries = manifests or (_lanternslide_manifest(), _porchlight_manifest())
         self._organs = {manifest.organ_id: manifest for manifest in entries}
         if len(self._organs) != len(entries):
             raise SenseRegistryError("Duplicate sense-organ ID")

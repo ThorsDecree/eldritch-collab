@@ -6,7 +6,7 @@ import json
 import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, TypeVar
 
 from mcp.server import MCPServer
@@ -27,6 +27,7 @@ from .health import (
 )
 from .gametable import GameTableError, GameTableStore
 from .identity import system_identity as build_system_identity
+from .lanternslide import LanternslideService
 from .mounts import MountRegistry
 from .policy import DEFAULT_CAPABILITIES, PolicyDenied, PolicyEngine
 from .porchlight import build_snapshot
@@ -163,6 +164,24 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         read_porchlight_latest,
         screenshot_max_bytes=settings.porchlight_screenshot_max_bytes,
     )
+    lanternslide = (
+        LanternslideService(
+            source_for("live"),
+            settings.state_dir,
+            source_prefix=settings.lanternslide_source_prefix,
+            catalog_path=settings.lanternslide_catalog_path,
+            scan_batch_max=settings.lanternslide_scan_batch_max,
+            image_max_bytes=settings.lanternslide_image_max_bytes,
+            contact_sheet_max_bytes=settings.lanternslide_contact_sheet_max_bytes,
+        )
+        if settings.live_archive_root is not None
+        else None
+    )
+
+    def lanternslide_service() -> LanternslideService:
+        if lanternslide is None:
+            raise ArchiveError("Lanternslide requires a configured live Archive")
+        return lanternslide
 
     def guarded(
         capability_name: str,
@@ -1663,6 +1682,220 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             "sense.can_perceive",
             arguments,
             lambda: sense_registry.can_perceive(organ_id, request),
+        )
+
+    @server.tool(
+        name="lanternslide.status",
+        title="Inspect Lanternslide catalog state",
+        description=(
+            "Inspect bounded Lanternslide scan progress and catalog digests. This does not read "
+            "image payloads and never performs automatic visual retrieval."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def lanternslide_status() -> dict[str, object]:
+        return guarded("lanternslide.status", {}, lambda: lanternslide_service().status())
+
+    @server.tool(
+        name="lanternslide.scan",
+        title="Scan Archive images into Lanternslide",
+        description=(
+            "Explicitly scan a bounded batch of passive PNG, JPEG, GIF, and WebP files under "
+            "the configured source prefix. Resume an incomplete scan with its scan_id. The "
+            "source images remain immutable; only an MCP-owned metadata catalog changes."
+        ),
+        annotations=LOCAL_WRITE_ANNOTATIONS,
+    )
+    def lanternslide_scan(scan_id: str | None = None) -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        arguments = {"scan_id": scan_id}
+
+        def operation() -> dict[str, object]:
+            result = lanternslide_service().scan(scan_id=scan_id)
+            receipt_garden.append(
+                request_id=request_id,
+                operation="lanternslide.scan",
+                edges=[
+                    {
+                        "type": "observed",
+                        "source": "configured_live_archive",
+                        "target": settings.lanternslide_source_prefix or ".",
+                        "evidence_scope": "bounded_image_metadata",
+                    },
+                    {
+                        "type": "stored",
+                        "source": "lanternslide.scan",
+                        "target": "mcp_owned_local_catalog",
+                        "evidence_scope": "metadata_only",
+                    },
+                    {
+                        "type": "omitted",
+                        "source": "lanternslide.scan",
+                        "target": "receipt_and_catalog",
+                        "evidence_scope": "raw_image_bytes_source_pixels_thumbnails",
+                    },
+                ],
+                omitted=("raw_image_bytes", "source_pixels", "thumbnails"),
+                safe_summary={
+                    "scan_id": result["scan_id"],
+                    "complete": result["complete"],
+                    "candidate_total": result["candidate_total"],
+                    "indexed_total": result["indexed_total"],
+                    "omitted_total": result["omitted_total"],
+                    "candidate_manifest_sha256": result["candidate_manifest_sha256"],
+                    "catalog_sha256": result["catalog_sha256"],
+                },
+            )
+            return {
+                "request_id": request_id,
+                "scan_id": result["scan_id"],
+                "complete": result["complete"],
+                "candidate_total": result["candidate_total"],
+                "next_offset": result["next_offset"],
+                "indexed_total": result["indexed_total"],
+                "omitted_total": result["omitted_total"],
+                "candidate_manifest_sha256": result["candidate_manifest_sha256"],
+                "catalog_sha256": result["catalog_sha256"],
+            }
+
+        return guarded(
+            "lanternslide.scan",
+            arguments,
+            operation,
+            request_id=request_id,
+        )
+
+    @server.tool(
+        name="lanternslide.find",
+        title="Find Lanternslide images",
+        description=(
+            "Find complete-catalog image metadata by literal, case-insensitive path text. "
+            "This is not semantic visual search."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def lanternslide_find(query: str, unique_only: bool = False) -> dict[str, object]:
+        arguments = {"query": query, "unique_only": unique_only}
+        return guarded(
+            "lanternslide.find",
+            arguments,
+            lambda: lanternslide_service().find(query, unique_only=unique_only),
+        )
+
+    @server.tool(
+        name="lanternslide.deal",
+        title="Deal Lanternslide images",
+        description=(
+            "Return a deterministic bounded random deal from the complete metadata catalog. "
+            "The seed is explicit and no image bytes are returned."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def lanternslide_deal(
+        count: int,
+        seed: str,
+        unique_only: bool = True,
+    ) -> dict[str, object]:
+        arguments = {"count": count, "seed": seed, "unique_only": unique_only}
+        return guarded(
+            "lanternslide.deal",
+            arguments,
+            lambda: lanternslide_service().deal(count, seed, unique_only=unique_only),
+        )
+
+    @server.tool(
+        name="lanternslide.contact_sheet",
+        title="Build a Lanternslide contact sheet",
+        description=(
+            "Build an in-memory PNG contact sheet for up to 16 explicitly selected image IDs. "
+            "The PNG is returned in the response and is not written to the Archive."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def lanternslide_contact_sheet(
+        image_ids: list[str],
+    ) -> list[TextContent | ImageContent]:
+        arguments = {"image_ids": image_ids}
+
+        def operation() -> list[TextContent | ImageContent]:
+            sheet = lanternslide_service().contact_sheet(image_ids)
+            metadata = {
+                "image_ids": sheet["image_ids"],
+                "width": sheet["width"],
+                "height": sheet["height"],
+                "mime_type": sheet["mime_type"],
+                "size": len(sheet["data"]),
+                "retention": "response_only",
+            }
+            return [
+                TextContent(text=json.dumps(metadata, ensure_ascii=False, sort_keys=True)),
+                ImageContent(
+                    data=base64.b64encode(sheet["data"]).decode("ascii"),
+                    mimeType="image/png",
+                ),
+            ]
+
+        return guarded("lanternslide.contact_sheet", arguments, operation)
+
+    @server.tool(
+        name="lanternslide.stage_catalog",
+        title="Stage the Lanternslide catalog",
+        description=(
+            "Stage the complete Lanternslide JSONL metadata catalog through the canonical Archive "
+            "two-phase boundary. If its parent directory is absent, this first returns an "
+            "explicit directory proposal; promote that proposal, then call this tool again."
+        ),
+        annotations=LOCAL_WRITE_ANNOTATIONS,
+    )
+    def lanternslide_stage_catalog(reason: str = "") -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        arguments = {"reason": reason}
+
+        def operation() -> dict[str, object]:
+            service = lanternslide_service()
+            content = service.catalog_export(max_bytes=settings.archive_write_max_bytes)
+            catalog_path = settings.lanternslide_catalog_path
+            parent = PurePosixPath(catalog_path).parent
+            live_root = settings.live_archive_root
+            assert live_root is not None
+            parent_path = live_root.joinpath(*parent.parts)
+            if not parent_path.is_dir():
+                directory_stage = archive_mutations.stage_directory(
+                    parent.as_posix(),
+                    reason=reason or "Prepare Lanternslide catalog directory",
+                )
+                return {
+                    "request_id": request_id,
+                    "catalog_path": catalog_path,
+                    "directory_stage": directory_stage,
+                    "canonical_changed": False,
+                    "next_step": (
+                        "Promote directory_stage with archive.promote_directory, then call "
+                        "lanternslide.stage_catalog again."
+                    ),
+                }
+            live = source_for("live")
+            current = live.entry(catalog_path)
+            stage = archive_mutations.stage_text(
+                catalog_path,
+                content,
+                expected_base_sha256=current.sha256 if current is not None else "absent",
+                reason=reason or "Stage Lanternslide metadata catalog",
+            )
+            return {
+                "request_id": request_id,
+                "catalog_path": catalog_path,
+                "base_catalog_sha256": current.sha256 if current is not None else None,
+                "catalog_bytes": len(content.encode("utf-8")),
+                "stage": stage,
+                "canonical_changed": False,
+            }
+
+        return guarded(
+            "lanternslide.stage_catalog",
+            arguments,
+            operation,
+            request_id=request_id,
         )
 
     @server.tool(

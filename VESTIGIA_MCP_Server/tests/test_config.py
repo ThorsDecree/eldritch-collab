@@ -74,3 +74,35 @@ def test_porchlight_bridge_rejects_non_loopback_env(monkeypatch) -> None:
     monkeypatch.setenv("VESTIGIA_MCP_PORCHLIGHT_BRIDGE_HOST", "0.0.0.0")
     with pytest.raises(ValueError, match="loopback"):
         Settings.from_env()
+
+
+def test_lanternslide_settings_are_bounded_and_source_scoped(monkeypatch) -> None:
+    monkeypatch.setenv("VESTIGIA_MCP_LANTERNSLIDE_SOURCE_PREFIX", "images")
+    monkeypatch.setenv(
+        "VESTIGIA_MCP_LANTERNSLIDE_CATALOG_PATH",
+        "images/Lanternslide/catalog.json",
+    )
+    monkeypatch.setenv("VESTIGIA_MCP_LANTERNSLIDE_SCAN_BATCH_MAX", "17")
+    monkeypatch.setenv("VESTIGIA_MCP_LANTERNSLIDE_IMAGE_MAX_BYTES", "7654321")
+    monkeypatch.setenv(
+        "VESTIGIA_MCP_LANTERNSLIDE_CONTACT_SHEET_MAX_BYTES", "2345678"
+    )
+
+    settings = Settings.from_env()
+
+    assert settings.lanternslide_source_prefix == "images"
+    assert settings.lanternslide_catalog_path == "images/Lanternslide/catalog.json"
+    assert settings.lanternslide_scan_batch_max == 17
+    assert settings.lanternslide_image_max_bytes == 7654321
+    assert settings.lanternslide_contact_sheet_max_bytes == 2345678
+
+
+def test_lanternslide_catalog_must_be_json_inside_source_prefix(monkeypatch) -> None:
+    monkeypatch.setenv("VESTIGIA_MCP_LANTERNSLIDE_SOURCE_PREFIX", "pics")
+    monkeypatch.setenv("VESTIGIA_MCP_LANTERNSLIDE_CATALOG_PATH", "other/catalog.json")
+    with pytest.raises(ValueError, match="source prefix"):
+        Settings.from_env()
+
+    monkeypatch.setenv("VESTIGIA_MCP_LANTERNSLIDE_CATALOG_PATH", "pics/catalog.txt")
+    with pytest.raises(ValueError, match=r"\.json"):
+        Settings.from_env()
