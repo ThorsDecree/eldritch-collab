@@ -6,6 +6,7 @@ import {
 const DEFAULTS = {
   bridgeUrl: "http://127.0.0.1:8765",
   extensionOrigin: "chrome-extension://porchlight",
+  token: "",
 };
 
 chrome.runtime.onInstalled.addListener(() => {
