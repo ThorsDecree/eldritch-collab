@@ -52,6 +52,15 @@ def _path_prefix_allowlist(name: str) -> tuple[str, ...]:
     return tuple(sorted(values))
 
 
+def _bridge_host_env() -> str:
+    host = os.getenv("VESTIGIA_MCP_PORCHLIGHT_BRIDGE_HOST", "127.0.0.1").strip().lower()
+    if host == "localhost":
+        return "127.0.0.1"
+    if host != "127.0.0.1":
+        raise ValueError("VESTIGIA MCP Porchlight bridge host must be loopback")
+    return host
+
+
 @dataclass(frozen=True)
 class Settings:
     live_archive_root: Path | None
@@ -67,6 +76,12 @@ class Settings:
     runtime_write_actions: tuple[str, ...] = ()
     archive_write_prefixes: tuple[str, ...] = ()
     archive_write_max_bytes: int = 1_000_000
+    porchlight_screenshot_max_bytes: int = 2_000_000
+    porchlight_bridge_host: str = "127.0.0.1"
+    porchlight_bridge_port: int = 8765
+    porchlight_bridge_token_path: Path | None = None
+    porchlight_bridge_extension_origin: str = "chrome-extension://porchlight"
+    porchlight_bridge_max_body_bytes: int = 1_200_000
     mounts_file: Path | None = None
     runtimes_file: Path | None = None
     gametable_enabled: bool = False
@@ -112,6 +127,25 @@ class Settings:
             ),
             archive_write_max_bytes=_positive_int_env(
                 "VESTIGIA_MCP_ARCHIVE_WRITE_MAX_BYTES", 1_000_000
+            ),
+            porchlight_screenshot_max_bytes=_positive_int_env(
+                "VESTIGIA_MCP_PORCHLIGHT_SCREENSHOT_MAX_BYTES", 2_000_000
+            ),
+            porchlight_bridge_host=_bridge_host_env(),
+            porchlight_bridge_port=_positive_int_env(
+                "VESTIGIA_MCP_PORCHLIGHT_BRIDGE_PORT", 8765
+            ),
+            porchlight_bridge_token_path=_optional_path(
+                "VESTIGIA_MCP_PORCHLIGHT_BRIDGE_TOKEN_PATH"
+            )
+            or state_dir / "porchlight-token",
+            porchlight_bridge_extension_origin=os.getenv(
+                "VESTIGIA_MCP_PORCHLIGHT_BRIDGE_EXTENSION_ORIGIN",
+                "chrome-extension://porchlight",
+            ).strip()
+            or "chrome-extension://porchlight",
+            porchlight_bridge_max_body_bytes=_positive_int_env(
+                "VESTIGIA_MCP_PORCHLIGHT_BRIDGE_MAX_BODY_BYTES", 1_200_000
             ),
             mounts_file=_optional_path("VESTIGIA_MCP_MOUNTS_FILE"),
             runtimes_file=_optional_path("VESTIGIA_MCP_RUNTIMES_FILE"),

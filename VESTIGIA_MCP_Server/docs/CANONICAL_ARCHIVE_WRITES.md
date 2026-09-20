@@ -22,6 +22,16 @@ archive.stage_directory
 Neither staging nor inspection changes canonical content. Promotion is the only canonical
 mutation in this slice.
 
+## Explicit Porchlight direct share
+
+`archive.share_porchlight` is a separate direct-write capability for the local Porchlight bridge.
+The resident’s explicit browser action is the consent event, so it does not create a second
+promotion stage. It still requires the deployment’s `Modules/Porchlight` prefix grant and uses the
+same path normalization, bounded payload, optimistic-base, audit, hash, and atomic replacement
+invariants. Text, receipt, and optional PNG screenshot are validated and committed as one bundle;
+failed validation or replacement rolls back the bundle. This does not make arbitrary direct writes
+available and does not change the staged `archive.stage_porchlight` contract.
+
 ## Deployment grant
 
 Promotion authority comes from an ordinary process environment variable owned by the MCP
@@ -99,11 +109,11 @@ components in reverse order wherever they remain empty. A successful retry is id
 
 ## Deliberate exclusions
 
-This first canonical lane does not provide:
+The staged canonical lane does not provide:
 
-- direct writes that bypass a stage;
+- arbitrary direct writes that bypass a stage;
 - delete or move;
-- image, binary, or SVG writes;
+- image, binary, or SVG writes outside the bounded Porchlight PNG bundle;
 - snapshot mutation;
 - arbitrary filesystem access;
 - Git staging, commits, pushes, or releases;

@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Porchlight",
+  "version": "0.1.0",
+  "description": "Explicitly share readable browser context with a local VESTIGIA Porchlight bridge.",
+  "permissions": ["activeTab", "scripting", "storage", "tabs", "contextMenus"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": { "service_worker": "service_worker.js", "type": "module" },
+  "action": { "default_title": "Porchlight", "default_popup": "popup.html" },
+  "options_page": "options.html"
+}

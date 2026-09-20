@@ -8,6 +8,7 @@ import tempfile
 import threading
 import uuid
 from datetime import UTC, datetime
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -17,6 +18,16 @@ from .adapters.archive import ArchiveError, TEXT_SUFFIXES, normalize_relative_pa
 STAGE_SCHEMA_VERSION = "vestigia.archive-stage.v0.2"
 LEGACY_STAGE_SCHEMA_VERSION = "vestigia.archive-stage.v0.1"
 _STAGE_ID = re.compile(r"archive_stage_[0-9a-f]{32}\Z")
+
+
+@dataclass(frozen=True)
+class BundleEntry:
+    """One bounded byte payload in an all-or-none canonical write."""
+
+    path: str
+    content: bytes
+    kind: str = "text"
+    expected_base_sha256: str | None = None
 
 
 def _sha256(data: bytes) -> str:
@@ -91,6 +102,148 @@ class ArchiveMutationStore:
             "direct_write_available": False,
             "error": error,
         }
+
+    def share_bundle(
+        self,
+        entries: tuple[BundleEntry, ...] | list[BundleEntry],
+        *,
+        expected_base_sha256_by_path: dict[str, str] | None = None,
+        reason: str = "",
+        audit_metadata: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Write a validated set of Archive files as one direct-share bundle."""
+        if not entries:
+            raise ArchiveError("Archive share bundle must contain at least one entry")
+        if len(reason) > 1000:
+            raise ArchiveError("Share reason must be at most 1000 characters")
+        if audit_metadata is not None and not isinstance(audit_metadata, dict):
+            raise ArchiveError("Share audit metadata must be an object")
+
+        expected_by_path = {
+            normalize_relative_path(path): value
+            for path, value in (expected_base_sha256_by_path or {}).items()
+        }
+        with self._lock:
+            prepared: list[dict[str, object]] = []
+            seen: set[str] = set()
+            for entry in entries:
+                if not isinstance(entry, BundleEntry):
+                    raise ArchiveError("Archive share bundle entries are invalid")
+                normalized, target = self._bundle_target(entry.path, entry.kind)
+                if normalized in seen:
+                    raise ArchiveError("Archive share bundle contains duplicate paths")
+                seen.add(normalized)
+                data = bytes(entry.content)
+                if not data:
+                    raise ArchiveError("Archive share bundle entries must not be empty")
+                if len(data) > self._max_bytes:
+                    raise ArchiveError(
+                        f"Archive share entry exceeds byte ceiling ({len(data)} > {self._max_bytes})"
+                    )
+                if entry.kind in {"text", "json"}:
+                    try:
+                        text = data.decode("utf-8")
+                    except UnicodeDecodeError as exc:
+                        raise ArchiveError(
+                            "Archive text bundle entries must be valid UTF-8"
+                        ) from exc
+                    if "\x00" in text:
+                        raise ArchiveError(
+                            "Archive text bundle entries must not contain NUL characters"
+                        )
+                if entry.kind == "png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                    raise ArchiveError(
+                        "Archive PNG bundle entries must have a valid PNG signature"
+                    )
+
+                current_bytes = self._read_bounded_bytes(target, allow_binary=True)
+                current_sha = _sha256(current_bytes) if current_bytes is not None else None
+                expected = expected_by_path.get(normalized, entry.expected_base_sha256)
+                normalized_expected = self._normalize_expected_hash(expected)
+                if normalized_expected is not None:
+                    expected_sha = None if normalized_expected == "absent" else normalized_expected
+                    if current_sha != expected_sha:
+                        raise ArchiveError(
+                            "Archive base hash does not match expected_base_sha256"
+                        )
+                content_sha = _sha256(data)
+                prepared.append(
+                    {
+                        "path": normalized,
+                        "target": target,
+                        "content": data,
+                        "previous_bytes": current_bytes,
+                        "kind": entry.kind,
+                        "sha256": content_sha,
+                        "size": len(data),
+                        "operation": (
+                            "unchanged"
+                            if current_sha == content_sha
+                            else "replace" if current_sha is not None else "create"
+                        ),
+                        "previous_sha256": current_sha,
+                    }
+                )
+
+            changed = [item for item in prepared if item["operation"] != "unchanged"]
+            if not changed:
+                return {
+                    "canonical_changed": False,
+                    "unchanged": True,
+                    "atomic_bundle": True,
+                    "rollback_on_failure": True,
+                    "reason": reason.strip(),
+                    "audit_metadata": dict(audit_metadata or {}),
+                    "entries": [self._public_bundle_entry(item) for item in prepared],
+                }
+
+            temporaries: list[tuple[Path, Path]] = []
+            created_directories: list[Path] = []
+            replaced: list[dict[str, object]] = []
+            try:
+                for item in changed:
+                    target = item["target"]
+                    assert isinstance(target, Path)
+                    created_directories.extend(self._ensure_bundle_parent(target))
+                for item in changed:
+                    target = item["target"]
+                    assert isinstance(target, Path)
+                    temporary = self._write_bundle_temp(target, item["content"])
+                    temporaries.append((temporary, target))
+                for temporary, target in temporaries:
+                    os.replace(temporary, target)
+                    replaced.append(
+                        next(item for item in changed if item["target"] == target)
+                    )
+            except Exception as exc:
+                for temporary, _ in temporaries:
+                    temporary.unlink(missing_ok=True)
+                for item in reversed(replaced):
+                    target = item["target"]
+                    assert isinstance(target, Path)
+                    previous = item["previous_bytes"]
+                    if previous is None:
+                        target.unlink(missing_ok=True)
+                    else:
+                        self._atomic_write(target, previous)
+                for directory in reversed(created_directories):
+                    try:
+                        directory.rmdir()
+                    except OSError:
+                        pass
+                raise ArchiveError(
+                    "Unable to commit Archive share bundle; changes rolled back"
+                ) from exc
+
+            return {
+                "canonical_changed": True,
+                "unchanged": False,
+                "atomic_bundle": True,
+                "rollback_on_failure": True,
+                "reason": reason.strip(),
+                "audit_metadata": dict(audit_metadata or {}),
+                "entries": [self._public_bundle_entry(item) for item in prepared],
+            }
 
     def stage_text(
         self,
@@ -437,6 +590,52 @@ class ArchiveMutationStore:
             raise ArchiveError("Archive target is not a regular file")
         return normalized, target
 
+    def _ensure_bundle_parent(self, target: Path) -> list[Path]:
+        root = self._root()
+        missing: list[Path] = []
+        cursor = target.parent
+        while cursor != root:
+            if cursor.exists():
+                if cursor.is_symlink() or not cursor.is_dir():
+                    raise ArchiveError("Archive bundle parent is not a regular directory")
+                break
+            missing.append(cursor)
+            cursor = cursor.parent
+        created: list[Path] = []
+        for directory in reversed(missing):
+            directory.mkdir()
+            created.append(directory)
+        return created
+
+    def _bundle_target(self, path: str, kind: str) -> tuple[str, Path]:
+        if kind not in {"text", "json", "png"}:
+            raise ArchiveError("Archive share entry kind is unsupported")
+        normalized = normalize_relative_path(path)
+        self._validate_path_components(normalized)
+        suffix = PurePosixPath(normalized).suffix.lower()
+        if kind in {"text", "json"} and suffix not in TEXT_SUFFIXES:
+            raise ArchiveError("Archive text bundle entries require a text-like suffix")
+        if kind == "png" and suffix != ".png":
+            raise ArchiveError("Archive PNG bundle entries require a .png suffix")
+        self._require_write_prefix(normalized)
+
+        root = self._root()
+        target = root.joinpath(*PurePosixPath(normalized).parts)
+        cursor = root
+        for part in PurePosixPath(normalized).parts[:-1]:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise ArchiveError("Symlink directories are not writable Archive parents")
+        try:
+            target.parent.resolve(strict=False).relative_to(root)
+        except ValueError as exc:
+            raise ArchiveError("Resolved Archive target escaped the live root") from exc
+        if target.is_symlink():
+            raise ArchiveError("Symlink Archive targets are not writable")
+        if target.exists() and not target.is_file():
+            raise ArchiveError("Archive target is not a regular file")
+        return normalized, target
+
     def _directory_target(self, path: str) -> Path:
         normalized = normalize_relative_path(path)
         self._validate_path_components(normalized)
@@ -509,6 +708,55 @@ class ArchiveMutationStore:
         except UnicodeDecodeError as exc:
             raise ArchiveError("Existing Archive target is not valid UTF-8 text") from exc
         return _sha256(data)
+
+    def _read_bounded_bytes(self, target: Path, *, allow_binary: bool) -> bytes | None:
+        if not target.exists():
+            return None
+        size = target.stat().st_size
+        if size > self._max_bytes:
+            raise ArchiveError(
+                f"Existing Archive target exceeds write byte ceiling ({size} > {self._max_bytes})"
+            )
+        data = target.read_bytes()
+        if not allow_binary:
+            try:
+                data.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ArchiveError("Existing Archive target is not valid UTF-8 text") from exc
+        return data
+
+    @staticmethod
+    def _public_bundle_entry(item: dict[str, object]) -> dict[str, object]:
+        return {
+            "path": item["path"],
+            "kind": item["kind"],
+            "size": item["size"],
+            "sha256": item["sha256"],
+            "operation": item["operation"],
+            "previous_sha256": item["previous_sha256"],
+        }
+
+    @staticmethod
+    def _write_bundle_temp(target: Path, data: bytes) -> Path:
+        mode = target.stat().st_mode & 0o777 if target.exists() else 0o644
+        handle = tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        )
+        temporary = Path(handle.name)
+        try:
+            with handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary, mode)
+            return temporary
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
 
     def _record_path(self, stage_id: str) -> Path:
         if not _STAGE_ID.fullmatch(stage_id):

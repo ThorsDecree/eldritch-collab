@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from vestigia_mcp.config import Settings
 
 
@@ -14,6 +16,7 @@ def test_media_ceiling_and_runtime_write_grants_are_explicit_env(monkeypatch) ->
         " 02_Journal,Residents/Liora,02_Journal ",
     )
     monkeypatch.setenv("VESTIGIA_MCP_ARCHIVE_WRITE_MAX_BYTES", "54321")
+    monkeypatch.setenv("VESTIGIA_MCP_PORCHLIGHT_SCREENSHOT_MAX_BYTES", "65432")
     monkeypatch.setenv("VESTIGIA_MCP_MOUNTS_FILE", "/tmp/vestigia-mounts.json")
     monkeypatch.setenv("VESTIGIA_MCP_RUNTIMES_FILE", "/tmp/vestigia-runtimes.json")
     monkeypatch.setenv("VESTIGIA_MCP_GAMETABLE_ENABLED", "yes")
@@ -29,6 +32,7 @@ def test_media_ceiling_and_runtime_write_grants_are_explicit_env(monkeypatch) ->
     )
     assert settings.archive_write_prefixes == ("02_Journal", "Residents/Liora")
     assert settings.archive_write_max_bytes == 54321
+    assert settings.porchlight_screenshot_max_bytes == 65432
     assert settings.mounts_file == Path("/tmp/vestigia-mounts.json")
     assert settings.runtimes_file == Path("/tmp/vestigia-runtimes.json")
     assert settings.gametable_enabled is True
@@ -43,3 +47,30 @@ def test_runtime_write_grants_default_to_empty(monkeypatch) -> None:
     assert settings.runtime_write_actions == ()
     assert settings.archive_write_prefixes == ()
     assert settings.gametable_enabled is False
+
+
+def test_porchlight_bridge_settings_are_bounded_and_explicit(monkeypatch) -> None:
+    monkeypatch.setenv("VESTIGIA_MCP_PORCHLIGHT_BRIDGE_HOST", "127.0.0.1")
+    monkeypatch.setenv("VESTIGIA_MCP_PORCHLIGHT_BRIDGE_PORT", "9123")
+    monkeypatch.setenv(
+        "VESTIGIA_MCP_PORCHLIGHT_BRIDGE_TOKEN_PATH", "/tmp/porchlight-token"
+    )
+    monkeypatch.setenv(
+        "VESTIGIA_MCP_PORCHLIGHT_BRIDGE_EXTENSION_ORIGIN",
+        "chrome-extension://porchlight",
+    )
+    monkeypatch.setenv("VESTIGIA_MCP_PORCHLIGHT_BRIDGE_MAX_BODY_BYTES", "123456")
+
+    settings = Settings.from_env()
+
+    assert settings.porchlight_bridge_host == "127.0.0.1"
+    assert settings.porchlight_bridge_port == 9123
+    assert settings.porchlight_bridge_token_path == Path("/tmp/porchlight-token")
+    assert settings.porchlight_bridge_extension_origin == "chrome-extension://porchlight"
+    assert settings.porchlight_bridge_max_body_bytes == 123456
+
+
+def test_porchlight_bridge_rejects_non_loopback_env(monkeypatch) -> None:
+    monkeypatch.setenv("VESTIGIA_MCP_PORCHLIGHT_BRIDGE_HOST", "0.0.0.0")
+    with pytest.raises(ValueError, match="loopback"):
+        Settings.from_env()

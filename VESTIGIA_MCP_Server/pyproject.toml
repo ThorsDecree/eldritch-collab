@@ -34,6 +34,8 @@ dev = [
 
 [project.scripts]
 vestigia-mcp = "vestigia_mcp.cli:main"
+run-porchlight-bridge = "vestigia_mcp.cli:porchlight_bridge_main"
+pair-porchlight = "vestigia_mcp.cli:porchlight_pair_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

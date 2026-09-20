@@ -7,6 +7,7 @@ from mcp import Client
 
 from vestigia_mcp.config import Settings
 from vestigia_mcp.policy import DEFAULT_CAPABILITIES, Decision, EffectClass
+from vestigia_mcp.porchlight import build_snapshot
 from vestigia_mcp.server import create_server
 
 
@@ -23,6 +24,8 @@ EXPECTED_TOOLS = {
     "archive.health",
     "archive.write_capabilities",
     "archive.stage_text",
+    "archive.stage_porchlight",
+    "archive.share_porchlight",
     "archive.stage_directory",
     "archive.stage_list",
     "archive.stage_inspect",
@@ -135,11 +138,13 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             local_writes = {
                 "runtime.write",
                 "archive.stage_text",
+                "archive.stage_porchlight",
                 "archive.stage_directory",
                 "archive.stage_discard",
             }
+            direct_writes = {"archive.share_porchlight"}
             canonical_writes = {"archive.promote", "archive.promote_directory"}
-            for name in EXPECTED_TOOLS - local_writes - canonical_writes:
+            for name in EXPECTED_TOOLS - local_writes - direct_writes - canonical_writes:
                 annotations = tools[name].annotations
                 assert annotations is not None
                 assert annotations.read_only_hint is True
@@ -154,6 +159,14 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
                 assert write_annotations.destructive_hint is False
                 assert write_annotations.open_world_hint is False
                 assert write_annotations.idempotent_hint is False
+
+            for name in direct_writes:
+                write_annotations = tools[name].annotations
+                assert write_annotations is not None
+                assert write_annotations.read_only_hint is False
+                assert write_annotations.destructive_hint is True
+                assert write_annotations.open_world_hint is False
+                assert write_annotations.idempotent_hint is True
 
             for name in canonical_writes:
                 promote_annotations = tools[name].annotations
@@ -343,7 +356,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert identity_result.structured_content["archive"]["live"]["available"] is True
             assert (
                 identity_result.structured_content["capability_registry"]["capability_count"]
-                == 34
+                == 36
             )
 
             glance_result = await client.call_tool("house.glance", {})
@@ -357,7 +370,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert status_result.is_error is False
             assert status_result.structured_content is not None
             assert status_result.structured_content["server"]["version"] == "0.9.0.dev0"
-            assert status_result.structured_content["policy"]["capability_count"] == 34
+            assert status_result.structured_content["policy"]["capability_count"] == 36
             assert status_result.structured_content["runtime"]["configured"] is False
             assert status_result.structured_content["archive"]["promotion_configured"] is True
             assert (
@@ -451,6 +464,97 @@ def test_archive_paging_server_contract_and_byte_capability(tmp_path: Path) -> N
     assert len(capabilities) == 1
     assert capabilities[0].effect is EffectClass.PERCEIVE
     assert capabilities[0].default is Decision.ALLOW
+
+
+def test_porchlight_stage_creates_latest_history_and_receipt_stages(tmp_path: Path) -> None:
+    live = tmp_path / "live"
+    live.mkdir()
+    for directory in (
+        live / "Porchlight" / "latest",
+        live / "Porchlight" / "history",
+        live / "Porchlight" / "receipts",
+    ):
+        directory.mkdir(parents=True)
+    settings = Settings(
+        live_archive_root=live,
+        snapshot_archive_root=None,
+        state_dir=tmp_path / "state",
+        deployment_id="porchlight-stage",
+        archive_write_prefixes=("Porchlight",),
+    )
+    server = create_server(settings)
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "archive.stage_porchlight",
+                {
+                    "url": "https://example.test/thread",
+                    "title": "Thread",
+                    "content": "A readable capture.",
+                    "mode": "page",
+                    "captured_at": "2026-09-19T12:00:00+00:00",
+                },
+            )
+            assert result.is_error is False
+            assert result.structured_content is not None
+            data = result.structured_content
+            assert data["canonical_changed"] is False
+            assert {item["path"].split("/", 2)[1] for item in data["artifacts"]} == {
+                "latest",
+                "history",
+                "receipts",
+            }
+            assert all(item["status"] == "staged" for item in data["artifacts"])
+
+    asyncio.run(exercise())
+
+
+def test_porchlight_rejects_existing_history_before_staging(tmp_path: Path) -> None:
+    live = tmp_path / "live"
+    for directory in (
+        live / "Porchlight" / "latest",
+        live / "Porchlight" / "history",
+        live / "Porchlight" / "receipts",
+    ):
+        directory.mkdir(parents=True)
+    artifact = build_snapshot(
+        "https://example.test/thread",
+        "Thread",
+        "A readable capture.",
+        "page",
+        "2026-09-19T12:00:00+00:00",
+    )
+    (live / artifact.history_path).write_text("already promoted", encoding="utf-8")
+    server = create_server(
+        Settings(
+            live_archive_root=live,
+            snapshot_archive_root=None,
+            state_dir=tmp_path / "state",
+            deployment_id="porchlight-history-collision",
+            archive_write_prefixes=("Porchlight",),
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "archive.stage_porchlight",
+                {
+                    "url": "https://example.test/thread",
+                    "title": "Thread",
+                    "content": "A readable capture.",
+                    "mode": "page",
+                    "captured_at": "2026-09-19T12:00:00+00:00",
+                },
+            )
+            assert result.is_error is True
+            stages = await client.call_tool("archive.stage_list", {})
+            assert stages.is_error is False
+            assert stages.structured_content is not None
+            assert stages.structured_content["stages"] == []
+
+    asyncio.run(exercise())
 
 
 def test_wire_gametable_keeps_opponent_cards_out_of_a_seat_projection(

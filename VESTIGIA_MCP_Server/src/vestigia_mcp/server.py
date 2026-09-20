@@ -29,6 +29,8 @@ from .gametable import GameTableError, GameTableStore
 from .identity import system_identity as build_system_identity
 from .mounts import MountRegistry
 from .policy import DEFAULT_CAPABILITIES, PolicyDenied, PolicyEngine
+from .porchlight import build_snapshot
+from .porchlight_share import PorchlightShareRequest, PorchlightShareService
 from .runtime_registry import RuntimeRegistry
 
 
@@ -145,6 +147,18 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         if path is None:
             raise ArchiveError(f"Archive source is not configured: {name}")
         return ArchiveSource(path, exclude_paths=exclusions)
+
+    def read_porchlight_latest(path: str) -> str | None:
+        live = source_for("live")
+        if live.entry(path) is None:
+            return None
+        return live.read_text(path, settings.archive_write_max_bytes)
+
+    porchlight_shares = PorchlightShareService(
+        archive_mutations,
+        read_porchlight_latest,
+        screenshot_max_bytes=settings.porchlight_screenshot_max_bytes,
+    )
 
     def guarded(
         capability_name: str,
@@ -617,6 +631,159 @@ def create_server(settings: Settings | None = None) -> MCPServer:
 
         return guarded(
             "archive.stage_text",
+            arguments,
+            operation,
+            request_id=request_id,
+        )
+
+    @server.tool(
+        name="archive.stage_porchlight",
+        title="Stage a Porchlight warm snapshot",
+        description=(
+            "Create durable MCP-owned stages for one searchable Porchlight latest body, one "
+            "immutable history body, and one JSON provenance receipt. This does not modify the "
+            "live Archive; promote each returned stage explicitly with archive.promote. The "
+            "latest body is written under Porchlight/latest so ordinary retrieval can ignore "
+            "historical versions by using that prefix."
+        ),
+        annotations=LOCAL_WRITE_ANNOTATIONS,
+    )
+    def archive_stage_porchlight(
+        url: str,
+        title: str,
+        content: str,
+        mode: str,
+        captured_at: str | None = None,
+        previous_snapshot_sha256: str | None = None,
+    ) -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+
+        def operation() -> dict[str, object]:
+            try:
+                artifact = build_snapshot(
+                    url,
+                    title,
+                    content,
+                    mode,
+                    captured_at,
+                    previous_snapshot_sha256,
+                )
+            except ValueError as exc:
+                raise ArchiveError(str(exc)) from exc
+
+            live = source_for("live")
+            if live.entry(artifact.history_path) is not None:
+                raise ArchiveError(
+                    f"Porchlight history path already exists: {artifact.history_path}"
+                )
+            if live.entry(artifact.receipt_path) is not None:
+                raise ArchiveError(
+                    f"Porchlight receipt path already exists: {artifact.receipt_path}"
+                )
+
+            latest_stage = archive_mutations.stage_text(
+                artifact.latest_path,
+                artifact.body,
+                expected_base_sha256=previous_snapshot_sha256,
+                reason=f"Porchlight {artifact.capture_id} latest snapshot",
+            )
+            history_stage = archive_mutations.stage_text(
+                artifact.history_path,
+                artifact.body,
+                expected_base_sha256="absent",
+                reason=f"Porchlight {artifact.capture_id} immutable history",
+            )
+            receipt_stage = archive_mutations.stage_text(
+                artifact.receipt_path,
+                artifact.receipt_body,
+                expected_base_sha256="absent",
+                reason=f"Porchlight {artifact.capture_id} provenance receipt",
+            )
+            return {
+                "request_id": request_id,
+                "capture_id": artifact.capture_id,
+                "source_key": artifact.source_key,
+                "latest_path": artifact.latest_path,
+                "history_path": artifact.history_path,
+                "receipt_path": artifact.receipt_path,
+                "artifacts": [latest_stage, history_stage, receipt_stage],
+                "canonical_changed": False,
+                "next_step": (
+                    "Promote each returned artifact with archive.promote using its stage_id "
+                    "and proposal_sha256; staging has not changed live Archive bytes."
+                ),
+            }
+
+        audit_arguments = {
+            "url": url,
+            "title": title,
+            "mode": mode,
+            "captured_at": captured_at,
+            "previous_snapshot_sha256": previous_snapshot_sha256,
+            "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "content_bytes": len(content.encode("utf-8")),
+        }
+        return guarded(
+            "archive.stage_porchlight",
+            audit_arguments,
+            operation,
+            request_id=request_id,
+        )
+
+    @server.tool(
+        name="archive.share_porchlight",
+        title="Share a Porchlight capture directly",
+        description=(
+            "Directly share an explicitly selected readable Porchlight capture into the "
+            "canonical Modules/Porchlight namespace. The resident action is the consent "
+            "gate; the result is an atomic latest/history/receipt bundle with no promotion "
+            "step. Optional screenshot data must be a base64-encoded visible viewport PNG."
+        ),
+        annotations=CANONICAL_WRITE_ANNOTATIONS,
+    )
+    def archive_share_porchlight(
+        url: str,
+        title: str,
+        content: str,
+        mode: str,
+        captured_at: str | None = None,
+        previous_snapshot_sha256: str | None = None,
+        screenshot_base64: str | None = None,
+    ) -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+
+        def operation() -> dict[str, object]:
+            screenshot = None
+            if screenshot_base64 is not None:
+                try:
+                    screenshot = base64.b64decode(screenshot_base64, validate=True)
+                except (ValueError, TypeError) as exc:
+                    raise ArchiveError("Porchlight screenshot_base64 is invalid") from exc
+            result = porchlight_shares.share(
+                PorchlightShareRequest(
+                    url=url,
+                    title=title,
+                    content=content,
+                    mode=mode,
+                    captured_at=captured_at,
+                    previous_snapshot_sha256=previous_snapshot_sha256,
+                    screenshot_png=screenshot,
+                )
+            )
+            return {"request_id": request_id, **result}
+
+        arguments = {
+            "url": url,
+            "title": title,
+            "mode": mode,
+            "captured_at": captured_at,
+            "previous_snapshot_sha256": previous_snapshot_sha256,
+            "screenshot_included": screenshot_base64 is not None,
+            "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "content_bytes": len(content.encode("utf-8")),
+        }
+        return guarded(
+            "archive.share_porchlight",
             arguments,
             operation,
             request_id=request_id,
