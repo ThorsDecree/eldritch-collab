@@ -130,6 +130,7 @@ def test_observatory_actions_are_read_only_and_projectable(tmp_path: Path) -> No
         "bell.run.inspect",
         "bell.run.replay",
         "bell.policy.preview",
+        "bell.rehearse",
     }
     assert expected <= names
     projected = read_projection(port)
@@ -150,3 +151,79 @@ def test_observatory_actions_are_read_only_and_projectable(tmp_path: Path) -> No
         }
     )
     assert preview["effective_policy"] == "field_scan_v1"
+
+
+def test_bell_rehearsal_uses_live_context_without_persisting_a_run_or_trace(
+    tmp_path: Path,
+) -> None:
+    home = initialize_home(tmp_path / "home", name="Test Resident", glyph="🏮")
+    config = load_config(home)
+    db = ContinuityDB(home / "memory" / "continuity.db")
+    db.initialize()
+    port = HousePort(config, db)
+    memory_id = db.add_memory(
+        resident_id=str(config.get("resident.id")),
+        room_id=str(config.get("room.id")),
+        content="The brass lantern needs fresh oil before the evening bell.",
+        memory_type="tension",
+        tier="hot",
+        authorship="resident",
+        authority_state="resident_stated",
+        status="accepted",
+        actor="tester",
+        reason="fixture",
+        source_id="fixture:lantern",
+    )
+    traces_before = sorted((home / "traces").glob("*.receipt.json"))
+
+    result = port.dispatch(
+        {
+            "action": "bell.rehearse",
+            "bell_id": "boilerplate-sentinel",
+            "requested_policy": "prompt_only",
+            "purpose": "topic",
+            "prompt": "Turn attention toward the lantern.",
+        }
+    )
+
+    assert result["capability"]["outward_facing"] is False
+    assert result["rehearsal"] is True
+    assert result["context_trace_persisted"] is False
+    assert result["observatory_run_persisted"] is False
+    assert result["receipt_is_memory"] is False
+    assert result["model_causality"] == "not_replayed"
+    assert result["outward_dispatch"] is False
+    assert result["retrieval"]["effective_policy"] == "prompt_only"
+    assert result["retrieval"]["control_plane_excluded"] is True
+    assert "boilerplate-sentinel" not in result["retrieval"]["query_terms"]
+    memory_source = next(item for item in result["sources"] if item["name"] == "runtime_memory")
+    assert memory_id in memory_source["included_item_ids"]
+    assert result["budget"]["maximum"] > 0
+    assert result["budget"]["used"] > 0
+    assert sorted((home / "traces").glob("*.receipt.json")) == traces_before
+    assert port.bell_observatory.list_runs(limit=10)["matched_total"] == 0
+
+
+def test_bell_rehearsal_does_not_build_composed_context_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = initialize_home(tmp_path / "home", name="Test Resident", glyph="🏮")
+    config = load_config(home)
+    db = ContinuityDB(home / "memory" / "continuity.db")
+    db.initialize()
+    port = HousePort(config, db)
+
+    def unexpected_composed_source(*_args: object) -> object:
+        raise AssertionError("bell rehearsal must not build composed context sources")
+
+    monkeypatch.setattr("vestigia.context.build_context_sources", unexpected_composed_source)
+    result = port.dispatch(
+        {
+            "action": "bell.rehearse",
+            "requested_policy": "none",
+            "purpose": "topic",
+            "prompt": "Choose nothing if nothing needs attention.",
+        }
+    )
+
+    assert result["outward_dispatch"] is False

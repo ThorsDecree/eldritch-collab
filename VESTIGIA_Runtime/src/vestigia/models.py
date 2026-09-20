@@ -127,8 +127,9 @@ class ContextAssembly:
     current_message: str
     total_tokens: int
     maximum_tokens: int
-    receipt_path: Path
+    receipt_path: Path | None
     messages: tuple[dict[str, str], ...]
+    receipt: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -10,6 +10,7 @@ decision inputs and receipts around a bell without claiming to replay model cogn
   omissions, orientation references, budgets, and response outcome.
 - `bell.run.replay` — return stored decision inputs for a safe, non-outward replay harness.
 - `bell.policy.preview` — resolve a requested bell policy before a run.
+- `bell.rehearse` — inspect a candidate bell against a live local context snapshot before it is drafted or scheduled.
 
 These actions are exposed to MCP only when Runtime's existing projection classifies them as
 callable, confirmation-free, non-outward reads. MCP does not duplicate the bell ontology or open
@@ -26,6 +27,17 @@ Bell boilerplate is control-plane metadata. `control_plane_excluded` must remain
 retrieval, and the semantic query comes from the resident prompt or the explicitly selected
 source policy. A `no_change` response is a first-class outcome with
 `curation_eligible: false` and an explicit suppression reason.
+
+## Rehearsal boundary
+
+Rehearsal uses the same local policy resolution and context assembly path as a bell, with context
+trace persistence disabled. It returns the policy, orientation references, local source inclusion
+and omission facts, and budget accounting without calling a model, changing a schedule, creating
+a Bell Observatory run, or opening a curation candidate. Composed and remote context sources are
+not invoked during rehearsal; requested non-local sources are named as not invoked instead.
+
+The enclosing Runtime/MCP action still receives its ordinary audit receipt. That receipt records
+the read operation; it is not a context trace, bell run, memory, or evidence of resident adoption.
 
 ## Replay boundary
 
