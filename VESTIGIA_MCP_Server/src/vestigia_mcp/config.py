@@ -52,6 +52,29 @@ def _path_prefix_allowlist(name: str) -> tuple[str, ...]:
     return tuple(sorted(values))
 
 
+def _lanternslide_source_prefix_env() -> str:
+    raw = os.getenv("VESTIGIA_MCP_LANTERNSLIDE_SOURCE_PREFIX", "pics").strip()
+    if not raw:
+        return ""
+    return normalize_relative_path(raw).rstrip("/")
+
+
+def _lanternslide_catalog_path_env(source_prefix: str) -> str:
+    default = f"{source_prefix}/Lanternslide/catalog.json" if source_prefix else "Lanternslide/catalog.json"
+    raw = os.getenv("VESTIGIA_MCP_LANTERNSLIDE_CATALOG_PATH", default).strip()
+    normalized = normalize_relative_path(raw)
+    if Path(normalized).suffix.lower() != ".json":
+        raise ValueError("VESTIGIA_MCP_LANTERNSLIDE_CATALOG_PATH must end in .json")
+    if source_prefix and not (
+        normalized == source_prefix
+        or normalized.startswith(source_prefix.rstrip("/") + "/")
+    ):
+        raise ValueError(
+            "VESTIGIA_MCP_LANTERNSLIDE_CATALOG_PATH must be inside the Lanternslide source prefix"
+        )
+    return normalized
+
+
 def _bridge_host_env() -> str:
     host = os.getenv("VESTIGIA_MCP_PORCHLIGHT_BRIDGE_HOST", "127.0.0.1").strip().lower()
     if host == "localhost":
@@ -86,6 +109,11 @@ class Settings:
     runtimes_file: Path | None = None
     gametable_enabled: bool = False
     gametable_state_dir: Path | None = None
+    lanternslide_source_prefix: str = "pics"
+    lanternslide_catalog_path: str = "pics/Lanternslide/catalog.json"
+    lanternslide_scan_batch_max: int = 50
+    lanternslide_image_max_bytes: int = 25_000_000
+    lanternslide_contact_sheet_max_bytes: int = 4_000_000
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -98,6 +126,7 @@ class Settings:
         deployment_id = os.getenv(
             "VESTIGIA_MCP_DEPLOYMENT_ID", "local-desktop"
         ).strip() or "local-desktop"
+        lanternslide_source_prefix = _lanternslide_source_prefix_env()
         return cls(
             live_archive_root=_optional_path("VESTIGIA_MCP_LIVE_ARCHIVE_ROOT"),
             snapshot_archive_root=_optional_path(
@@ -151,4 +180,17 @@ class Settings:
             runtimes_file=_optional_path("VESTIGIA_MCP_RUNTIMES_FILE"),
             gametable_enabled=_bool_env("VESTIGIA_MCP_GAMETABLE_ENABLED"),
             gametable_state_dir=_optional_path("VESTIGIA_MCP_GAMETABLE_STATE_DIR"),
+            lanternslide_source_prefix=lanternslide_source_prefix,
+            lanternslide_catalog_path=_lanternslide_catalog_path_env(
+                lanternslide_source_prefix
+            ),
+            lanternslide_scan_batch_max=_positive_int_env(
+                "VESTIGIA_MCP_LANTERNSLIDE_SCAN_BATCH_MAX", 50
+            ),
+            lanternslide_image_max_bytes=_positive_int_env(
+                "VESTIGIA_MCP_LANTERNSLIDE_IMAGE_MAX_BYTES", 25_000_000
+            ),
+            lanternslide_contact_sheet_max_bytes=_positive_int_env(
+                "VESTIGIA_MCP_LANTERNSLIDE_CONTACT_SHEET_MAX_BYTES", 4_000_000
+            ),
         )

@@ -30,6 +30,23 @@ def test_sense_registry_capabilities_are_read_only() -> None:
         assert capability.default is Decision.ALLOW
 
 
+def test_lanternslide_capabilities_have_bounded_effects() -> None:
+    engine = PolicyEngine()
+    for name in (
+        "lanternslide.status",
+        "lanternslide.find",
+        "lanternslide.deal",
+        "lanternslide.contact_sheet",
+    ):
+        capability = engine.require_allowed(name)
+        assert capability.effect is EffectClass.PERCEIVE
+        assert capability.default is Decision.ALLOW
+    for name in ("lanternslide.scan", "lanternslide.stage_catalog"):
+        capability = engine.require_allowed(name)
+        assert capability.effect is EffectClass.PREPARE
+        assert capability.default is Decision.ALLOW
+
+
 def test_receipt_trace_is_read_only() -> None:
     capability = PolicyEngine().require_allowed("receipts.trace")
     assert capability.effect is EffectClass.PERCEIVE

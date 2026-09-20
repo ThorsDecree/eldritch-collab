@@ -11,12 +11,24 @@ def test_porchlight_manifest_is_bounded_and_deterministic() -> None:
     registry = SenseOrganRegistry()
 
     listed = registry.list()
-    assert [item["organ_id"] for item in listed["organs"]] == ["porchlight"]
+    assert [item["organ_id"] for item in listed["organs"]] == [
+        "lanternslide",
+        "porchlight",
+    ]
     manifest = registry.show("porchlight")["organ"]
     assert manifest["activation_topology"] == "explicit_invocation"
     assert manifest["consent_basis"] == "explicit_user_invocation"
     assert "raw_html" in manifest["prohibited_payloads"]
     assert manifest["digest"] == registry.show("porchlight")["organ"]["digest"]
+
+
+def test_lanternslide_manifest_is_explicit_and_nonsemantic() -> None:
+    manifest = SenseOrganRegistry().show("lanternslide")["organ"]
+    assert manifest["modality"] == "archive_image"
+    assert manifest["activation_topology"] == "explicit_invocation"
+    assert manifest["consent_basis"] == "explicit_user_invocation"
+    assert manifest["semantic_policy"]["automatic_retrieval"] == "none"
+    assert "raw_image_bytes" in manifest["prohibited_payloads"]
 
 
 def test_porchlight_can_perceive_only_declared_payloads() -> None:
