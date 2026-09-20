@@ -104,6 +104,12 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Stage a searchable Porchlight warm snapshot without changing the canonical Archive.",
     ),
     Capability(
+        "archive.share_porchlight",
+        EffectClass.ACT,
+        Decision.ALLOW,
+        "Directly share an explicitly selected Porchlight capture into the canonical Archive.",
+    ),
+    Capability(
         "archive.stage_directory",
         EffectClass.PREPARE,
         Decision.ALLOW,

@@ -96,6 +96,7 @@ def build_snapshot(
     mode: str,
     captured_at: str | None = None,
     previous_snapshot_sha256: str | None = None,
+    path_prefix: str = "Porchlight",
 ) -> SnapshotArtifact:
     source_url = canonical_source_url(url)
     normalized_mode = str(mode).strip().lower()
@@ -115,6 +116,9 @@ def build_snapshot(
     content_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
     source_key = source_key_for_url(source_url)
     capture_id = f"pl_{captured.strftime('%Y%m%dT%H%M%SZ')}_{content_sha256[:16]}"
+    normalized_prefix = str(path_prefix).strip("/")
+    if not normalized_prefix or ".." in normalized_prefix.split("/"):
+        raise ValueError("Porchlight path_prefix is invalid")
     receipt: dict[str, object] = {
         "schema_version": PORCHLIGHT_SCHEMA_VERSION,
         "capture_id": capture_id,
@@ -131,9 +135,9 @@ def build_snapshot(
     return SnapshotArtifact(
         source_key=source_key,
         capture_id=capture_id,
-        latest_path=f"Porchlight/latest/{source_key}.md",
-        history_path=f"Porchlight/history/{source_key}_{capture_id}.md",
-        receipt_path=f"Porchlight/receipts/{source_key}_{capture_id}.json",
+        latest_path=f"{normalized_prefix}/latest/{source_key}.md",
+        history_path=f"{normalized_prefix}/history/{source_key}_{capture_id}.md",
+        receipt_path=f"{normalized_prefix}/receipts/{source_key}_{capture_id}.json",
         body=body,
         receipt_body=receipt_body,
         receipt=receipt,
@@ -141,4 +145,5 @@ def build_snapshot(
 
 
 def is_latest_path(path: str) -> bool:
-    return str(path).replace("\\", "/").startswith("Porchlight/latest/")
+    normalized = str(path).replace("\\", "/")
+    return normalized.startswith(("Porchlight/latest/", "Modules/Porchlight/latest/"))

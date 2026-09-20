@@ -37,6 +37,13 @@ def test_porchlight_staging_is_prepare_only_and_not_canonical_write() -> None:
     assert capability.default is Decision.ALLOW
 
 
+def test_porchlight_direct_share_is_an_allowed_canonical_write() -> None:
+    engine = PolicyEngine()
+    capability = engine.require_allowed("archive.share_porchlight")
+    assert capability.effect is EffectClass.ACT
+    assert capability.default is Decision.ALLOW
+
+
 def test_gametable_keeps_views_and_local_turn_state_distinct() -> None:
     engine = PolicyEngine()
     assert engine.require_allowed("game.view").effect is EffectClass.PERCEIVE

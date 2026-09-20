@@ -10,3 +10,10 @@ rem set "VESTIGIA_MCP_MOUNTS_FILE=C:\absolute\path\to\VESTIGIA_MCP_Server\mounts
 rem set "VESTIGIA_MCP_RUNTIMES_FILE=C:\absolute\path\to\VESTIGIA_MCP_Server\runtimes.local.json"
 rem set "VESTIGIA_MCP_GAMETABLE_ENABLED=1"
 rem set "VESTIGIA_MCP_GAMETABLE_STATE_DIR=C:\absolute\path\to\vestigia-gametable-state"
+rem Porchlight bridge overrides:
+rem set "VESTIGIA_MCP_PORCHLIGHT_BRIDGE_HOST=127.0.0.1"
+rem set "VESTIGIA_MCP_PORCHLIGHT_BRIDGE_PORT=8765"
+rem set "VESTIGIA_MCP_PORCHLIGHT_BRIDGE_EXTENSION_ORIGIN=chrome-extension://YOUR_EXTENSION_ID"
+rem set "VESTIGIA_MCP_PORCHLIGHT_BRIDGE_TOKEN_PATH=C:\absolute\path\to\porchlight-token"
+rem Add the direct namespace to the deployment write grant:
+rem set "VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES=Modules/Porchlight"

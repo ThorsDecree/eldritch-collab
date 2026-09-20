@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from vestigia_mcp.adapters.archive import ArchiveError
-from vestigia_mcp.archive_mutation import ArchiveMutationStore
+from vestigia_mcp.archive_mutation import ArchiveMutationStore, BundleEntry
 
 
 def make_store(
@@ -25,6 +25,121 @@ def make_store(
         max_bytes=max_bytes,
     )
     return store, live, state
+
+
+def make_bundle_store(tmp_path: Path) -> tuple[ArchiveMutationStore, Path]:
+    live = tmp_path / "live"
+    (live / "Modules" / "Porchlight" / "latest").mkdir(parents=True)
+    (live / "Modules" / "Porchlight" / "history").mkdir()
+    (live / "Modules" / "Porchlight" / "receipts").mkdir()
+    (live / "Modules" / "Porchlight" / "images" / "example").mkdir(parents=True)
+    state = tmp_path / "state"
+    return (
+        ArchiveMutationStore(
+            live,
+            state,
+            "test-deployment",
+            write_prefixes=("Modules/Porchlight",),
+            max_bytes=1000,
+        ),
+        live,
+    )
+
+
+def test_share_bundle_writes_all_entries_with_hashes_and_audit_metadata(
+    tmp_path: Path,
+) -> None:
+    store, live = make_bundle_store(tmp_path)
+    entries = (
+        BundleEntry("Modules/Porchlight/latest/example.md", b"hello\n", "text"),
+        BundleEntry("Modules/Porchlight/history/example_1.md", b"hello\n", "text"),
+        BundleEntry(
+            "Modules/Porchlight/receipts/example_1.json",
+            b'{"capture_id":"1"}\n',
+            "json",
+        ),
+        BundleEntry(
+            "Modules/Porchlight/images/example/1.png",
+            b"\x89PNG\r\n\x1a\nimage",
+            "png",
+        ),
+    )
+
+    result = store.share_bundle(
+        entries,
+        reason="explicit Porchlight action",
+        audit_metadata={"consent_basis": "explicit_porchlight_action"},
+    )
+
+    assert result["canonical_changed"] is True
+    assert result["atomic_bundle"] is True
+    assert result["rollback_on_failure"] is True
+    assert result["audit_metadata"] == {
+        "consent_basis": "explicit_porchlight_action"
+    }
+    assert len(result["entries"]) == 4
+    assert (live / "Modules/Porchlight/latest/example.md").read_bytes() == b"hello\n"
+    assert result["entries"][0]["sha256"]
+
+
+def test_share_bundle_same_latest_bytes_are_idempotent(tmp_path: Path) -> None:
+    store, live = make_bundle_store(tmp_path)
+    target = live / "Modules/Porchlight/latest/example.md"
+    target.write_bytes(b"same\n")
+    entry = BundleEntry("Modules/Porchlight/latest/example.md", b"same\n", "text")
+
+    result = store.share_bundle((entry,), reason="repeat")
+
+    assert result["canonical_changed"] is False
+    assert result["unchanged"] is True
+    assert result["entries"][0]["operation"] == "unchanged"
+
+
+def test_share_bundle_validates_every_entry_before_changing_any_target(
+    tmp_path: Path,
+) -> None:
+    store, live = make_bundle_store(tmp_path)
+    latest = live / "Modules/Porchlight/latest/example.md"
+    latest.write_bytes(b"old\n")
+
+    with pytest.raises(ArchiveError, match="PNG"):
+        store.share_bundle(
+            (
+                BundleEntry("Modules/Porchlight/latest/example.md", b"new\n", "text"),
+                BundleEntry("Modules/Porchlight/images/example/bad.png", b"not png", "png"),
+            ),
+            expected_base_sha256_by_path={
+                "Modules/Porchlight/latest/example.md":
+                "01d09d19c2139a46aebfb577780d123d7396e97201bc7ead210a2ebff8239dee"
+            },
+            reason="invalid screenshot",
+        )
+
+    assert latest.read_bytes() == b"old\n"
+    assert not (live / "Modules/Porchlight/images/example/bad.png").exists()
+
+
+def test_share_bundle_rejects_stale_expected_base_without_partial_write(
+    tmp_path: Path,
+) -> None:
+    store, live = make_bundle_store(tmp_path)
+    latest = live / "Modules/Porchlight/latest/example.md"
+    latest.write_bytes(b"current\n")
+
+    with pytest.raises(ArchiveError, match="expected_base_sha256"):
+        store.share_bundle(
+            (
+                BundleEntry("Modules/Porchlight/latest/example.md", b"new\n", "text"),
+                BundleEntry("Modules/Porchlight/history/example_2.md", b"new\n", "text"),
+            ),
+            expected_base_sha256_by_path={
+                "Modules/Porchlight/latest/example.md": "absent"
+            },
+            reason="stale update",
+        )
+
+    assert latest.read_bytes() == b"current\n"
+    assert not (live / "Modules/Porchlight/history/example_2.md").exists()
 
 
 def test_stage_then_promote_create_is_digest_bound_and_atomic(tmp_path: Path) -> None:

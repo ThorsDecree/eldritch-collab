@@ -56,6 +56,7 @@ Tools:
 - `archive.write_capabilities`
 - `archive.stage_text`
 - `archive.stage_porchlight`
+- `archive.share_porchlight`
 - `archive.stage_directory`
 - `archive.stage_list`
 - `archive.stage_inspect`
@@ -133,6 +134,11 @@ control metadata separate from the searchable body and supports `selection`, `pa
 captures. It does not read a browser or change live bytes; provision the three `Porchlight` parent
 directories first, then inspect and promote the returned stage IDs individually. See
 `docs/PORCHLIGHT.md`.
+
+`archive.share_porchlight` is the separate direct-share capability used by the local Porchlight
+Chrome extension and loopback bridge. The resident’s explicit click is its consent gate; it writes
+an atomic `Modules/Porchlight` text/receipt/optional-image bundle and returns hashes and paths
+without a promotion step. See `docs/PORCHLIGHT.md` for pairing and privacy behavior.
 
 Resources:
 

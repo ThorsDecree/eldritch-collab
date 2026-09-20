@@ -1,25 +1,64 @@
-# Porchlight warm snapshots
+# Porchlight browser sharing
 
-Porchlight is the producer-facing contract for turning bounded browser context into searchable, warm Archive receipts. The current slice is browser-neutral: a future Chrome/Chromium extension or native host can produce the payload, while MCP handles validation and reversible Archive staging.
+Porchlight turns an explicit browser action into a bounded, searchable warm Archive receipt.
+The v1 path is a local MV3 Chrome extension talking to an authenticated Python bridge on
+`127.0.0.1`; Chrome does not speak MCP stdio directly.
+
+## Start and pair
+
+From the MCP server environment:
+
+```text
+pair-porchlight
+run-porchlight-bridge
+```
+
+Configure `VESTIGIA_MCP_PORCHLIGHT_BRIDGE_EXTENSION_ORIGIN` to the actual unpacked extension
+origin (`chrome-extension://<id>`), then load `porchlight_extension/` from
+`chrome://extensions` with Developer mode enabled. Open the extension’s pairing settings,
+enter the bridge URL, origin, and token, and choose **Save and verify**.
+
+The bridge is loopback-only, uses a bearer token stored under the configured state directory,
+requires the configured extension origin, bounds JSON bodies, and does not log capture content.
 
 ## Capture contract
 
-`archive.stage_porchlight` accepts:
+The popup offers explicit **Share selection**, **Share readable page**, and **Share page update**
+actions. A context-menu action shares selected text. The page action sends `document.body.innerText`
+plus URL/title metadata; it never sends raw HTML, cookies, headers, scripts, or styles.
 
-- `url` — an `http` or `https` source URL.
-- `title` — a bounded human-readable page title.
-- `content` — readable text only, never raw HTML.
-- `mode` — one of `selection`, `page`, or `update`.
-- `captured_at` — an optional timezone-aware ISO 8601 timestamp.
-- `previous_snapshot_sha256` — an optional hash for optimistic concurrency on the latest file.
+The screenshot checkbox is unchecked by default. When enabled, it sends only the visible viewport
+PNG returned by `chrome.tabs.captureVisibleTab`; screenshot bytes are stored separately and are
+not semantic receipt text. Empty or over-limit captures are rejected in the extension before HTTP.
 
-The URL is canonicalized before deriving a stable 24-character source key. The readable body is hashed and stored separately from the receipt. Bell IDs, scheduler text, extension metadata, and other control-plane fields do not belong in `content` and therefore do not become search terms through this contract.
+## Direct layout
 
-`selection` is for a user-selected excerpt, `page` is for one bounded readable page snapshot, and `update` is for a later delta or refreshed snapshot. The server enforces a one-megabyte UTF-8 body limit and rejects NUL bytes, empty content, non-web URLs, malformed timestamps, and invalid previous hashes.
+Direct resident shares use this namespace:
 
-## Staged layout
+```text
+Modules/Porchlight/latest/<source-key>.md
+Modules/Porchlight/history/<source-key>_<capture-id>.md
+Modules/Porchlight/receipts/<source-key>_<capture-id>.json
+Modules/Porchlight/images/<source-key>/<capture-id>.png
+```
 
-The tool produces three independent staged text artifacts:
+Latest bodies are searchable like other warm transcript sources. History and receipts are
+addressable provenance shelves. The receipt records canonical URL, title, mode, timestamp,
+content hash/size, optional screenshot path/hash/size, and consent basis; it contains no HTML or
+image bytes. Repeating the same latest content returns `unchanged` without another history copy.
+Update requests bind to the latest body hash and return a conflict rather than overwriting a
+newer capture.
+
+Clicking Porchlight is the consent gate for this direct path. There is no second promotion click,
+but write prefixes, path normalization, byte ceilings, hashes, conflict checks, audit records,
+and atomic text/receipt/image bundle behavior still apply. A failed screenshot or receipt write
+leaves the prior latest untouched.
+
+## Staged compatibility path
+
+`archive.stage_porchlight` remains available for scripted/import workflows. It accepts URL,
+title, readable content, `selection`/`page`/`update`, timestamp, and an optional previous hash,
+and stages the legacy root-level layout:
 
 ```text
 Porchlight/latest/<source-key>.md
@@ -27,18 +66,6 @@ Porchlight/history/<source-key>_<capture-id>.md
 Porchlight/receipts/<source-key>_<capture-id>.json
 ```
 
-The latest body is the normal searchable warm source. History and receipts are explicit provenance shelves and should not be included in ordinary semantic retrieval by prefix policy. The receipt records the canonical URL, capture mode and timestamp, content hash and byte count, and the previous snapshot hash when supplied. It contains no control-plane prompt or raw HTML.
-
-Before capture, an operator must provision these three parent directories through the existing staged directory workflow. `archive.stage_porchlight` creates no live directories and changes no canonical bytes. It returns three stage IDs; inspect and promote them individually with `archive.promote` after normal review and prefix-grant checks. A staging error after an earlier artifact has been accepted can leave that earlier artifact as a durable, inspectable stage, so callers should inspect or discard partial stages explicitly.
-
-## Retrieval and browser boundary
-
-This contract supports the intended Porchlight flow:
-
-1. Capture selected text or a readable page snapshot.
-2. Stage the body, history copy, and receipt.
-3. Review provenance and hashes.
-4. Promote the desired artifacts into the Archive.
-5. Search `Porchlight/latest` like any other warm transcript source.
-
-The current MCP server does not implement a Chrome extension, native messaging host, DOM reader, background page monitoring, or automatic memory promotion. Those belong to a later browser/local bridge and must preserve the same explicit capture mode, source identity, size bound, and Archive staging boundary.
+Legacy root-level artifacts remain readable/addressable during migration. The staged tool still
+requires inspection and explicit `archive.promote`; the bridge’s explicit resident action uses
+the separate `archive.share_porchlight` direct capability.
