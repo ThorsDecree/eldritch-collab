@@ -62,6 +62,9 @@ GROUPS: dict[str, str] = {
     )},
     "bell.draft": "bells",
     "bell.control": "bells",
+    **{name: "bells" for name in (
+        "bell.runs.list", "bell.run.inspect", "bell.run.replay", "bell.policy.preview",
+    )},
 }
 
 
@@ -97,6 +100,16 @@ FIELDS: dict[str, tuple[dict[str, Any], tuple[str, ...]]] = {
     "attention.tray": ({"mode": S(enum=["list", "add", "remove", "clear"]), "reference": REF, "object_id": ID, "image_id": ID, "memory_id": ID, "path": REF, "item_id": ID, "label": S(maxLength=240), "note": S(maxLength=2000), "hours": I(minimum=1, maximum=168)}, ()),
     "search.session": ({"mode": S(enum=["start", "refine", "inspect", "close"]), "session_id": ID, "query": S(minLength=1), "scope": S(enum=["everything", "pictures", "scrolls", "memories", "recent_conversation"]), "limit": I(minimum=1, maximum=20)}, ()),
     "retrieval.inspect": ({"turn_id": ID}, ()),
+    "bell.runs.list": ({"limit": LIMIT_200, "bell_id": ID, "response_state": S()}, ()),
+    "bell.run.inspect": ({"run_id": ID}, ("run_id",)),
+    "bell.run.replay": ({"run_id": ID}, ("run_id",)),
+    "bell.policy.preview": ({
+        "bell_id": ID,
+        "requested_policy": S(enum=["auto", "none", "prompt_only", "response_related", "resident_selected"]),
+        "prompt": S(maxLength=4000),
+        "purpose": S(maxLength=240),
+        "selected_sources": A(S(), maxItems=24),
+    }, ()),
     "context.control": ({
         "mode": S(enum=["inspect", "configure", "reset", "recompress"]),
         "prompt_budget_tokens": I(minimum=8000, maximum=100000),
@@ -274,6 +287,10 @@ RELATED: dict[str, tuple[str, ...]] = {
     "image.share": ("image.drawer", "receipt.inspect"),
     "bell.draft": ("bell.control", "next_step"),
     "bell.control": ("bell.draft", "next_step"),
+    "bell.runs.list": ("bell.run.inspect", "bell.policy.preview"),
+    "bell.run.inspect": ("bell.run.replay", "bell.runs.list"),
+    "bell.run.replay": ("bell.run.inspect",),
+    "bell.policy.preview": ("bell.runs.list",),
 }
 
 

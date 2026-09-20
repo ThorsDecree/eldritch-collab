@@ -909,6 +909,16 @@ class BellNoChangeRuntimeTests(HomeCase):
         self.assertEqual("no_change", trace["bell_outcome"]["state"])
         self.assertEqual([], trace["proposal_ids"])
         self.assertFalse(trace["bell_outcome"]["curation_eligible"])
+        runs = runtime.bell_observatory.list_runs(
+            limit=10, bell_id=message.metadata["bell_id"]
+        )
+        self.assertEqual(runs["matched_total"], 1)
+        observed = runtime.bell_observatory.inspect_run(
+            trace["bell_observatory_run_id"]
+        )
+        self.assertEqual(observed["run"]["response"]["state"], "no_change")
+        self.assertFalse(observed["run"]["response"]["curation_eligible"])
+        self.assertTrue(observed["run"]["retrieval"]["control_plane_excluded"])
         with self.db.connect() as connection:
             count = connection.execute("SELECT COUNT(*) FROM curation_batches").fetchone()[0]
         self.assertEqual(0, count)

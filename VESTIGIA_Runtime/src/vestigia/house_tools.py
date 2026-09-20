@@ -11,6 +11,8 @@ from typing import Any, Callable
 import yaml
 
 from .capabilities import CapabilityRegistry, CapabilitySpec
+from .bell_observatory import BellObservatory
+from .bell_retrieval import resolve_retrieval_request
 from .capability_contracts import bell_contracts, contract_for
 from .config import ResolvedConfig
 from .context_controls import (
@@ -23,6 +25,7 @@ from .context_controls import (
 from .db import ContinuityDB
 from .images import ImageService
 from .legible import LegibleLedger
+from .models import NormalizedMessage
 from .resident_controls import (
     LISTENING_MODES,
     configure_resident_controls,
@@ -419,6 +422,7 @@ class HousePort:
         self.queue_for_review = queue_for_review
         self.open_curation = open_curation
         self.images = image_service
+        self.bell_observatory = BellObservatory(db, self.resident_id, self.room_id)
         self.legible = LegibleLedger(config, db)
         from .bootstrap import bootstrap_runtime
 
@@ -1041,6 +1045,10 @@ class HousePort:
             "attention.tray": self._attention_tray,
             "search.session": self._search_session,
             "retrieval.inspect": self._retrieval_inspect,
+            "bell.runs.list": self._bell_runs_list,
+            "bell.run.inspect": self._bell_run_inspect,
+            "bell.run.replay": self._bell_run_replay,
+            "bell.policy.preview": self._bell_policy_preview,
             "next_step": self._next_step,
             "context.control": self._context_control,
             "source.visibility": self._source_visibility,
@@ -1084,6 +1092,7 @@ class HousePort:
             "curation.list", "curation.inspect", "curation.history",
             "identity.history", "identity.compare", "identity.provenance",
             "retrieval.inspect",
+            "bell.runs.list", "bell.run.inspect", "bell.run.replay", "bell.policy.preview",
             "jobs.receipts",
         }
         memory_read = {
@@ -1169,6 +1178,10 @@ class HousePort:
                 "attention.tray": "Keep resident-selected references close as temporary working context.",
                 "search.session": "Start, refine, inspect, or close a durable scoped search desk.",
                 "retrieval.inspect": "Explain what continuity crossed into a turn and why.",
+                "bell.runs.list": "List bounded Bell Observatory runs and their response states.",
+                "bell.run.inspect": "Inspect one Bell Observatory run's retrieval and outcome receipts.",
+                "bell.run.replay": "Replay one bell run's stored decision inputs without model or outward effects.",
+                "bell.policy.preview": "Preview effective bell retrieval policy and semantic terms.",
                 "next_step": "Explain the next safe or required move for one receipt, draft, job, bell, object, or action.",
                 "context.control": "Inspect or arrange the resident's prompt and transcript drawers.",
                 "source.visibility": "Choose which authorized Discord history is visible as ambient context.",
@@ -2425,6 +2438,54 @@ class HousePort:
                     }
                 )
         return cards[:limit]
+
+    def _bell_runs_list(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.bell_observatory.list_runs(
+            limit=int(payload.get("limit", 25)),
+            bell_id=str(payload.get("bell_id") or "").strip() or None,
+            response_state=str(payload.get("response_state") or "").strip() or None,
+        )
+
+    def _bell_run_inspect(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.bell_observatory.inspect_run(str(payload.get("run_id") or ""))
+
+    def _bell_run_replay(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.bell_observatory.replay_run(str(payload.get("run_id") or ""))
+
+    def _bell_policy_preview(self, payload: dict[str, Any]) -> dict[str, Any]:
+        requested = str(payload.get("requested_policy") or "auto").strip().lower()
+        prompt = str(payload.get("prompt") or "")
+        purpose = str(payload.get("purpose") or "")
+        selected = payload.get("selected_sources", [])
+        message = NormalizedMessage(
+            content=prompt,
+            interface="bell",
+            metadata={
+                "bell_retrieval": {
+                    "resident_prompt": prompt,
+                    "requested_policy": requested,
+                    "selected_sources": selected,
+                    "control_plane": {
+                        "bell_id": payload.get("bell_id"),
+                        "purpose": purpose,
+                    },
+                }
+            },
+        )
+        retrieval = resolve_retrieval_request(message)
+        return {
+            "schema_version": "vestigia.bell-policy-preview.v0.1",
+            "bell_id": payload.get("bell_id"),
+            "requested_policy": retrieval.policy_requested,
+            "effective_policy": retrieval.policy_effective,
+            "semantic_source": retrieval.semantic_source,
+            "query_terms": list(retrieval.query_terms),
+            "control_plane_excluded": retrieval.control_plane_excluded,
+            "selected_sources": list(retrieval.selected_sources),
+            "deferred": retrieval.deferred,
+            "warnings": list(retrieval.warnings),
+            "causal_influence": "unknown",
+        }
 
     def _retrieval_inspect(self, payload: dict[str, Any]) -> dict[str, Any]:
         turn_id = str(payload.get("turn_id") or "").strip()

@@ -233,6 +233,28 @@ CREATE INDEX IF NOT EXISTS idx_image_interpretations_asset
 ON image_interpretations(image_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_image_jobs_status
 ON image_jobs(resident_id, status, created_at);
+
+CREATE TABLE IF NOT EXISTS bell_observatory_runs (
+    id TEXT PRIMARY KEY,
+    resident_id TEXT NOT NULL,
+    room_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    bell_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    context_receipt_path TEXT,
+    retrieval_json TEXT NOT NULL DEFAULT '{}',
+    orientation_json TEXT NOT NULL DEFAULT '{}',
+    sources_json TEXT NOT NULL DEFAULT '[]',
+    budget_json TEXT NOT NULL DEFAULT '{}',
+    response_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_bell_observatory_runs_resident
+ON bell_observatory_runs(resident_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_bell_observatory_runs_bell
+ON bell_observatory_runs(bell_id, created_at);
 """
 
 
