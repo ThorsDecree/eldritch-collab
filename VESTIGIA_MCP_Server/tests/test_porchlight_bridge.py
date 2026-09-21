@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 from pathlib import Path
@@ -27,7 +28,20 @@ class RecorderService:
         }
 
 
-def make_bridge(tmp_path: Path, *, max_body_bytes: int = 10_000):
+class RecorderAudit:
+    def __init__(self) -> None:
+        self.events = []
+
+    def __call__(self, arguments, outcome, request_id, detail=None):
+        self.events.append({
+            "arguments": arguments,
+            "outcome": outcome,
+            "request_id": request_id,
+            "detail": detail,
+        })
+
+
+def make_bridge(tmp_path: Path, *, max_body_bytes: int = 10_000, audit=None):
     service = RecorderService()
     tokens = PairingTokenStore(tmp_path / "porchlight-token")
     bridge = PorchlightBridgeServer(
@@ -37,6 +51,7 @@ def make_bridge(tmp_path: Path, *, max_body_bytes: int = 10_000):
         port=0,
         extension_origin=ORIGIN,
         max_body_bytes=max_body_bytes,
+        audit=audit,
     )
     thread = threading.Thread(target=bridge.serve_forever, daemon=True)
     thread.start()
@@ -93,6 +108,32 @@ def test_bridge_health_pairing_and_valid_share(tmp_path: Path) -> None:
         assert status == 200
         assert result["capture_id"] == "capture-1"
         assert len(service.calls) == 1
+    finally:
+        close_bridge(bridge, thread)
+
+
+def test_bridge_records_audit_event_for_direct_share(tmp_path: Path) -> None:
+    audit = RecorderAudit()
+    bridge, thread, _, tokens = make_bridge(tmp_path, audit=audit)
+    try:
+        status, _ = call(
+            bridge,
+            tokens.read(),
+            "/v1/shares",
+            {
+                "url": "https://example.test",
+                "title": "Example",
+                "content": "body",
+                "mode": "page",
+            },
+        )
+        assert status == 200
+        assert len(audit.events) == 1
+        event = audit.events[0]
+        assert event["outcome"] == "ok"
+        assert event["request_id"].startswith("bridge_req_")
+        assert event["arguments"]["content_sha256"] == hashlib.sha256(b"body").hexdigest()
+        assert "content" not in event["arguments"]
     finally:
         close_bridge(bridge, thread)
 
