@@ -22,7 +22,49 @@ from ..pagination import (
 
 ArchiveKind = Literal["directory", "zip"]
 TEXT_SUFFIXES = frozenset(
-    {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".csv", ".tsv", ".log"}
+    {
+        # Prose / structured data
+        ".md",
+        ".txt",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".csv",
+        ".tsv",
+        ".log",
+
+        # Python
+        ".py",
+        ".pyi",
+
+        # JavaScript / TypeScript
+        ".js",
+        ".mjs",
+        ".cjs",
+        ".ts",
+        ".tsx",
+        ".jsx",
+
+        # Web
+        ".html",
+        ".htm",
+        ".css",
+        ".scss",
+
+        # Shell / local automation
+        ".ps1",
+        ".psm1",
+        ".psd1",
+        ".bat",
+        ".cmd",
+        ".sh",
+
+        # Plain-text application config
+        ".ini",
+        ".cfg",
+        ".conf",
+    }
 )
 IMAGE_MIME_TYPES = {
     ".gif": "image/gif",
