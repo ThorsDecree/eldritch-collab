@@ -1,0 +1,27 @@
+{
+  "schema_version": "vestigia.house-mechanic.v0.1",
+  "recipes": [
+    {
+      "id": "runtime.compile",
+      "description": "Compile Runtime Python source.",
+      "argv": ["python", "-m", "compileall", "-q", "src"],
+      "cwd": "VESTIGIA_Runtime",
+      "timeout_seconds": 120,
+      "env_profile": "python",
+      "expected_exit_codes": [0],
+      "max_stdout_bytes": 65536,
+      "max_stderr_bytes": 32768
+    },
+    {
+      "id": "mcp.compile",
+      "description": "Compile MCP Server Python source.",
+      "argv": ["python", "-m", "compileall", "-q", "src"],
+      "cwd": "VESTIGIA_MCP_Server",
+      "timeout_seconds": 120,
+      "env_profile": "python",
+      "expected_exit_codes": [0],
+      "max_stdout_bytes": 65536,
+      "max_stderr_bytes": 32768
+    }
+  ]
+}
