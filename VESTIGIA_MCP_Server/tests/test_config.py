@@ -106,3 +106,33 @@ def test_lanternslide_catalog_must_be_json_inside_source_prefix(monkeypatch) -> 
     monkeypatch.setenv("VESTIGIA_MCP_LANTERNSLIDE_CATALOG_PATH", "pics/catalog.txt")
     with pytest.raises(ValueError, match=r"\.json"):
         Settings.from_env()
+
+
+def test_daemon_bridge_settings_are_loopback_and_explicit(monkeypatch) -> None:
+    monkeypatch.setenv("VESTIGIA_MCP_DAEMON_BRIDGE_ENABLED", "true")
+    monkeypatch.setenv("VESTIGIA_MCP_DAEMON_BRIDGE_HOST", "localhost")
+    monkeypatch.setenv("VESTIGIA_MCP_DAEMON_BRIDGE_PORT", "9876")
+    monkeypatch.setenv(
+        "VESTIGIA_MCP_DAEMON_BRIDGE_TOKEN_PATH",
+        "/tmp/daemon-bridge-token",
+    )
+    monkeypatch.setenv("VESTIGIA_MCP_DAEMON_BRIDGE_TIMEOUT_SECONDS", "33")
+    monkeypatch.setenv(
+        "VESTIGIA_MCP_DAEMON_BRIDGE_MAX_RESPONSE_BYTES",
+        "77777",
+    )
+
+    settings = Settings.from_env()
+
+    assert settings.daemon_bridge_enabled is True
+    assert settings.daemon_bridge_host == "127.0.0.1"
+    assert settings.daemon_bridge_port == 9876
+    assert settings.daemon_bridge_token_path == Path("/tmp/daemon-bridge-token")
+    assert settings.daemon_bridge_timeout_seconds == 33
+    assert settings.daemon_bridge_max_response_bytes == 77777
+
+
+def test_daemon_bridge_rejects_non_loopback_env(monkeypatch) -> None:
+    monkeypatch.setenv("VESTIGIA_MCP_DAEMON_BRIDGE_HOST", "0.0.0.0")
+    with pytest.raises(ValueError, match="loopback"):
+        Settings.from_env()

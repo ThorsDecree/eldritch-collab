@@ -47,6 +47,10 @@ EXPECTED_TOOLS = {
     "lanternslide.deal",
     "lanternslide.contact_sheet",
     "lanternslide.stage_catalog",
+    "daemon_bridge.status",
+    "daemon_bridge.residents",
+    "daemon_bridge.capabilities",
+    "daemon_bridge.query",
     "runtime.list",
     "runtime.status",
     "runtime.capabilities",
@@ -157,13 +161,28 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             }
             direct_writes = {"archive.share_porchlight"}
             canonical_writes = {"archive.promote", "archive.promote_directory"}
-            for name in EXPECTED_TOOLS - local_writes - direct_writes - canonical_writes:
+            metered_reads = {"daemon_bridge.query"}
+            for name in (
+                EXPECTED_TOOLS
+                - local_writes
+                - direct_writes
+                - canonical_writes
+                - metered_reads
+            ):
                 annotations = tools[name].annotations
                 assert annotations is not None
                 assert annotations.read_only_hint is True
                 assert annotations.destructive_hint is False
                 assert annotations.open_world_hint is False
                 assert annotations.idempotent_hint is True
+
+            for name in metered_reads:
+                read_annotations = tools[name].annotations
+                assert read_annotations is not None
+                assert read_annotations.read_only_hint is True
+                assert read_annotations.destructive_hint is False
+                assert read_annotations.open_world_hint is False
+                assert read_annotations.idempotent_hint is False
 
             for name in local_writes:
                 write_annotations = tools[name].annotations
@@ -369,7 +388,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert identity_result.structured_content["archive"]["live"]["available"] is True
             assert (
                 identity_result.structured_content["capability_registry"]["capability_count"]
-                == 46
+                == 50
             )
 
             glance_result = await client.call_tool("house.glance", {})
@@ -383,7 +402,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert status_result.is_error is False
             assert status_result.structured_content is not None
             assert status_result.structured_content["server"]["version"] == "0.9.0.dev0"
-            assert status_result.structured_content["policy"]["capability_count"] == 46
+            assert status_result.structured_content["policy"]["capability_count"] == 50
             assert status_result.structured_content["runtime"]["configured"] is False
             assert status_result.structured_content["archive"]["promotion_configured"] is True
             assert (

@@ -100,3 +100,16 @@ def test_confirm_or_deny_is_not_treated_as_allow() -> None:
     )
     with pytest.raises(PolicyDenied):
         engine.require_allowed("social.publish_reply")
+
+
+def test_daemon_bridge_peer_capabilities_are_perceive_only() -> None:
+    engine = PolicyEngine()
+    for name in (
+        "daemon_bridge.status",
+        "daemon_bridge.residents",
+        "daemon_bridge.capabilities",
+        "daemon_bridge.query",
+    ):
+        capability = engine.require_allowed(name)
+        assert capability.effect is EffectClass.PERCEIVE
+        assert capability.default is Decision.ALLOW

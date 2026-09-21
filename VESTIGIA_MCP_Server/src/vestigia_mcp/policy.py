@@ -310,6 +310,30 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Record a seat's GameTable concession without erasing game history.",
     ),
     Capability(
+        "daemon_bridge.status",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect optional independent Daemon-Bridge loopback linkage and protocol health.",
+    ),
+    Capability(
+        "daemon_bridge.residents",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Read the Bridge-owned public resident directory through authenticated loopback.",
+    ),
+    Capability(
+        "daemon_bridge.capabilities",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect the Bridge-owned external consult contract and exposed model routes.",
+    ),
+    Capability(
+        "daemon_bridge.query",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Dispatch one metered, private, non-persistent resident consult with no outward action.",
+    ),
+    Capability(
         "runtime.list",
         EffectClass.PERCEIVE,
         Decision.ALLOW,
