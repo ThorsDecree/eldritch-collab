@@ -27,6 +27,7 @@ from vestigia.context import ContextAssembler
 from vestigia.curation import Curator
 from vestigia.db import ContinuityDB
 from vestigia.adapters.discord_adapter import (
+    build_bell_runtime_message,
     chunk_text,
     discord_platform_rejection_reason,
     discord_rejection_reason,
@@ -877,14 +878,12 @@ class BellNoChangeRuntimeTests(HomeCase):
             delivery_interface="discord",
             delivery_target={"kind": "dm", "id": "123"},
         )
-        return NormalizedMessage(
-            content=service.invitation_text(bell),
-            interface="bell",
-            speaker_id=f"bell:{bell.id}",
-            metadata={
-                "bell_id": bell.id,
-                "bell_retrieval": service.retrieval_envelope(bell),
-            },
+        fired = service.mark_fired(bell.id, fired_at=datetime.now(UTC))
+        return build_bell_runtime_message(
+            service,
+            bell,
+            fired,
+            room_id="hearth",
         )
 
     def test_explicit_bell_no_change_has_outcome_and_skips_curation(self) -> None:
@@ -1951,6 +1950,52 @@ class ImageTests(HomeCase):
 
 
 class CurationTests(HomeCase):
+    def test_automatic_batches_refrain_from_immediate_memory_reoffer(self) -> None:
+        memory_id = self.db.add_memory(
+            resident_id="test-resident",
+            room_id="hearth",
+            content="The windowsill note can wait without becoming a decision.",
+            memory_type="tension",
+            tier="warm",
+            authorship="runtime",
+            authority_state="model_inferred",
+            status="candidate",
+            actor="runtime",
+            reason="fixture",
+        )
+        curator = Curator(self.config, self.db)
+
+        first = curator.create_batch(trigger_reason="cadence")
+        self.assertIsNotNone(first)
+        self.assertIn(memory_id, first["memory_ids"])
+
+        immediate = curator.create_batch(trigger_reason="cadence")
+        self.assertIsNone(immediate)
+        self.assertEqual("candidate", self.db.get_memory(memory_id).status)
+
+        explicit = curator.create_batch(trigger_reason="explicit")
+        self.assertIsNotNone(explicit)
+        self.assertIn(memory_id, explicit["memory_ids"])
+
+        with self.db.connect() as connection:
+            connection.execute(
+                """
+                UPDATE curation_batches
+                SET created_at=?
+                WHERE id IN (?, ?)
+                """,
+                (
+                    (datetime.now(UTC) - timedelta(hours=2)).isoformat(),
+                    first["batch_id"],
+                    explicit["batch_id"],
+                ),
+            )
+
+        after_refractory = curator.create_batch(trigger_reason="cadence")
+        self.assertIsNotNone(after_refractory)
+        self.assertIn(memory_id, after_refractory["memory_ids"])
+        self.assertEqual("candidate", self.db.get_memory(memory_id).status)
+
     def test_summary_echoes_do_not_become_independent_recurrence(self) -> None:
         content = "The same derived summary claim."
         for index in range(2):
