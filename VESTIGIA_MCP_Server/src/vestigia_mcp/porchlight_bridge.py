@@ -2,19 +2,60 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import hmac
 import json
 import secrets
 import threading
 import uuid
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+
+AuditCallback = Callable[
+    [dict[str, object], str, str | None, str | None],
+    None,
+]
+
+
+def _share_audit_arguments(payload: dict[str, Any]) -> dict[str, object]:
+    content = payload.get("content")
+    content_text = content if isinstance(content, str) else None
+    return {
+        "url": payload.get("url") if isinstance(payload.get("url"), str) else None,
+        "title": payload.get("title") if isinstance(payload.get("title"), str) else None,
+        "mode": payload.get("mode") if isinstance(payload.get("mode"), str) else None,
+        "captured_at": (
+            payload.get("captured_at")
+            if isinstance(payload.get("captured_at"), str)
+            else None
+        ),
+        "previous_snapshot_sha256": (
+            payload.get("previous_snapshot_sha256")
+            if isinstance(payload.get("previous_snapshot_sha256"), str)
+            else None
+        ),
+        "screenshot_included": payload.get("screenshot_base64") is not None,
+        "content_sha256": (
+            hashlib.sha256(content_text.encode("utf-8")).hexdigest()
+            if content_text is not None
+            else None
+        ),
+        "content_bytes": (
+            len(content_text.encode("utf-8")) if content_text is not None else None
+        ),
+    }
+
+
 from .adapters.archive import ArchiveError, ArchiveSource
 from .archive_mutation import ArchiveMutationStore
+from .audit import AuditLedger
 from .config import Settings
+from .policy import PolicyEngine
 from .porchlight_share import PorchlightShareRequest, PorchlightShareService
+from .receipt_garden import ReceiptGarden
 
 
 class PairingTokenStore:
@@ -104,7 +145,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                     request_id,
                 )
                 return
-            result = self.server.share(payload)
+            result = self.server.share(payload, request_id=request_id)
             self._send(200, result, request_id)
         except _BridgeHTTPError as exc:
             self._error(exc.status, exc.code, exc.message, request_id)
@@ -217,6 +258,7 @@ class PorchlightBridgeServer:
         port: int = 8765,
         extension_origin: str = "chrome-extension://porchlight",
         max_body_bytes: int = 1_200_000,
+        audit: AuditCallback | None = None,
     ) -> None:
         normalized_host = host.strip().lower()
         if normalized_host == "localhost":
@@ -233,6 +275,7 @@ class PorchlightBridgeServer:
         self.tokens = tokens
         self.extension_origin = extension_origin.strip()
         self.max_body_bytes = max_body_bytes
+        self.audit = audit
         self._httpd = _BridgeHTTPServer((normalized_host, port), _BridgeHandler)
         self._httpd.bridge = self
         self._httpd.extension_origin = self.extension_origin
@@ -255,29 +298,62 @@ class PorchlightBridgeServer:
     def server_close(self) -> None:
         self._httpd.server_close()
 
-    def share(self, payload: dict[str, Any]) -> dict[str, object]:
-        required = ("url", "title", "content", "mode")
-        if any(not isinstance(payload.get(key), str) for key in required):
-            raise _BridgeHTTPError(400, "invalid_request", "Porchlight share fields are invalid")
-        screenshot = None
-        encoded = payload.get("screenshot_base64")
-        if encoded is not None:
-            if not isinstance(encoded, str):
-                raise _BridgeHTTPError(400, "invalid_request", "Screenshot payload is invalid")
-            try:
-                screenshot = base64.b64decode(encoded, validate=True)
-            except (ValueError, binascii.Error) as exc:
-                raise _BridgeHTTPError(400, "invalid_request", "Screenshot payload is invalid") from exc
-        request = PorchlightShareRequest(
-            url=payload["url"],
-            title=payload["title"],
-            content=payload["content"],
-            mode=payload["mode"],
-            captured_at=payload.get("captured_at"),
-            previous_snapshot_sha256=payload.get("previous_snapshot_sha256"),
-            screenshot_png=screenshot,
-        )
-        return self.service.share(request)
+    def share(
+        self,
+        payload: dict[str, Any],
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, object]:
+        arguments = _share_audit_arguments(payload)
+        try:
+            required = ("url", "title", "content", "mode")
+            if any(not isinstance(payload.get(key), str) for key in required):
+                raise _BridgeHTTPError(
+                    400, "invalid_request", "Porchlight share fields are invalid"
+                )
+            screenshot = None
+            encoded = payload.get("screenshot_base64")
+            if encoded is not None:
+                if not isinstance(encoded, str):
+                    raise _BridgeHTTPError(
+                        400, "invalid_request", "Screenshot payload is invalid"
+                    )
+                try:
+                    screenshot = base64.b64decode(encoded, validate=True)
+                except (ValueError, binascii.Error) as exc:
+                    raise _BridgeHTTPError(
+                        400, "invalid_request", "Screenshot payload is invalid"
+                    ) from exc
+            request = PorchlightShareRequest(
+                url=payload["url"],
+                title=payload["title"],
+                content=payload["content"],
+                mode=payload["mode"],
+                captured_at=payload.get("captured_at"),
+                previous_snapshot_sha256=payload.get("previous_snapshot_sha256"),
+                screenshot_png=screenshot,
+            )
+            result = self.service.share(request)
+        except Exception as exc:
+            self._record_audit(
+                arguments,
+                "error",
+                request_id,
+                type(exc).__name__,
+            )
+            raise
+        self._record_audit(arguments, "ok", request_id)
+        return result
+
+    def _record_audit(
+        self,
+        arguments: dict[str, object],
+        outcome: str,
+        request_id: str | None,
+        detail: str | None = None,
+    ) -> None:
+        if self.audit is not None:
+            self.audit(arguments, outcome, request_id, detail)
 
     def log_exception(self, exc: Exception) -> None:
         # Deliberately do not log request data or service exception text.
@@ -306,6 +382,26 @@ def create_porchlight_bridge(settings: Settings) -> PorchlightBridgeServer:
         reader,
         screenshot_max_bytes=settings.porchlight_screenshot_max_bytes,
     )
+    ledger = AuditLedger(settings.state_dir, settings.deployment_id)
+    receipt_garden = ReceiptGarden(settings.state_dir, settings.deployment_id)
+    share_capability = PolicyEngine().require_allowed("archive.share_porchlight")
+
+    def record_share_audit(
+        arguments: dict[str, object],
+        outcome: str,
+        request_id: str | None,
+        detail: str | None = None,
+    ) -> None:
+        event = ledger.record(
+            share_capability,
+            arguments,
+            outcome,
+            request_id=request_id,
+            authority="porchlight_bridge",
+            detail=detail,
+        )
+        receipt_garden.record_audit_event(event)
+
     return PorchlightBridgeServer(
         service,
         PairingTokenStore(settings.porchlight_bridge_token_path or settings.state_dir / "porchlight-token"),
@@ -313,4 +409,5 @@ def create_porchlight_bridge(settings: Settings) -> PorchlightBridgeServer:
         port=settings.porchlight_bridge_port,
         extension_origin=settings.porchlight_bridge_extension_origin,
         max_body_bytes=settings.porchlight_bridge_max_body_bytes,
+        audit=record_share_audit,
     )
