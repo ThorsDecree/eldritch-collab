@@ -101,6 +101,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "batch_max_items": 8,
         "packet_tokens": 4500,
         "queue_pressure": 8,
+        "memory_reoffer_seconds": 3600,
     },
     "house": {
         "enabled": True,
@@ -281,6 +282,10 @@ ENV_MAP: dict[str, tuple[str, Callable[[str], Any]]] = {
     "VESTIGIA_CURATION_CADENCE": ("curation.cadence_exchanges", _as_int),
     "VESTIGIA_CURATION_BATCH_MAX": ("curation.batch_max_items", _as_int),
     "VESTIGIA_CURATION_PACKET_TOKENS": ("curation.packet_tokens", _as_int),
+    "VESTIGIA_CURATION_MEMORY_REOFFER_SECONDS": (
+        "curation.memory_reoffer_seconds",
+        _as_int,
+    ),
     "VESTIGIA_HOUSE_ENABLED": ("house.enabled", _as_bool),
     "VESTIGIA_RESIDENT_MAX_PRIVATE_TURNS": ("house.max_private_turns", _as_int),
     "VESTIGIA_HOUSE_TOOL_ROUNDS": ("house.max_tool_rounds", _as_int),
