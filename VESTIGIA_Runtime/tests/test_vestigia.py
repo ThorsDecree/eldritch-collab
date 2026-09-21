@@ -1967,7 +1967,7 @@ class CurationTests(HomeCase):
 
         first = curator.create_batch(trigger_reason="cadence")
         self.assertIsNotNone(first)
-        self.assertIn(memory_id, first["memory_ids"])
+        self.assertIn(memory_id, {item["id"] for item in first["memories"]})
 
         immediate = curator.create_batch(trigger_reason="cadence")
         self.assertIsNone(immediate)
@@ -1975,7 +1975,7 @@ class CurationTests(HomeCase):
 
         explicit = curator.create_batch(trigger_reason="explicit")
         self.assertIsNotNone(explicit)
-        self.assertIn(memory_id, explicit["memory_ids"])
+        self.assertIn(memory_id, {item["id"] for item in explicit["memories"]})
 
         with self.db.connect() as connection:
             connection.execute(
@@ -1993,7 +1993,7 @@ class CurationTests(HomeCase):
 
         after_refractory = curator.create_batch(trigger_reason="cadence")
         self.assertIsNotNone(after_refractory)
-        self.assertIn(memory_id, after_refractory["memory_ids"])
+        self.assertIn(memory_id, {item["id"] for item in after_refractory["memories"]})
         self.assertEqual("candidate", self.db.get_memory(memory_id).status)
 
     def test_summary_echoes_do_not_become_independent_recurrence(self) -> None:
