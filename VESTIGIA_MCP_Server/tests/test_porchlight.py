@@ -134,6 +134,7 @@ def test_direct_share_writes_modules_namespace_and_optional_screenshot(
         )
     )
     assert receipt["screenshot"]["mime_type"] == "image/png"
+    assert receipt["consent_basis"] == "explicit_porchlight_action"
     assert "visible" not in json.dumps(receipt)
 
 
