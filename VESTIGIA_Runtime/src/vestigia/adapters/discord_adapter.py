@@ -303,6 +303,31 @@ async def discord_recent_context(
     return text, list(reversed(retained_ids))
 
 
+def build_bell_runtime_message(
+    bell_service: BellService,
+    bell: Any,
+    fired: Any,
+    *,
+    room_id: str,
+) -> NormalizedMessage:
+    """Build the exact Runtime envelope used by the Discord bell scheduler."""
+    return NormalizedMessage(
+        content=bell_service.invitation_text(bell),
+        speaker_role="user",
+        speaker_id=f"bell:{bell.id}",
+        interface="bell",
+        room_id=room_id,
+        external_id=f"{bell.id}:{fired.last_fired_at}",
+        metadata={
+            "bell_id": bell.id,
+            "bell_purpose": bell.purpose,
+            "bell_strength": bell.strength,
+            "bell_retrieval": bell_service.retrieval_envelope(bell),
+            "causal_influence": "unknown",
+        },
+    )
+
+
 def run_discord(
     home: str | Path,
     *,
@@ -435,20 +460,11 @@ def run_discord(
                 prompt_snapshot=bell.prompt,
                 payload={"delivery_target": bell.delivery_target},
             )
-            normalized = NormalizedMessage(
-                content=bell_service.invitation_text(bell),
-                speaker_role="user",
-                speaker_id=f"bell:{bell.id}",
-                interface="bell",
+            normalized = build_bell_runtime_message(
+                bell_service,
+                bell,
+                fired,
                 room_id=runtime.room_id,
-                external_id=f"{bell.id}:{fired.last_fired_at}",
-                metadata={
-                    "bell_id": bell.id,
-                    "bell_purpose": bell.purpose,
-                    "bell_strength": bell.strength,
-                    "bell_retrieval": bell_service.retrieval_envelope(bell),
-                    "causal_influence": "unknown",
-                },
             )
             result = await asyncio.to_thread(runtime.chat, normalized)
             if result.suppressed:
