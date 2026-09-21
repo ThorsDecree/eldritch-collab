@@ -15,6 +15,7 @@ from .bell_observatory import BellObservatory
 from .bell_retrieval import resolve_retrieval_request
 from .capability_contracts import bell_contracts, contract_for
 from .config import ResolvedConfig
+from .context import ContextAssembler
 from .context_controls import (
     VISIBILITY_MODES,
     default_context_controls,
@@ -25,7 +26,7 @@ from .context_controls import (
 from .db import ContinuityDB
 from .images import ImageService
 from .legible import LegibleLedger
-from .models import NormalizedMessage
+from .models import NormalizedMessage, RuntimeState
 from .resident_controls import (
     LISTENING_MODES,
     configure_resident_controls,
@@ -1049,6 +1050,7 @@ class HousePort:
             "bell.run.inspect": self._bell_run_inspect,
             "bell.run.replay": self._bell_run_replay,
             "bell.policy.preview": self._bell_policy_preview,
+            "bell.rehearse": self._bell_rehearse,
             "next_step": self._next_step,
             "context.control": self._context_control,
             "source.visibility": self._source_visibility,
@@ -1093,6 +1095,7 @@ class HousePort:
             "identity.history", "identity.compare", "identity.provenance",
             "retrieval.inspect",
             "bell.runs.list", "bell.run.inspect", "bell.run.replay", "bell.policy.preview",
+            "bell.rehearse",
             "jobs.receipts",
         }
         memory_read = {
@@ -1182,6 +1185,7 @@ class HousePort:
                 "bell.run.inspect": "Inspect one Bell Observatory run's retrieval and outcome receipts.",
                 "bell.run.replay": "Replay one bell run's stored decision inputs without model or outward effects.",
                 "bell.policy.preview": "Preview effective bell retrieval policy and semantic terms.",
+                "bell.rehearse": "Preview a candidate bell against live local context without persisting a trace or run.",
                 "next_step": "Explain the next safe or required move for one receipt, draft, job, bell, object, or action.",
                 "context.control": "Inspect or arrange the resident's prompt and transcript drawers.",
                 "source.visibility": "Choose which authorized Discord history is visible as ambient context.",
@@ -2487,6 +2491,70 @@ class HousePort:
             "causal_influence": "unknown",
         }
 
+    def _bell_rehearse(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Assemble a live local bell context preview without operational effects."""
+        requested = str(payload.get("requested_policy") or "auto").strip().lower()
+        prompt = str(payload.get("prompt") or "")
+        purpose = str(payload.get("purpose") or "")
+        selected = payload.get("selected_sources", [])
+        message = NormalizedMessage(
+            content=prompt,
+            interface="bell",
+            room_id=self.room_id,
+            metadata={
+                "bell_retrieval": {
+                    "resident_prompt": prompt,
+                    "requested_policy": requested,
+                    "selected_sources": selected,
+                    "control_plane": {
+                        "bell_id": payload.get("bell_id"),
+                        "purpose": purpose,
+                    },
+                }
+            },
+        )
+        state = self.db.current_state(self.resident_id) or RuntimeState.ORIENTATION.value
+        assembly = ContextAssembler(
+            self.config,
+            self.db,
+            include_composed_sources=False,
+        ).assemble(
+            message,
+            state=state,
+            model_route="default",
+            persist_receipt=False,
+        )
+        receipt = assembly.receipt
+        return {
+            "schema_version": "vestigia.bell-rehearsal.v0.1",
+            "rehearsal": True,
+            "bell_id": payload.get("bell_id"),
+            "state": state,
+            "context_trace_persisted": False,
+            "observatory_run_persisted": False,
+            "receipt_is_memory": False,
+            "model_causality": "not_replayed",
+            "outward_dispatch": False,
+            "retrieval": receipt.get("retrieval", {}),
+            "orientation_context_refs": [
+                {
+                    "name": layer.get("name"),
+                    "content_hash": layer.get("content_hash"),
+                    "included_item_ids": list(layer.get("included_item_ids", ())),
+                    "omitted_item_ids": list(layer.get("omitted_item_ids", ())),
+                }
+                for layer in receipt.get("layers", ())
+                if isinstance(layer, dict)
+            ],
+            "sources": receipt.get("context_sources", []),
+            "budget": receipt.get("budget", {}),
+            "limitations": [
+                "uses a live local context snapshot",
+                "does not persist a context trace or Bell Observatory run",
+                "does not call a model or dispatch outward",
+            ],
+        }
+
     def _retrieval_inspect(self, payload: dict[str, Any]) -> dict[str, Any]:
         turn_id = str(payload.get("turn_id") or "").strip()
         if turn_id:
@@ -3672,10 +3740,10 @@ class HousePort:
         mode = str(payload.get("mode") or "inspect").strip().lower()
         if mode not in {"inspect", "configure", "reset", "recompress"}:
             raise ValueError("context.control mode must be inspect, configure, reset, or recompress")
-        
+
         report = load_context_controls_verbose(self.config, self.db, self.resident_id)
         current = report["requested"]
-        
+
         if mode == "reset":
             current = default_context_controls(self.config)
             save_context_controls(self.db, self.resident_id, current)
@@ -3701,7 +3769,7 @@ class HousePort:
                 current[field] = value
             save_context_controls(self.db, self.resident_id, current)
             report = load_context_controls_verbose(self.config, self.db, self.resident_id)
-            
+
         return {
             "mode": mode,
             "controls": report["effective"],

@@ -51,6 +51,26 @@ def test_mcp_reaches_runtime_observatory_without_copying_runtime_state(tmp_path:
             assert request_id.startswith("mcp_req_")
             assert called.structured_content["runtime"]["effective_policy"] == "field_scan_v1"
 
+            rehearsal = await client.call_tool(
+                "runtime.call",
+                {
+                    "action": "bell.rehearse",
+                    "arguments": {
+                        "bell_id": "candidate-bell",
+                        "requested_policy": "prompt_only",
+                        "purpose": "topic",
+                        "prompt": "Turn attention toward the lantern.",
+                    },
+                },
+            )
+            assert rehearsal.is_error is False
+            assert rehearsal.structured_content is not None
+            rehearsal_runtime = rehearsal.structured_content["runtime"]
+            assert rehearsal_runtime["rehearsal"] is True
+            assert rehearsal_runtime["context_trace_persisted"] is False
+            assert rehearsal_runtime["observatory_run_persisted"] is False
+            assert rehearsal_runtime["outward_dispatch"] is False
+
             trace = await client.call_tool("receipts.trace", {"request_id": request_id})
             assert trace.is_error is False
             assert trace.structured_content is not None

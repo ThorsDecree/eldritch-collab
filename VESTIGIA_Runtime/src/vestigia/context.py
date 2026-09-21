@@ -37,6 +37,7 @@ class ContextAssembler:
         db: ContinuityDB,
         *,
         additional_sources: Iterable[ContextSource] = (),
+        include_composed_sources: bool = True,
     ) -> None:
         self.config = config
         self.db = db
@@ -48,7 +49,7 @@ class ContextAssembler:
         # Runtime memory remains the always-present compatibility source. Optional
         # composition sources are additive and deployment-scoped; direct injection is
         # available for tests/embedders without changing the core Runtime constructor.
-        composed = build_context_sources(config, db)
+        composed = build_context_sources(config, db) if include_composed_sources else []
         self.context_sources: tuple[ContextSource, ...] = tuple(
             [RuntimeMemoryContextSource(config, db), *composed, *list(additional_sources)]
         )
@@ -73,6 +74,7 @@ class ContextAssembler:
         state: str,
         model_route: str = "default",
         turn_id: str | None = None,
+        persist_receipt: bool = True,
     ) -> ContextAssembly:
         actual_turn_id = turn_id or new_id("turn")
         report = load_context_controls_verbose(self.config, self.db, self.resident_id)
@@ -173,7 +175,11 @@ class ContextAssembler:
             {"role": "developer", "content": developer_text},
             {"role": "user", "content": current},
         )
-        receipt_path = self.home / "traces" / f"{actual_turn_id}.receipt.json"
+        receipt_path = (
+            self.home / "traces" / f"{actual_turn_id}.receipt.json"
+            if persist_receipt
+            else None
+        )
         layer_by_name = {layer.name: layer for layer in layers}
         memory_result = next(
             (
@@ -262,8 +268,9 @@ class ContextAssembler:
                 for item in (memory_result.items if memory_result else ())
             ],
         }
-        atomic_write_json(receipt_path, receipt)
-        if bool(self.config.get("traces.save_full_context", False)):
+        if receipt_path is not None:
+            atomic_write_json(receipt_path, receipt)
+        if receipt_path is not None and bool(self.config.get("traces.save_full_context", False)):
             atomic_write_text(
                 self.home / "traces" / f"{actual_turn_id}.context.md",
                 developer_text + "\n\n# Current Message\n\n" + current + "\n",
@@ -280,6 +287,7 @@ class ContextAssembler:
             maximum_tokens=maximum,
             receipt_path=receipt_path,
             messages=messages,
+            receipt=receipt,
         )
 
     def _retrieve_context_sources(

@@ -64,6 +64,7 @@ GROUPS: dict[str, str] = {
     "bell.control": "bells",
     **{name: "bells" for name in (
         "bell.runs.list", "bell.run.inspect", "bell.run.replay", "bell.policy.preview",
+        "bell.rehearse",
     )},
 }
 
@@ -110,6 +111,13 @@ FIELDS: dict[str, tuple[dict[str, Any], tuple[str, ...]]] = {
         "purpose": S(maxLength=240),
         "selected_sources": A(S(), maxItems=24),
     }, ()),
+    "bell.rehearse": ({
+        "bell_id": ID,
+        "requested_policy": S(enum=["auto", "none", "prompt_only", "response_related", "resident_selected"]),
+        "prompt": S(minLength=1, maxLength=4000),
+        "purpose": S(maxLength=240),
+        "selected_sources": A(S(), maxItems=24),
+    }, ("prompt",)),
     "context.control": ({
         "mode": S(enum=["inspect", "configure", "reset", "recompress"]),
         "prompt_budget_tokens": I(minimum=8000, maximum=100000),
