@@ -77,6 +77,7 @@ class PorchlightShareService:
             raise ArchiveError("Porchlight update requires an existing latest snapshot")
 
         receipt = dict(artifact.receipt)
+        receipt["consent_basis"] = "explicit_porchlight_action"
         bundle_entries = [
             BundleEntry(artifact.latest_path, artifact.body.encode("utf-8"), "text"),
             BundleEntry(
