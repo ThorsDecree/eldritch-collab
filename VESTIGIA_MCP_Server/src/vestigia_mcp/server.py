@@ -20,6 +20,7 @@ from .archive_mutation import ArchiveMutationStore
 from .audit import AuditError, AuditLedger
 from .browse import BrowseSessionStore
 from .config import Settings
+from .daemon_bridge import DaemonBridgeClient, DaemonBridgeError
 from .health import (
     archive_health as inspect_archive_health,
     registry_status as inspect_registry_status,
@@ -43,6 +44,12 @@ READ_ONLY_ANNOTATIONS = ToolAnnotations(
     destructive_hint=False,
     open_world_hint=False,
     idempotent_hint=True,
+)
+METERED_READ_ANNOTATIONS = ToolAnnotations(
+    read_only_hint=True,
+    destructive_hint=False,
+    open_world_hint=False,
+    idempotent_hint=False,
 )
 LOCAL_WRITE_ANNOTATIONS = ToolAnnotations(
     read_only_hint=False,
@@ -98,6 +105,15 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         legacy_env_file=settings.runtime_env_file,
         deployment_id=settings.deployment_id,
         legacy_write_actions=settings.runtime_write_actions,
+    )
+    daemon_bridge = DaemonBridgeClient(
+        enabled=settings.daemon_bridge_enabled,
+        host=settings.daemon_bridge_host,
+        port=settings.daemon_bridge_port,
+        token_path=settings.daemon_bridge_token_path,
+        deployment_id=settings.deployment_id,
+        timeout_seconds=settings.daemon_bridge_timeout_seconds,
+        max_response_bytes=settings.daemon_bridge_max_response_bytes,
     )
     archive_mutations = ArchiveMutationStore(
         settings.live_archive_root,
@@ -196,7 +212,13 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             raise ToolError(str(exc)) from exc
         try:
             result = operation()
-        except (ArchiveError, AuditError, RuntimeBridgeError, GameTableError) as exc:
+        except (
+            ArchiveError,
+            AuditError,
+            RuntimeBridgeError,
+            DaemonBridgeError,
+            GameTableError,
+        ) as exc:
             event = ledger.record(
                 capability,
                 arguments,
@@ -1899,6 +1921,131 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         )
 
     @server.tool(
+        name="daemon_bridge.status",
+        title="Inspect Daemon-Bridge linkage",
+        description=(
+            "Inspect whether this MCP deployment is configured to reach an independent "
+            "Daemon-Bridge loopback API, whether its token is readable, and whether the live "
+            "Bridge reports the expected protocol. This health probe does not invoke a resident."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def daemon_bridge_status() -> dict[str, object]:
+        return guarded("daemon_bridge.status", {}, daemon_bridge.status)
+
+    @server.tool(
+        name="daemon_bridge.residents",
+        title="List Daemon-Bridge residents",
+        description=(
+            "Read the authenticated Bridge-owned resident directory. This returns public "
+            "resident/profile metadata only; it does not expose system prompts, private memory, "
+            "or Discord channel history."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def daemon_bridge_residents() -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        return guarded(
+            "daemon_bridge.residents",
+            {},
+            lambda: daemon_bridge.residents(request_id=request_id),
+            request_id=request_id,
+        )
+
+    @server.tool(
+        name="daemon_bridge.capabilities",
+        title="Inspect Daemon-Bridge consult contract",
+        description=(
+            "Inspect the authenticated Bridge-owned API contract, including the transient "
+            "query guarantees and model-route names the independent Bridge currently exposes."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def daemon_bridge_capabilities() -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        return guarded(
+            "daemon_bridge.capabilities",
+            {},
+            lambda: daemon_bridge.capabilities(request_id=request_id),
+            request_id=request_id,
+        )
+
+    @server.tool(
+        name="daemon_bridge.query",
+        title="Consult one Daemon-Bridge resident",
+        description=(
+            "Dispatch one metered private consult to a named resident through the independent "
+            "Daemon-Bridge. The v0.1 contract is transient and channel-blind: no rolling-turn "
+            "persistence, Discord delivery, mode change, anchor write, or outward action. "
+            "MCP supplies its own caller identity; callers cannot impersonate a Discord user."
+        ),
+        annotations=METERED_READ_ANNOTATIONS,
+    )
+    def daemon_bridge_query(
+        resident_id: str,
+        content: str,
+        model_route: str | None = None,
+    ) -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        audit_arguments = {
+            "resident_id": resident_id,
+            "content": content,
+            "model_route": model_route,
+        }
+
+        def operation() -> dict[str, object]:
+            result = daemon_bridge.query(
+                resident_id=resident_id,
+                content=content,
+                model_route=model_route,
+                request_id=request_id,
+            )
+            receipt_garden.append(
+                request_id=request_id,
+                operation="daemon_bridge.query.dispatch",
+                edges=[
+                    {
+                        "type": "dispatched",
+                        "source": "VESTIGIA MCP",
+                        "target": "daemon_bridge.query",
+                        "evidence_scope": "authenticated_loopback",
+                    },
+                    {
+                        "type": "returned",
+                        "source": "daemon_bridge.query",
+                        "target": "VESTIGIA MCP",
+                        "evidence_scope": "transient_consult",
+                    },
+                ],
+                omitted=("prompt_text", "answer_text", "bridge_token"),
+                safe_summary={
+                    "resident_id": str(
+                        (result.get("resident") or {}).get("agent_id")
+                        if isinstance(result.get("resident"), dict)
+                        else resident_id
+                    ),
+                    "model_route": result.get("model_route"),
+                    "resolved_model": result.get("resolved_model"),
+                    "bridge_receipt_id": result.get("bridge_receipt_id"),
+                    "conversation_persistence": result.get(
+                        "conversation_persistence"
+                    ),
+                    "channel_context": result.get("channel_context"),
+                    "outward_action": result.get("outward_action"),
+                    "mode_mutation": result.get("mode_mutation"),
+                    "anchor_mutation": result.get("anchor_mutation"),
+                },
+            )
+            return result
+
+        return guarded(
+            "daemon_bridge.query",
+            audit_arguments,
+            operation,
+            request_id=request_id,
+        )
+
+    @server.tool(
         name="runtime.list",
         title="List connected Runtime houses",
         description=(
@@ -2344,6 +2491,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                         "reason": "VESTIGIA_MCP_GAMETABLE_ENABLED is not enabled for this deployment.",
                     }
                 ),
+                "daemon_bridge": daemon_bridge.status(),
                 "runtime": {
                     "configured": runtime_registry.configured,
                     "home": runtime_registry.configured_home,
@@ -2385,6 +2533,10 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                         "mount.read_text",
                         "mount.read_media",
                         "mount.search_text",
+                        "daemon_bridge.status",
+                        "daemon_bridge.residents",
+                        "daemon_bridge.capabilities",
+                        "daemon_bridge.query",
                         "runtime.list",
                         "audit.show",
                         "system.identity",
