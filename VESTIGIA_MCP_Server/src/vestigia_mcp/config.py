@@ -84,6 +84,15 @@ def _bridge_host_env() -> str:
     return host
 
 
+def _daemon_bridge_host_env() -> str:
+    host = os.getenv("VESTIGIA_MCP_DAEMON_BRIDGE_HOST", "127.0.0.1").strip().lower()
+    if host == "localhost":
+        return "127.0.0.1"
+    if host != "127.0.0.1":
+        raise ValueError("VESTIGIA MCP Daemon-Bridge host must be loopback")
+    return host
+
+
 @dataclass(frozen=True)
 class Settings:
     live_archive_root: Path | None
@@ -105,6 +114,12 @@ class Settings:
     porchlight_bridge_token_path: Path | None = None
     porchlight_bridge_extension_origin: str = "chrome-extension://porchlight"
     porchlight_bridge_max_body_bytes: int = 1_200_000
+    daemon_bridge_enabled: bool = False
+    daemon_bridge_host: str = "127.0.0.1"
+    daemon_bridge_port: int = 8766
+    daemon_bridge_token_path: Path | None = None
+    daemon_bridge_timeout_seconds: int = 120
+    daemon_bridge_max_response_bytes: int = 262_144
     mounts_file: Path | None = None
     runtimes_file: Path | None = None
     gametable_enabled: bool = False
@@ -175,6 +190,20 @@ class Settings:
             or "chrome-extension://porchlight",
             porchlight_bridge_max_body_bytes=_positive_int_env(
                 "VESTIGIA_MCP_PORCHLIGHT_BRIDGE_MAX_BODY_BYTES", 1_200_000
+            ),
+            daemon_bridge_enabled=_bool_env("VESTIGIA_MCP_DAEMON_BRIDGE_ENABLED"),
+            daemon_bridge_host=_daemon_bridge_host_env(),
+            daemon_bridge_port=_positive_int_env(
+                "VESTIGIA_MCP_DAEMON_BRIDGE_PORT", 8766
+            ),
+            daemon_bridge_token_path=_optional_path(
+                "VESTIGIA_MCP_DAEMON_BRIDGE_TOKEN_PATH"
+            ),
+            daemon_bridge_timeout_seconds=_positive_int_env(
+                "VESTIGIA_MCP_DAEMON_BRIDGE_TIMEOUT_SECONDS", 120
+            ),
+            daemon_bridge_max_response_bytes=_positive_int_env(
+                "VESTIGIA_MCP_DAEMON_BRIDGE_MAX_RESPONSE_BYTES", 262_144
             ),
             mounts_file=_optional_path("VESTIGIA_MCP_MOUNTS_FILE"),
             runtimes_file=_optional_path("VESTIGIA_MCP_RUNTIMES_FILE"),
