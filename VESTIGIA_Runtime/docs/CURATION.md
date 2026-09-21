@@ -158,3 +158,30 @@ Identity Markdown uses an exact draft/diff/claim flow:
 
 The runtime refuses stale hashes if the document changed after preview. The previous complete
 file is preserved under `memory/identity-versions/`, and replacement is atomic.
+
+
+## Presentation refractory period
+
+Authority non-escalation and salience non-escalation are separate protections.
+
+Automatic cadence and queue-pressure batches therefore apply a presentation refractory period to
+unresolved memories that were recently included in another curation batch. By default, a memory
+that appeared in a batch is not automatically offered again for one hour
+(`curation.memory_reoffer_seconds: 3600`).
+
+This does **not** change the memory's authority, status, or resolution state. A candidate remains a
+candidate; deferred and disputed records remain deferred or disputed. Silence still does not mean
+claim, rejection, or consent.
+
+Explicit curation bypasses the presentation refractory period so a resident or operator can
+deliberately revisit something immediately. Batches marked `failed_retryable` do not count as a
+successful presentation for refractory purposes.
+
+The period is configurable with:
+
+```env
+VESTIGIA_CURATION_MEMORY_REOFFER_SECONDS=3600
+```
+
+Set it to `0` to disable presentation refractoriness while retaining the existing authority
+protections.

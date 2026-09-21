@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .config import ResolvedConfig
@@ -328,8 +328,51 @@ class Curator:
             ).fetchone()
         return int(queued["n"]) >= threshold
 
+    def _recently_presented_memory_ids(
+        self,
+        *,
+        now: datetime,
+        refractory_seconds: int,
+    ) -> set[str]:
+        if refractory_seconds <= 0:
+            return set()
+        cutoff = (now - timedelta(seconds=refractory_seconds)).isoformat()
+        presented: set[str] = set()
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT memory_ids_json FROM curation_batches
+                WHERE resident_id=? AND room_id=?
+                  AND created_at>=?
+                  AND status!='failed_retryable'
+                ORDER BY rowid DESC
+                """,
+                (self.resident_id, self.room_id, cutoff),
+            ).fetchall()
+        for row in rows:
+            try:
+                values = json.loads(str(row["memory_ids_json"]))
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(values, list):
+                presented.update(str(item) for item in values if str(item).strip())
+        return presented
+
     def create_batch(self, *, trigger_reason: str = "explicit") -> dict[str, Any] | None:
         maximum_items = max(1, int(self.config.get("curation.batch_max_items", 8)))
+        now_dt = datetime.now(UTC)
+        refractory_seconds = max(
+            0,
+            int(self.config.get("curation.memory_reoffer_seconds", 3600)),
+        )
+        recently_presented = (
+            self._recently_presented_memory_ids(
+                now=now_dt,
+                refractory_seconds=refractory_seconds,
+            )
+            if trigger_reason in {"cadence", "queue_pressure"}
+            else set()
+        )
         with self.db.connect() as connection:
             state = connection.execute(
                 """
@@ -364,8 +407,21 @@ class Curator:
                 MemoryStatus.DEFERRED.value,
                 MemoryStatus.DISPUTED.value,
             ],
-            limit=maximum_items,
+            limit=maximum_items + len(recently_presented),
         )
+        suppressed_memory_ids: list[str] = []
+        if recently_presented:
+            filtered = []
+            for item in memories:
+                if item.id in recently_presented:
+                    suppressed_memory_ids.append(item.id)
+                    continue
+                filtered.append(item)
+                if len(filtered) >= maximum_items:
+                    break
+            memories = filtered
+        else:
+            memories = memories[:maximum_items]
         if (
             not turns
             and not queue_rows
@@ -386,7 +442,7 @@ class Curator:
         turn_ids = [str(row["id"]) for row in turns]
         memory_ids = [item.id for item in memories]
         queue_ids = [str(row["id"]) for row in queue_rows]
-        now = utc_now_iso()
+        now = now_dt.isoformat()
         with self.db.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
@@ -432,6 +488,11 @@ class Curator:
                             "turn_count": len(turn_ids),
                             "memory_count": len(memory_ids),
                             "queue_count": len(queue_ids),
+                            "memory_refractory_seconds": refractory_seconds,
+                            "memory_refractory_suppressed_count": len(
+                                suppressed_memory_ids
+                            ),
+                            "memory_refractory_suppressed_ids": suppressed_memory_ids,
                         }
                     ),
                     now,
