@@ -21,6 +21,7 @@ from .service_model import ServiceManifest
 PROTOCOL = "vestigia.house-mechanic-api.v0.4"
 MAX_REQUEST_BYTES = 16_384
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+_GENERATION_ID = re.compile(r"^hm_proc_[0-9a-f]{32}$")
 
 
 class HouseMechanicAPIError(RuntimeError):
@@ -421,13 +422,20 @@ class _Handler(BaseHTTPRequestHandler):
     @staticmethod
     def _generation_from_payload(payload: dict[str, Any]) -> str:
         generation_id = payload.get("generation_id")
-        if not isinstance(generation_id, str) or not generation_id.strip():
+        if not isinstance(generation_id, str):
             raise HouseMechanicAPIError(
                 400,
                 "invalid_request",
-                "generation_id must be a non-empty string",
+                "generation_id must be a string",
             )
-        return generation_id.strip()
+        generation_id = generation_id.strip()
+        if not _GENERATION_ID.fullmatch(generation_id):
+            raise HouseMechanicAPIError(
+                400,
+                "invalid_request",
+                "generation_id must match an issued House Mechanic generation",
+            )
+        return generation_id
 
     @staticmethod
     def _raise_lifecycle(exc: LifecycleError) -> None:
