@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 
+from .environment import filtered_environment
 from .model import Recipe
 
 
@@ -72,13 +73,6 @@ class _BoundedCollector:
         return self.raw().decode("utf-8", errors="replace")
 
 
-def _env(profile: str) -> dict[str, str]:
-    keep = {"SystemRoot", "WINDIR", "COMSPEC", "PATH", "PATHEXT", "TEMP", "TMP"}
-    if profile == "python":
-        keep |= {"PYTHONUTF8", "PYTHONIOENCODING"}
-    return {k: v for k, v in os.environ.items() if k in keep}
-
-
 def _git_output(repo_root: Path, *args: str) -> str | None:
     try:
         completed = subprocess.run(
@@ -86,7 +80,7 @@ def _git_output(repo_root: Path, *args: str) -> str | None:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            env=_env("minimal"),
+            env=filtered_environment("minimal"),
             shell=False,
             timeout=2,
             check=False,
@@ -140,7 +134,7 @@ def run_recipe(recipe: Recipe, repo_root: Path, request_id: str | None = None) -
     proc = subprocess.Popen(
         list(recipe.argv),
         cwd=cwd,
-        env=_env(recipe.env_profile),
+        env=filtered_environment(recipe.env_profile),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
