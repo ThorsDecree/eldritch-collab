@@ -139,10 +139,20 @@ def test_lifecycle_api_persists_verified_actions(tmp_path: Path) -> None:
         )
         assert status == 200
         assert started["action_occurred"] is True
-        assert started["verified"] is True, {
-            "started": started,
-            "logs": server.processes.logs(services.services["fixture"]),
-        }
+        if not started["verified"]:
+            print(
+                "LIFECYCLE_DIAGNOSTIC="
+                + json.dumps(
+                    {
+                        "started": started,
+                        "logs": server.processes.logs(
+                            services.services["fixture"]
+                        ),
+                    },
+                    sort_keys=True,
+                )
+            )
+        assert started["verified"] is True
         assert started["receipt_persisted"] is True
         first_generation = started["lifecycle"]["generation_id"]
         assert first_generation
