@@ -50,6 +50,17 @@ def _write_manifests(tmp_path: Path, health_port: int):
                         "expected_exit_codes": [0],
                         "max_stdout_bytes": 4096,
                         "max_stderr_bytes": 4096,
+                    },
+                    {
+                        "id": "service.start",
+                        "description": "reserved lifecycle fixture",
+                        "argv": [sys.executable, "-c", "print('service-start')"],
+                        "cwd": ".",
+                        "timeout_seconds": 5,
+                        "env_profile": "python",
+                        "expected_exit_codes": [0],
+                        "max_stdout_bytes": 4096,
+                        "max_stderr_bytes": 4096,
                     }
                 ],
             }
@@ -68,7 +79,7 @@ def _write_manifests(tmp_path: Path, health_port: int):
                         "id": "fixture",
                         "description": "fixture service",
                         "ownership": "mechanic_child",
-                        "start_recipe": "test.ok",
+                        "start_recipe": "service.start",
                         "health": {
                             "kind": "http",
                             "host": "127.0.0.1",
@@ -191,6 +202,16 @@ def test_api_persists_recipe_and_health_receipts(tmp_path: Path) -> None:
         assert process_logs["logs"]["process_owned"] is False
         assert process_logs["logs"]["stdout_tail"] == ""
         assert process_logs["lifecycle_authority_exposed"] is False
+
+        status, reserved = _request(
+            port,
+            "POST",
+            "/v1/run",
+            token=TOKEN,
+            payload={"recipe_id": "service.start"},
+        )
+        assert status == 403
+        assert reserved["error"]["code"] == "lifecycle_recipe_reserved"
 
         status, result = _request(
             port,
