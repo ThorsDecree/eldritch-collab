@@ -156,3 +156,22 @@ def test_v02_external_service_rejects_lifecycle_recipes(tmp_path: Path) -> None:
             ),
             _recipes(tmp_path),
         )
+
+
+def test_service_id_rejects_path_traversal(tmp_path: Path) -> None:
+    with pytest.raises(ServiceManifestError, match="filename-safe"):
+        load_service_manifest(
+            _write(
+                tmp_path,
+                {
+                    "schema_version": "vestigia.house-mechanic-services.v0.2",
+                    "services": [
+                        {
+                            "id": "../escape",
+                            "ownership": "mechanic_child",
+                        }
+                    ],
+                },
+            ),
+            _recipes(tmp_path),
+        )
