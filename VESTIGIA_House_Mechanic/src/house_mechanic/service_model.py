@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ _ALLOWED_SERVICE = {
     "health",
 }
 _ALLOWED_OWNERSHIP = {"external", "mechanic_child"}
+_SERVICE_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _ALLOWED_HEALTH = {
     "kind",
     "host",
@@ -203,15 +205,15 @@ def load_service_manifest(path: Path, recipes: Manifest) -> ServiceManifest:
                 f"unknown service fields: {sorted(unknown)}"
             )
         service_id = row.get("id")
-        if (
-            not isinstance(service_id, str)
-            or not service_id.strip()
-            or service_id.strip() in out
-        ):
-            raise ServiceManifestError(
-                "service id must be unique and non-empty"
-            )
+        if not isinstance(service_id, str):
+            raise ServiceManifestError("service id must be a string")
         service_id = service_id.strip()
+        if not _SERVICE_ID.fullmatch(service_id):
+            raise ServiceManifestError(
+                "service id must be 1-128 filename-safe characters"
+            )
+        if service_id in out:
+            raise ServiceManifestError("service id must be unique")
 
         if schema_version == LEGACY_SERVICE_SCHEMA_VERSION:
             if "ownership" in row:
