@@ -1,0 +1,17 @@
+{
+  "schema_version": "vestigia.house-mechanic-services.v0.1",
+  "services": [
+    {
+      "id": "daemon-bridge",
+      "description": "Independent Daemon-Bridge runtime peer.",
+      "health": {
+        "kind": "http",
+        "host": "127.0.0.1",
+        "port": 8766,
+        "path": "/health",
+        "expected_status": 200,
+        "expected_protocol": "daemon-bridge-api.v0.1"
+      }
+    }
+  ]
+}
