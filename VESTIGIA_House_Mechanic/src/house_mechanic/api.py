@@ -402,7 +402,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "protocol": PROTOCOL,
                 "request_id": request_id,
                 "process": self.api.processes.status(service).to_dict(),
-                "lifecycle_authority_exposed": False,
+                "lifecycle_authority_exposed": service.mechanic_owned,
             },
         )
 
@@ -414,7 +414,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "protocol": PROTOCOL,
                 "request_id": request_id,
                 "logs": self.api.processes.logs(service),
-                "lifecycle_authority_exposed": False,
+                "lifecycle_authority_exposed": service.mechanic_owned,
             },
         )
 
