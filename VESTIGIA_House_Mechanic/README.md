@@ -1,6 +1,6 @@
 # VESTIGIA House Mechanic
 
-Status: v0.4 process-ownership development boundary.
+Status: v0.5 bounded lifecycle development boundary.
 
 House Mechanic is the small host-side execution plane for VESTIGIA development work. It remains deliberately separate from the MCP Server and Runtime Workshop.
 
@@ -8,90 +8,230 @@ The governing rule is:
 
 > Development autonomy may expand faster than consequential authority.
 
-House Mechanic exposes **named, operator-authored recipes**, not an arbitrary shell endpoint. Callers may select known recipes and declared services; they may not supply command text, extra argv, a working directory, environment variables, credentials, or a network bind address at invocation time.
+House Mechanic exposes named, operator-authored recipes and typed service lifecycle actions. It still does not expose arbitrary command text, caller-supplied argv/cwd/environment, credentials, or a caller-selectable bind address.
 
-## Current v0.4 slice
+## Current v0.5 slice
 
-The current implementation includes the v0.3 observability surface plus explicit process-ownership semantics:
+v0.5 adds the first bounded service-control surface on top of the v0.4 ownership model:
 
-- strict named-recipe manifests and bounded subprocess execution;
-- fixed-loopback authenticated API;
-- loopback service health probing;
-- durable append-only run/health receipts;
-- typed service ownership: `external` or `mechanic_child`;
-- legacy v0.1 service manifests remain readable and default to `external`;
-- filename-safe service IDs before IDs are used in process-log paths;
-- supervisor-instance process ownership backed by the exact retained `Popen` handle;
-- process generation IDs separate from OS PIDs;
-- read-only process status and bounded stdout/stderr tail inspection;
-- truthful `running`, `exited`, `not_started`, and `external_unowned` states;
-- no automatic process adoption after supervisor restart;
-- graceful supervisor shutdown terminates only children actually owned by that supervisor instance.
+- `mechanic_child` versus `external` service ownership;
+- supervisor-instance ownership proven by the retained child-process handle;
+- generation IDs separate from OS PIDs;
+- no PID adoption after supervisor restart;
+- lifecycle recipes reserved from generic recipe execution;
+- durable lifecycle receipts;
+- bounded start for declared mechanic-owned children only;
+- required pre-launch health check;
+- refusal to launch if the declared health endpoint is already healthy;
+- post-launch expected-status/protocol verification;
+- exact-generation stop;
+- restart composed from verified stop plus a new verified start;
+- bounded process status and log-tail inspection;
+- one lifecycle mutation at a time per supervisor instance.
 
-The HTTP API still exposes **no lifecycle mutation**. There is no remote service start, stop, or restart route in v0.4.
+The API protocol is `vestigia.house-mechanic-api.v0.4`.
 
-Any recipe referenced by a service as `start_recipe` or `stop_recipe` is reserved from the generic `POST /v1/run` endpoint. This prevents lifecycle authority from being smuggled through the ordinary recipe lane before typed lifecycle actions exist.
+## Lifecycle authority
 
-## Why ownership is instance-scoped
+Lifecycle mutation is exposed only for services declared:
 
-A PID is not proof of identity.
+```json
+{
+  "ownership": "mechanic_child"
+}
+```
 
-If House Mechanic crashes or restarts, a new supervisor instance does not reconstruct process ownership from old PID state. A stale PID could later refer to an unrelated process. Therefore v0.4 reports:
+External services remain observable only.
+
+A mechanic-owned service must have a declared `start_recipe` and a health probe before remote start is allowed.
+
+Recipes referenced as `start_recipe` or `stop_recipe` remain forbidden through generic `POST /v1/run`; lifecycle authority cannot be smuggled through the ordinary recipe lane.
+
+The local operator CLI remains a separate explicit operator surface.
+
+## Start contract
+
+`POST /v1/process-start`
+
+Payload:
+
+```json
+{"service_id":"example"}
+```
+
+Start succeeds as *verified* only when House Mechanic observes:
+
+1. no currently running child owned by this supervisor;
+2. the declared health endpoint is not already healthy before launch;
+3. House Mechanic launches and retains the exact child process;
+4. the expected health status/protocol becomes healthy within the bounded wait;
+5. the same owned generation is still running.
+
+This is stronger than checking health only after launch, because an endpoint that was healthy beforehand could belong to some unrelated process.
+
+It is still not cryptographic generation binding. Receipts explicitly report:
+
+```text
+health_generation_bound = false
+health_attribution = temporal_after_owned_launch
+```
+
+A future protocol may bind a health response directly to the generation.
+
+If a child is launched but health never verifies, House Mechanic returns `started_unverified`. It does **not** silently kill the process and call that rollback. The action occurred, the exact generation remains inspectable, and an explicit exact-generation stop is required.
+
+## Stop contract
+
+`POST /v1/process-stop`
+
+Payload:
+
+```json
+{
+  "service_id":"example",
+  "generation_id":"hm_proc_<32 lowercase hex characters>"
+}
+```
+
+House Mechanic will only stop the generation currently retained as owned by this supervisor instance.
+
+A stale, malformed, unknown, or different generation cannot authorize a stop.
+
+Stop verification requires:
+
+- the exact owned child reaches `exited`; and
+- when a health probe exists, the endpoint becomes unhealthy/absent within the bounded wait.
+
+The receipt distinguishes:
+
+- `stopped`
+- `process_exit_unverified`
+- `process_stopped_endpoint_still_healthy`
+
+The last case is important evidence that another process may still be answering at the declared endpoint.
+
+## Restart contract
+
+`POST /v1/process-restart`
+
+Restart requires the exact current generation ID.
+
+It is composed as:
+
+```text
+verified stop of generation A
+        ->
+bounded start of generation B
+        ->
+health verification for B
+```
+
+The new generation must differ from the old one.
+
+If stop is unverified, restart does not proceed to start.
+
+If stop succeeds but the new start is blocked, the receipt says `stopped_start_blocked` rather than pretending nothing changed.
+
+## Durable lifecycle evidence
+
+Lifecycle calls append `service_lifecycle` records to the same append-only JSONL receipt store used for recipe and health evidence.
+
+Receipts include, as applicable:
+
+- request ID;
+- lifecycle action;
+- service ID and manifest digest;
+- start recipe ID and digest;
+- old/new generation IDs;
+- before/after process state;
+- health preflight/final observations;
+- exact-generation termination evidence;
+- verification outcome;
+- whether an action actually occurred.
+
+If the lifecycle action occurs but durable receipt persistence fails afterward, the HTTP response preserves:
+
+```text
+action_occurred = true
+receipt_persisted = false
+```
+
+Receipt loss is never represented as proof that the action did not happen.
+
+## Process ownership limitations
+
+A PID is not durable identity.
+
+Ownership is scoped to one supervisor instance:
 
 ```text
 ownership_scope = supervisor_instance
 ownership_survives_supervisor_restart = false
 ```
 
-A `mechanic_child` service with no process launched by the current supervisor reports `not_started`, even if some externally-running process happens to resemble the declared service.
+House Mechanic never reconstructs kill authority from a remembered PID after restart.
 
-This is intentionally conservative. Durable reattachment, if ever implemented, requires stronger process identity evidence than PID alone.
+Process-tree containment also remains explicitly unproven. Graceful termination targets the exact retained child; forced cleanup is best-effort and platform-specific.
 
-## Service manifest v0.2
+## Authenticated HTTP surface
 
-Services declare one of:
-
-- `ownership: "external"` — observable, never claimed as a House Mechanic child.
-- `ownership: "mechanic_child"` — eligible for future bounded lifecycle authority.
-
-External services in v0.2 may not declare start/stop recipes. That prevents a manifest from simultaneously saying "I do not own this process" and "here is how I control it."
-
-Legacy `vestigia.house-mechanic-services.v0.1` manifests remain accepted for compatibility and are interpreted as external/unowned.
-
-## Process inspection
-
-Authenticated read-only calls:
-
-- `POST /v1/process-status` with exactly `{"service_id":"..."}`
-- `POST /v1/process-logs` with exactly `{"service_id":"..."}`
-
-Process logs expose bounded tails only (16 KiB per stream) plus byte counts and hashes. They do not create lifecycle authority.
-
-Internally, v0.4 includes the process-launch primitive needed to test real ownership semantics, but there is deliberately no HTTP route that invokes it yet.
-
-## Existing authenticated API
+Read/observe:
 
 - `GET /v1/capabilities`
 - `GET /v1/recipes`
 - `GET /v1/services`
 - `GET /v1/receipts`
-- `POST /v1/run`
 - `POST /v1/health-check`
 - `POST /v1/receipt`
 - `POST /v1/process-status`
 - `POST /v1/process-logs`
 
-The API protocol is `vestigia.house-mechanic-api.v0.3`.
+Bounded execution:
+
+- `POST /v1/run`
+
+Owned lifecycle mutation:
+
+- `POST /v1/process-start`
+- `POST /v1/process-stop`
+- `POST /v1/process-restart`
+
+All lifecycle requests are bearer-authenticated and loopback-only.
+
+## Serve options
+
+The v0.5 server adds:
+
+```text
+--lifecycle-health-wait 10.0
+--lifecycle-stop-timeout 5.0
+```
+
+Both are bounded at startup.
+
+## Still out of scope
+
+v0.5 does not add:
+
+- automatic rollback;
+- durable process reattachment;
+- arbitrary commands;
+- system package installation;
+- credential creation/rotation;
+- non-loopback listeners;
+- public deployment;
+- worktree leasing;
+- MCP dev projection;
+- supervisor self-update.
 
 ## Next bounded slice
 
-After v0.4 is reviewed and green:
+After v0.5 is reviewed and green:
 
-1. persist lifecycle action receipts;
-2. expose bounded `start` only for `mechanic_child` services whose declared start recipe is known;
-3. verify the launched generation through configured health checks before calling start successful;
-4. expose bounded stop for the exact current generation only;
-5. compose restart from verified stop + verified start;
-6. retain truthful failure states and never adopt unknown processes.
+1. add disposable worktree/task leases;
+2. bind dev tasks to branches/worktrees and iteration budgets;
+3. add last-known-good deployment references and explicit rollback semantics;
+4. expose a small stable MCP dev surface;
+5. close the inspect -> patch -> test -> deploy -> verify loop without requiring Jeff to carry commands between systems.
 
-Rollback, worktree leases, stable MCP projection, credentials, arbitrary commands, public deployment, and supervisor self-update remain separate later milestones.
+🏮🔧
