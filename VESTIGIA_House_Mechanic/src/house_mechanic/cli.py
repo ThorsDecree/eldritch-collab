@@ -21,7 +21,10 @@ def main() -> int:
     serve = sub.add_parser("serve")
     serve.add_argument("--services", type=Path, required=True)
     serve.add_argument("--token-file", type=Path, required=True)
+    serve.add_argument("--receipt-file", type=Path, required=True)
     serve.add_argument("--port", type=int, default=8770)
+    serve.add_argument("--health-timeout", type=float, default=3.0)
+    serve.add_argument("--health-max-response-bytes", type=int, default=65536)
     serve.add_argument("--max-parallel", type=int, default=1)
     args = p.parse_args()
 
@@ -40,18 +43,22 @@ def main() -> int:
             recipes=manifest,
             services=services,
             token_file=args.token_file,
+            receipt_file=args.receipt_file,
             port=args.port,
             max_parallel=args.max_parallel,
+            health_timeout_seconds=args.health_timeout,
+            health_max_response_bytes=args.health_max_response_bytes,
         )
         host, port = server.server_address
         print(
             json.dumps(
                 {
-                    "protocol": "vestigia.house-mechanic-api.v0.1",
+                    "protocol": "vestigia.house-mechanic-api.v0.2",
                     "host": host,
                     "port": port,
                     "recipe_count": len(manifest.recipes),
                     "service_count": len(services.services),
+                    "receipt_persistence": True,
                     "process_authority": False,
                 }
             ),
