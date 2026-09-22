@@ -17,6 +17,13 @@ from .service_model import Service
 LOG_TAIL_BYTES = 16_384
 
 
+class ProcessOwnershipError(RuntimeError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 def _environment(profile: str) -> dict[str, str]:
     keep = {"SystemRoot", "WINDIR", "COMSPEC", "PATH", "PATHEXT", "TEMP", "TMP"}
     if profile == "python":
@@ -221,6 +228,87 @@ class ProcessRegistry:
                 stderr_handle=stderr_handle,
             )
             return self.status(service)
+
+    def stop_owned(
+        self,
+        service: Service,
+        *,
+        expected_generation_id: str,
+        timeout_seconds: float = 5.0,
+    ) -> dict[str, object]:
+        if not service.mechanic_owned:
+            raise ProcessOwnershipError(
+                "external_service",
+                "external service cannot be stopped as an owned process",
+            )
+
+        with self._lock:
+            owned = self._owned.get(service.id)
+            if owned is None:
+                raise ProcessOwnershipError(
+                    "no_owned_process",
+                    "service has no process owned by this supervisor instance",
+                )
+            if owned.generation_id != expected_generation_id:
+                raise ProcessOwnershipError(
+                    "generation_mismatch",
+                    "requested generation is not the generation owned by this supervisor",
+                )
+
+            before = self.status(service)
+            if before.state == "exited":
+                return {
+                    "action_occurred": False,
+                    "after": before.to_dict(),
+                    "termination": {
+                        "requested_generation_id": expected_generation_id,
+                        "terminate_called": False,
+                        "forced": False,
+                        "process_tree_containment_proven": False,
+                    },
+                }
+
+            terminate_called = False
+            forced = False
+            try:
+                owned.process.terminate()
+                terminate_called = True
+                owned.process.wait(timeout=max(0.1, float(timeout_seconds)))
+            except subprocess.TimeoutExpired:
+                forced = True
+                if os.name == "nt":
+                    subprocess.run(
+                        [
+                            "taskkill",
+                            "/PID",
+                            str(owned.process.pid),
+                            "/T",
+                            "/F",
+                        ],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                        shell=False,
+                    )
+                else:
+                    owned.process.kill()
+                try:
+                    owned.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+
+            after = self.status(service)
+            return {
+                "action_occurred": True,
+                "after": after.to_dict(),
+                "termination": {
+                    "requested_generation_id": expected_generation_id,
+                    "terminate_called": terminate_called,
+                    "forced": forced,
+                    "process_tree_containment_proven": False,
+                },
+            }
 
     def terminate_all_for_shutdown(self) -> None:
         """Best-effort test/operator shutdown only; not a remote lifecycle API."""
