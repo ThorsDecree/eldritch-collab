@@ -25,6 +25,8 @@ def main() -> int:
     serve.add_argument("--port", type=int, default=8770)
     serve.add_argument("--health-timeout", type=float, default=3.0)
     serve.add_argument("--health-max-response-bytes", type=int, default=65536)
+    serve.add_argument("--lifecycle-health-wait", type=float, default=10.0)
+    serve.add_argument("--lifecycle-stop-timeout", type=float, default=5.0)
     serve.add_argument("--max-parallel", type=int, default=1)
     args = p.parse_args()
 
@@ -48,18 +50,21 @@ def main() -> int:
             max_parallel=args.max_parallel,
             health_timeout_seconds=args.health_timeout,
             health_max_response_bytes=args.health_max_response_bytes,
+            lifecycle_health_wait_seconds=args.lifecycle_health_wait,
+            lifecycle_stop_timeout_seconds=args.lifecycle_stop_timeout,
         )
         host, port = server.server_address
         print(
             json.dumps(
                 {
-                    "protocol": "vestigia.house-mechanic-api.v0.3",
+                    "protocol": "vestigia.house-mechanic-api.v0.4",
                     "host": host,
                     "port": port,
                     "recipe_count": len(manifest.recipes),
                     "service_count": len(services.services),
                     "receipt_persistence": True,
-                    "process_authority": False,
+                    "process_authority": True,
+                    "process_authority_scope": "mechanic_child_only",
                 }
             ),
             flush=True,
