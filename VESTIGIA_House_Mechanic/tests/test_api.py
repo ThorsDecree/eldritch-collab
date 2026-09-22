@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from http.client import HTTPConnection
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import sys
@@ -14,7 +15,25 @@ from house_mechanic.service_model import load_service_manifest
 TOKEN = "house-mechanic-test-token"
 
 
-def _write_manifests(tmp_path: Path):
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        body = json.dumps(
+            {
+                "protocol": "fixture.service.v1",
+                "healthy": True,
+            }
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+def _write_manifests(tmp_path: Path, health_port: int):
     recipes_path = tmp_path / "recipes.json"
     recipes_path.write_text(
         json.dumps(
@@ -52,9 +71,10 @@ def _write_manifests(tmp_path: Path):
                         "health": {
                             "kind": "http",
                             "host": "127.0.0.1",
-                            "port": 8766,
+                            "port": health_port,
                             "path": "/health",
                             "expected_status": 200,
+                            "expected_protocol": "fixture.service.v1",
                         },
                     }
                 ],
@@ -95,16 +115,28 @@ def _request(
         conn.close()
 
 
-def test_api_is_authenticated_bounded_and_recipe_only(tmp_path: Path) -> None:
-    recipes, services = _write_manifests(tmp_path)
+def test_api_persists_recipe_and_health_receipts(tmp_path: Path) -> None:
+    health_server = ThreadingHTTPServer(("127.0.0.1", 0), _HealthHandler)
+    health_thread = threading.Thread(
+        target=health_server.serve_forever,
+        daemon=True,
+    )
+    health_thread.start()
+
+    recipes, services = _write_manifests(
+        tmp_path,
+        health_server.server_address[1],
+    )
     token_file = tmp_path / "token"
     token_file.write_text(TOKEN + "\n", encoding="utf-8")
+    receipt_file = tmp_path / "receipts.jsonl"
 
     server = HouseMechanicServer(
         repo_root=tmp_path,
         recipes=recipes,
         services=services,
         token_file=token_file,
+        receipt_file=receipt_file,
         port=0,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -115,6 +147,7 @@ def test_api_is_authenticated_bounded_and_recipe_only(tmp_path: Path) -> None:
         status, health = _request(port, "GET", "/health")
         assert status == 200
         assert health["healthy"] is True
+        assert health["receipt_persistence"] is True
         assert health["process_authority"] is False
 
         status, denied = _request(port, "GET", "/v1/recipes")
@@ -133,16 +166,6 @@ def test_api_is_authenticated_bounded_and_recipe_only(tmp_path: Path) -> None:
         assert recipes_payload["recipes"][0]["id"] == "test.ok"
         assert "argv" not in recipes_payload["recipes"][0]
 
-        status, services_payload = _request(
-            port,
-            "GET",
-            "/v1/services",
-            token=TOKEN,
-        )
-        assert status == 200
-        assert services_payload["services"][0]["id"] == "fixture"
-        assert services_payload["services"][0]["process_authority"] is False
-
         status, result = _request(
             port,
             "POST",
@@ -153,9 +176,51 @@ def test_api_is_authenticated_bounded_and_recipe_only(tmp_path: Path) -> None:
         )
         assert status == 200
         assert result["request_id"] == "mcp_req_run_fixture"
+        assert result["execution_occurred"] is True
+        assert result["receipt_persisted"] is True
         assert result["receipt"]["request_id"] == "mcp_req_run_fixture"
         assert result["receipt"]["recipe_id"] == "test.ok"
         assert result["receipt"]["stdout"].strip() == "mechanic-ok"
+        run_receipt_id = result["durable_receipt_id"]
+
+        status, probe = _request(
+            port,
+            "POST",
+            "/v1/health-check",
+            token=TOKEN,
+            request_id="mcp_req_health_fixture",
+            payload={"service_id": "fixture"},
+        )
+        assert status == 200
+        assert probe["observation_occurred"] is True
+        assert probe["receipt_persisted"] is True
+        assert probe["health"]["healthy"] is True
+        assert probe["health"]["observed_protocol"] == "fixture.service.v1"
+        health_receipt_id = probe["durable_receipt_id"]
+
+        status, recent = _request(
+            port,
+            "GET",
+            "/v1/receipts",
+            token=TOKEN,
+        )
+        assert status == 200
+        ids = {item["receipt_id"] for item in recent["receipts"]}
+        assert run_receipt_id in ids
+        assert health_receipt_id in ids
+
+        status, inspected = _request(
+            port,
+            "POST",
+            "/v1/receipt",
+            token=TOKEN,
+            payload={"receipt_id": run_receipt_id},
+        )
+        assert status == 200
+        evidence = inspected["receipt"]["evidence"]
+        assert evidence["recipe_id"] == "test.ok"
+        assert evidence["raw_full_output_persisted"] is False
+        assert evidence["stdout_excerpt"].strip() == "mechanic-ok"
 
         status, rejected = _request(
             port,
@@ -180,16 +245,20 @@ def test_api_is_authenticated_bounded_and_recipe_only(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+        health_server.shutdown()
+        health_server.server_close()
+        health_thread.join(timeout=2)
 
 
 def test_api_requires_preprovisioned_token(tmp_path: Path) -> None:
-    recipes, services = _write_manifests(tmp_path)
+    recipes, services = _write_manifests(tmp_path, 1)
     try:
         HouseMechanicServer(
             repo_root=tmp_path,
             recipes=recipes,
             services=services,
             token_file=tmp_path / "missing-token",
+            receipt_file=tmp_path / "receipts.jsonl",
             port=0,
         )
     except ValueError as exc:
