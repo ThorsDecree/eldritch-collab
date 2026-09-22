@@ -62,11 +62,12 @@ def _write_manifests(tmp_path: Path, health_port: int):
     services_path.write_text(
         json.dumps(
             {
-                "schema_version": "vestigia.house-mechanic-services.v0.1",
+                "schema_version": "vestigia.house-mechanic-services.v0.2",
                 "services": [
                     {
                         "id": "fixture",
                         "description": "fixture service",
+                        "ownership": "mechanic_child",
                         "start_recipe": "test.ok",
                         "health": {
                             "kind": "http",
@@ -165,6 +166,31 @@ def test_api_persists_recipe_and_health_receipts(tmp_path: Path) -> None:
         assert recipes_payload["request_id"] == "mcp_req_fixture"
         assert recipes_payload["recipes"][0]["id"] == "test.ok"
         assert "argv" not in recipes_payload["recipes"][0]
+
+        status, process_status = _request(
+            port,
+            "POST",
+            "/v1/process-status",
+            token=TOKEN,
+            payload={"service_id": "fixture"},
+        )
+        assert status == 200
+        assert process_status["process"]["declared_ownership"] == "mechanic_child"
+        assert process_status["process"]["state"] == "not_started"
+        assert process_status["process"]["process_owned"] is False
+        assert process_status["lifecycle_authority_exposed"] is False
+
+        status, process_logs = _request(
+            port,
+            "POST",
+            "/v1/process-logs",
+            token=TOKEN,
+            payload={"service_id": "fixture"},
+        )
+        assert status == 200
+        assert process_logs["logs"]["process_owned"] is False
+        assert process_logs["logs"]["stdout_tail"] == ""
+        assert process_logs["lifecycle_authority_exposed"] is False
 
         status, result = _request(
             port,
