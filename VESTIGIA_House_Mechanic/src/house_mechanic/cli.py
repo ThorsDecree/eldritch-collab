@@ -53,7 +53,7 @@ def main() -> int:
         print(
             json.dumps(
                 {
-                    "protocol": "vestigia.house-mechanic-api.v0.2",
+                    "protocol": "vestigia.house-mechanic-api.v0.3",
                     "host": host,
                     "port": port,
                     "recipe_count": len(manifest.recipes),

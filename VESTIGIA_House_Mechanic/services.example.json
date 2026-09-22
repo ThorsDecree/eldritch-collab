@@ -1,9 +1,10 @@
 {
-  "schema_version": "vestigia.house-mechanic-services.v0.1",
+  "schema_version": "vestigia.house-mechanic-services.v0.2",
   "services": [
     {
       "id": "daemon-bridge",
-      "description": "Independent Daemon-Bridge runtime peer.",
+      "description": "Independent Daemon-Bridge runtime peer currently observed but not owned by House Mechanic.",
+      "ownership": "external",
       "health": {
         "kind": "http",
         "host": "127.0.0.1",

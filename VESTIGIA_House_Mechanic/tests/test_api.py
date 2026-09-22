@@ -50,6 +50,17 @@ def _write_manifests(tmp_path: Path, health_port: int):
                         "expected_exit_codes": [0],
                         "max_stdout_bytes": 4096,
                         "max_stderr_bytes": 4096,
+                    },
+                    {
+                        "id": "service.start",
+                        "description": "reserved lifecycle fixture",
+                        "argv": [sys.executable, "-c", "print('service-start')"],
+                        "cwd": ".",
+                        "timeout_seconds": 5,
+                        "env_profile": "python",
+                        "expected_exit_codes": [0],
+                        "max_stdout_bytes": 4096,
+                        "max_stderr_bytes": 4096,
                     }
                 ],
             }
@@ -62,12 +73,13 @@ def _write_manifests(tmp_path: Path, health_port: int):
     services_path.write_text(
         json.dumps(
             {
-                "schema_version": "vestigia.house-mechanic-services.v0.1",
+                "schema_version": "vestigia.house-mechanic-services.v0.2",
                 "services": [
                     {
                         "id": "fixture",
                         "description": "fixture service",
-                        "start_recipe": "test.ok",
+                        "ownership": "mechanic_child",
+                        "start_recipe": "service.start",
                         "health": {
                             "kind": "http",
                             "host": "127.0.0.1",
@@ -165,6 +177,41 @@ def test_api_persists_recipe_and_health_receipts(tmp_path: Path) -> None:
         assert recipes_payload["request_id"] == "mcp_req_fixture"
         assert recipes_payload["recipes"][0]["id"] == "test.ok"
         assert "argv" not in recipes_payload["recipes"][0]
+
+        status, process_status = _request(
+            port,
+            "POST",
+            "/v1/process-status",
+            token=TOKEN,
+            payload={"service_id": "fixture"},
+        )
+        assert status == 200
+        assert process_status["process"]["declared_ownership"] == "mechanic_child"
+        assert process_status["process"]["state"] == "not_started"
+        assert process_status["process"]["process_owned"] is False
+        assert process_status["lifecycle_authority_exposed"] is False
+
+        status, process_logs = _request(
+            port,
+            "POST",
+            "/v1/process-logs",
+            token=TOKEN,
+            payload={"service_id": "fixture"},
+        )
+        assert status == 200
+        assert process_logs["logs"]["process_owned"] is False
+        assert process_logs["logs"]["stdout_tail"] == ""
+        assert process_logs["lifecycle_authority_exposed"] is False
+
+        status, reserved = _request(
+            port,
+            "POST",
+            "/v1/run",
+            token=TOKEN,
+            payload={"recipe_id": "service.start"},
+        )
+        assert status == 403
+        assert reserved["error"]["code"] == "lifecycle_recipe_reserved"
 
         status, result = _request(
             port,

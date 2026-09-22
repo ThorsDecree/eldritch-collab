@@ -11,12 +11,13 @@ import uuid
 
 from .health import probe_service
 from .model import Manifest
+from .processes import ProcessRegistry
 from .receipts import ReceiptStore
 from .runner import run_recipe
 from .service_model import ServiceManifest
 
 
-PROTOCOL = "vestigia.house-mechanic-api.v0.2"
+PROTOCOL = "vestigia.house-mechanic-api.v0.3"
 MAX_REQUEST_BYTES = 16_384
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
@@ -95,6 +96,16 @@ class _Handler(BaseHTTPRequestHandler):
                                 "effect": "loopback_read",
                                 "process_authority": False,
                                 "redirects_followed": False,
+                            },
+                            "service.process_status": {
+                                "effect": "read",
+                                "lifecycle_authority": False,
+                                "ownership_scope": "supervisor_instance",
+                            },
+                            "service.process_logs": {
+                                "effect": "read",
+                                "lifecycle_authority": False,
+                                "tail_limit_bytes": 16384,
                             },
                             "receipt.recent": {
                                 "effect": "read",
@@ -178,6 +189,14 @@ class _Handler(BaseHTTPRequestHandler):
                 self._inspect_receipt(request_id)
                 return
 
+            if self.path == "/v1/process-status":
+                self._process_status(request_id)
+                return
+
+            if self.path == "/v1/process-logs":
+                self._process_logs(request_id)
+                return
+
             raise HouseMechanicAPIError(404, "not_found", "route not found")
         except HouseMechanicAPIError as exc:
             self._error(exc, request_id)
@@ -198,12 +217,22 @@ class _Handler(BaseHTTPRequestHandler):
                 "recipe_id must be a non-empty string",
             )
 
-        recipe = self.api.recipes.recipes.get(recipe_id.strip())
+        recipe_id = recipe_id.strip()
+        recipe = self.api.recipes.recipes.get(recipe_id)
         if recipe is None:
             raise HouseMechanicAPIError(
                 404,
                 "unknown_recipe",
                 "recipe is not present in the operator manifest",
+            )
+        if recipe_id in self.api.lifecycle_recipe_ids:
+            raise HouseMechanicAPIError(
+                403,
+                "lifecycle_recipe_reserved",
+                (
+                    "recipe is reserved for a typed service lifecycle action "
+                    "and cannot run through the generic recipe endpoint"
+                ),
             )
         if not self.api.run_slots.acquire(blocking=False):
             raise HouseMechanicAPIError(
@@ -310,6 +339,51 @@ class _Handler(BaseHTTPRequestHandler):
                 "receipt_persisted": True,
                 "durable_receipt_id": durable["receipt_id"],
                 "health": result.to_dict(),
+            },
+        )
+
+    def _service_from_payload(
+        self,
+        payload: dict[str, Any],
+    ):
+        self._require_exact_fields(payload, {"service_id"})
+        service_id = payload.get("service_id")
+        if not isinstance(service_id, str) or not service_id.strip():
+            raise HouseMechanicAPIError(
+                400,
+                "invalid_request",
+                "service_id must be a non-empty string",
+            )
+        service = self.api.services.services.get(service_id.strip())
+        if service is None:
+            raise HouseMechanicAPIError(
+                404,
+                "unknown_service",
+                "service is not present in the operator manifest",
+            )
+        return service
+
+    def _process_status(self, request_id: str) -> None:
+        service = self._service_from_payload(self._json_body())
+        self._send(
+            200,
+            {
+                "protocol": PROTOCOL,
+                "request_id": request_id,
+                "process": self.api.processes.status(service).to_dict(),
+                "lifecycle_authority_exposed": False,
+            },
+        )
+
+    def _process_logs(self, request_id: str) -> None:
+        service = self._service_from_payload(self._json_body())
+        self._send(
+            200,
+            {
+                "protocol": PROTOCOL,
+                "request_id": request_id,
+                "logs": self.api.processes.logs(service),
+                "lifecycle_authority_exposed": False,
             },
         )
 
@@ -466,11 +540,22 @@ class HouseMechanicServer(ThreadingHTTPServer):
         self.repo_root = repo_root.resolve()
         self.recipes = recipes
         self.services = services
+        self.lifecycle_recipe_ids = {
+            recipe_id
+            for service in services.services.values()
+            for recipe_id in (service.start_recipe, service.stop_recipe)
+            if recipe_id is not None
+        }
         self.token = read_token(token_file)
         self.receipts = ReceiptStore(receipt_file)
+        self.processes = ProcessRegistry(receipt_file.parent / "process_state")
         self.max_parallel = int(max_parallel)
         self.health_timeout_seconds = float(health_timeout_seconds)
         self.health_max_response_bytes = int(health_max_response_bytes)
         self.run_slots = threading.BoundedSemaphore(self.max_parallel)
         super().__init__(("127.0.0.1", int(port)), _Handler)
         self.api = self
+
+    def server_close(self) -> None:
+        self.processes.terminate_all_for_shutdown()
+        super().server_close()

@@ -3,15 +3,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from .model import Manifest
 
 
-SERVICE_SCHEMA_VERSION = "vestigia.house-mechanic-services.v0.1"
+SERVICE_SCHEMA_VERSION = "vestigia.house-mechanic-services.v0.2"
+LEGACY_SERVICE_SCHEMA_VERSION = "vestigia.house-mechanic-services.v0.1"
 _ALLOWED_TOP = {"schema_version", "services"}
-_ALLOWED_SERVICE = {"id", "description", "start_recipe", "stop_recipe", "health"}
+_ALLOWED_SERVICE = {
+    "id",
+    "description",
+    "ownership",
+    "start_recipe",
+    "stop_recipe",
+    "health",
+}
+_ALLOWED_OWNERSHIP = {"external", "mechanic_child"}
+_SERVICE_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _ALLOWED_HEALTH = {
     "kind",
     "host",
@@ -50,14 +61,20 @@ class HealthProbe:
 class Service:
     id: str
     description: str
+    ownership: str
     start_recipe: str | None
     stop_recipe: str | None
     health: HealthProbe | None
+
+    @property
+    def mechanic_owned(self) -> bool:
+        return self.ownership == "mechanic_child"
 
     def digest(self) -> str:
         payload = {
             "id": self.id,
             "description": self.description,
+            "ownership": self.ownership,
             "start_recipe": self.start_recipe,
             "stop_recipe": self.stop_recipe,
             "health": self.health.to_dict() if self.health else None,
@@ -69,11 +86,13 @@ class Service:
         return {
             "id": self.id,
             "description": self.description,
+            "ownership": self.ownership,
             "start_recipe": self.start_recipe,
             "stop_recipe": self.stop_recipe,
             "health": self.health.to_dict() if self.health else None,
             "sha256": self.digest(),
             "process_authority": False,
+            "lifecycle_authority_exposed": False,
         }
 
 
@@ -164,7 +183,12 @@ def load_service_manifest(path: Path, recipes: Manifest) -> ServiceManifest:
         raise ServiceManifestError(
             f"unknown service manifest fields: {sorted(unknown)}"
         )
-    if data.get("schema_version") != SERVICE_SCHEMA_VERSION:
+
+    schema_version = data.get("schema_version")
+    if schema_version not in {
+        LEGACY_SERVICE_SCHEMA_VERSION,
+        SERVICE_SCHEMA_VERSION,
+    }:
         raise ServiceManifestError("unsupported service manifest schema_version")
 
     rows = data.get("services")
@@ -181,30 +205,57 @@ def load_service_manifest(path: Path, recipes: Manifest) -> ServiceManifest:
                 f"unknown service fields: {sorted(unknown)}"
             )
         service_id = row.get("id")
+        if not isinstance(service_id, str):
+            raise ServiceManifestError("service id must be a string")
+        service_id = service_id.strip()
+        if not _SERVICE_ID.fullmatch(service_id):
+            raise ServiceManifestError(
+                "service id must be 1-128 filename-safe characters"
+            )
+        if service_id in out:
+            raise ServiceManifestError("service id must be unique")
+
+        if schema_version == LEGACY_SERVICE_SCHEMA_VERSION:
+            if "ownership" in row:
+                raise ServiceManifestError(
+                    f"{service_id}: ownership requires service schema v0.2"
+                )
+            ownership = "external"
+        else:
+            ownership = str(row.get("ownership", "external")).strip()
+            if ownership not in _ALLOWED_OWNERSHIP:
+                raise ServiceManifestError(
+                    f"{service_id}: ownership must be external or mechanic_child"
+                )
+
+        start_recipe = _optional_recipe(
+            service_id,
+            "start_recipe",
+            row.get("start_recipe"),
+            recipes,
+        )
+        stop_recipe = _optional_recipe(
+            service_id,
+            "stop_recipe",
+            row.get("stop_recipe"),
+            recipes,
+        )
+
         if (
-            not isinstance(service_id, str)
-            or not service_id.strip()
-            or service_id.strip() in out
+            schema_version == SERVICE_SCHEMA_VERSION
+            and ownership == "external"
+            and (start_recipe is not None or stop_recipe is not None)
         ):
             raise ServiceManifestError(
-                "service id must be unique and non-empty"
+                f"{service_id}: external services cannot declare lifecycle recipes"
             )
-        service_id = service_id.strip()
+
         out[service_id] = Service(
             id=service_id,
             description=str(row.get("description", "")),
-            start_recipe=_optional_recipe(
-                service_id,
-                "start_recipe",
-                row.get("start_recipe"),
-                recipes,
-            ),
-            stop_recipe=_optional_recipe(
-                service_id,
-                "stop_recipe",
-                row.get("stop_recipe"),
-                recipes,
-            ),
+            ownership=ownership,
+            start_recipe=start_recipe,
+            stop_recipe=stop_recipe,
             health=_health(service_id, row.get("health")),
         )
     return ServiceManifest(out)
