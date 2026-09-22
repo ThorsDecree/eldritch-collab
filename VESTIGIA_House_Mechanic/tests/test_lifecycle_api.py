@@ -49,6 +49,8 @@ class Handler(BaseHTTPRequestHandler):
 server = ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler)
 server.serve_forever()
 """.strip()
+    fixture_server = tmp_path / "fixture_http_server.py"
+    fixture_server.write_text(server_code + "\n", encoding="utf-8")
 
     recipes_path = tmp_path / "recipes.json"
     recipes_path.write_text(
@@ -61,8 +63,7 @@ server.serve_forever()
                         "argv": [
                             sys.executable,
                             "-u",
-                            "-c",
-                            server_code,
+                            str(fixture_server),
                             str(service_port),
                         ],
                         "cwd": ".",
@@ -162,7 +163,10 @@ def test_lifecycle_api_persists_verified_actions(tmp_path: Path) -> None:
         )
         assert status == 200
         assert started["action_occurred"] is True
-        assert started["verified"] is True
+        assert started["verified"] is True, {
+            "started": started,
+            "logs": server.processes.logs(services.services["fixture"]),
+        }
         assert started["receipt_persisted"] is True
         first_generation = started["lifecycle"]["generation_id"]
         assert first_generation
