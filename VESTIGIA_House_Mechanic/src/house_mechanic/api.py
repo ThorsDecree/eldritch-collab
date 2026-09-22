@@ -9,12 +9,14 @@ import threading
 from typing import Any
 import uuid
 
+from .health import probe_service
 from .model import Manifest
+from .receipts import ReceiptStore
 from .runner import run_recipe
 from .service_model import ServiceManifest
 
 
-PROTOCOL = "vestigia.house-mechanic-api.v0.1"
+PROTOCOL = "vestigia.house-mechanic-api.v0.2"
 MAX_REQUEST_BYTES = 16_384
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
@@ -58,11 +60,13 @@ class _Handler(BaseHTTPRequestHandler):
                         "healthy": True,
                         "recipe_count": len(self.api.recipes.recipes),
                         "service_count": len(self.api.services.services),
+                        "receipt_persistence": True,
                         "process_authority": False,
                         "request_id": request_id,
                     },
                 )
                 return
+
             self._require_auth()
             if self.path == "/v1/capabilities":
                 self._send(
@@ -80,16 +84,31 @@ class _Handler(BaseHTTPRequestHandler):
                                 "caller_supplies_argv": False,
                                 "caller_supplies_cwd": False,
                                 "caller_supplies_env": False,
+                                "durable_receipt": True,
                                 "max_parallel": self.api.max_parallel,
                             },
                             "service.list": {
                                 "effect": "read",
                                 "process_authority": False,
                             },
+                            "service.health": {
+                                "effect": "loopback_read",
+                                "process_authority": False,
+                                "redirects_followed": False,
+                            },
+                            "receipt.recent": {
+                                "effect": "read",
+                                "raw_full_output_persisted": False,
+                            },
+                            "receipt.inspect": {
+                                "effect": "read",
+                                "raw_full_output_persisted": False,
+                            },
                         },
                     },
                 )
                 return
+
             if self.path == "/v1/recipes":
                 self._send(
                     200,
@@ -107,6 +126,7 @@ class _Handler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+
             if self.path == "/v1/services":
                 self._send(
                     200,
@@ -120,6 +140,18 @@ class _Handler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+
+            if self.path == "/v1/receipts":
+                self._send(
+                    200,
+                    {
+                        "protocol": PROTOCOL,
+                        "request_id": request_id,
+                        "receipts": self.api.receipts.recent(limit=50),
+                    },
+                )
+                return
+
             raise HouseMechanicAPIError(404, "not_found", "route not found")
         except HouseMechanicAPIError as exc:
             self._error(exc, request_id)
@@ -133,58 +165,188 @@ class _Handler(BaseHTTPRequestHandler):
         request_id = self._request_id()
         try:
             self._require_auth()
-            if self.path != "/v1/run":
-                raise HouseMechanicAPIError(404, "not_found", "route not found")
-            payload = self._json_body()
-            unknown = set(payload) - {"recipe_id"}
-            if unknown:
-                raise HouseMechanicAPIError(
-                    400,
-                    "invalid_request",
-                    f"unknown fields: {sorted(unknown)}",
-                )
-            recipe_id = payload.get("recipe_id")
-            if not isinstance(recipe_id, str) or not recipe_id.strip():
-                raise HouseMechanicAPIError(
-                    400,
-                    "invalid_request",
-                    "recipe_id must be a non-empty string",
-                )
-            recipe = self.api.recipes.recipes.get(recipe_id.strip())
-            if recipe is None:
-                raise HouseMechanicAPIError(
-                    404,
-                    "unknown_recipe",
-                    "recipe is not present in the operator manifest",
-                )
-            if not self.api.run_slots.acquire(blocking=False):
-                raise HouseMechanicAPIError(
-                    409,
-                    "busy",
-                    "House Mechanic has no free recipe execution slot",
-                )
-            try:
-                receipt = run_recipe(
-                    recipe,
-                    self.api.repo_root,
-                    request_id=request_id,
-                )
-            finally:
-                self.api.run_slots.release()
-            self._send(
-                200,
-                {
-                    "protocol": PROTOCOL,
-                    "request_id": request_id,
-                    "receipt": receipt.to_dict(),
-                },
-            )
+
+            if self.path == "/v1/run":
+                self._run_recipe(request_id)
+                return
+
+            if self.path == "/v1/health-check":
+                self._health_check(request_id)
+                return
+
+            if self.path == "/v1/receipt":
+                self._inspect_receipt(request_id)
+                return
+
+            raise HouseMechanicAPIError(404, "not_found", "route not found")
         except HouseMechanicAPIError as exc:
             self._error(exc, request_id)
         except Exception:
             self._error(
                 HouseMechanicAPIError(500, "internal_error", "request failed"),
                 request_id,
+            )
+
+    def _run_recipe(self, request_id: str) -> None:
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"recipe_id"})
+        recipe_id = payload.get("recipe_id")
+        if not isinstance(recipe_id, str) or not recipe_id.strip():
+            raise HouseMechanicAPIError(
+                400,
+                "invalid_request",
+                "recipe_id must be a non-empty string",
+            )
+
+        recipe = self.api.recipes.recipes.get(recipe_id.strip())
+        if recipe is None:
+            raise HouseMechanicAPIError(
+                404,
+                "unknown_recipe",
+                "recipe is not present in the operator manifest",
+            )
+        if not self.api.run_slots.acquire(blocking=False):
+            raise HouseMechanicAPIError(
+                409,
+                "busy",
+                "House Mechanic has no free recipe execution slot",
+            )
+
+        try:
+            receipt = run_recipe(
+                recipe,
+                self.api.repo_root,
+                request_id=request_id,
+            )
+        finally:
+            self.api.run_slots.release()
+
+        try:
+            durable = self.api.receipts.append_run(receipt)
+        except Exception:
+            self._send(
+                500,
+                {
+                    "protocol": PROTOCOL,
+                    "request_id": request_id,
+                    "execution_occurred": True,
+                    "receipt_persisted": False,
+                    "receipt": receipt.to_dict(),
+                    "error": {
+                        "code": "receipt_persistence_failed",
+                        "message": (
+                            "recipe execution completed but durable receipt "
+                            "persistence failed"
+                        ),
+                    },
+                },
+            )
+            return
+
+        self._send(
+            200,
+            {
+                "protocol": PROTOCOL,
+                "request_id": request_id,
+                "execution_occurred": True,
+                "receipt_persisted": True,
+                "durable_receipt_id": durable["receipt_id"],
+                "receipt": receipt.to_dict(),
+            },
+        )
+
+    def _health_check(self, request_id: str) -> None:
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"service_id"})
+        service_id = payload.get("service_id")
+        if not isinstance(service_id, str) or not service_id.strip():
+            raise HouseMechanicAPIError(
+                400,
+                "invalid_request",
+                "service_id must be a non-empty string",
+            )
+        service = self.api.services.services.get(service_id.strip())
+        if service is None:
+            raise HouseMechanicAPIError(
+                404,
+                "unknown_service",
+                "service is not present in the operator manifest",
+            )
+
+        result = probe_service(
+            service,
+            request_id=request_id,
+            timeout_seconds=self.api.health_timeout_seconds,
+            max_response_bytes=self.api.health_max_response_bytes,
+        )
+        try:
+            durable = self.api.receipts.append_health(result)
+        except Exception:
+            self._send(
+                500,
+                {
+                    "protocol": PROTOCOL,
+                    "request_id": request_id,
+                    "observation_occurred": True,
+                    "receipt_persisted": False,
+                    "health": result.to_dict(),
+                    "error": {
+                        "code": "receipt_persistence_failed",
+                        "message": (
+                            "health observation completed but durable receipt "
+                            "persistence failed"
+                        ),
+                    },
+                },
+            )
+            return
+
+        self._send(
+            200,
+            {
+                "protocol": PROTOCOL,
+                "request_id": request_id,
+                "observation_occurred": True,
+                "receipt_persisted": True,
+                "durable_receipt_id": durable["receipt_id"],
+                "health": result.to_dict(),
+            },
+        )
+
+    def _inspect_receipt(self, request_id: str) -> None:
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"receipt_id"})
+        receipt_id = payload.get("receipt_id")
+        if not isinstance(receipt_id, str) or not receipt_id.strip():
+            raise HouseMechanicAPIError(
+                400,
+                "invalid_request",
+                "receipt_id must be a non-empty string",
+            )
+        receipt = self.api.receipts.get(receipt_id.strip())
+        if receipt is None:
+            raise HouseMechanicAPIError(
+                404,
+                "unknown_receipt",
+                "receipt was not found",
+            )
+        self._send(
+            200,
+            {
+                "protocol": PROTOCOL,
+                "request_id": request_id,
+                "receipt": receipt,
+            },
+        )
+
+    @staticmethod
+    def _require_exact_fields(payload: dict[str, Any], allowed: set[str]) -> None:
+        unknown = set(payload) - allowed
+        if unknown:
+            raise HouseMechanicAPIError(
+                400,
+                "invalid_request",
+                f"unknown fields: {sorted(unknown)}",
             )
 
     def _request_id(self) -> str:
@@ -284,18 +446,31 @@ class HouseMechanicServer(ThreadingHTTPServer):
         recipes: Manifest,
         services: ServiceManifest,
         token_file: Path,
+        receipt_file: Path,
         port: int = 8770,
         max_parallel: int = 1,
+        health_timeout_seconds: float = 3.0,
+        health_max_response_bytes: int = 65_536,
     ):
         if not 0 <= int(port) <= 65535:
             raise ValueError("House Mechanic port must be between 0 and 65535")
         if not 1 <= int(max_parallel) <= 16:
             raise ValueError("House Mechanic max_parallel must be between 1 and 16")
+        if not 0.1 <= float(health_timeout_seconds) <= 30.0:
+            raise ValueError("health timeout must be between 0.1 and 30 seconds")
+        if not 1_024 <= int(health_max_response_bytes) <= 1_048_576:
+            raise ValueError(
+                "health response ceiling must be between 1024 and 1048576 bytes"
+            )
+
         self.repo_root = repo_root.resolve()
         self.recipes = recipes
         self.services = services
         self.token = read_token(token_file)
+        self.receipts = ReceiptStore(receipt_file)
         self.max_parallel = int(max_parallel)
+        self.health_timeout_seconds = float(health_timeout_seconds)
+        self.health_max_response_bytes = int(health_max_response_bytes)
         self.run_slots = threading.BoundedSemaphore(self.max_parallel)
         super().__init__(("127.0.0.1", int(port)), _Handler)
         self.api = self

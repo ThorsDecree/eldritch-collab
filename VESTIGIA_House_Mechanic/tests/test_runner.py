@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 import sys
 
 from house_mechanic.model import Recipe
@@ -25,6 +26,12 @@ def test_success_receipt(tmp_path: Path):
     assert r.exit_code == 0
     assert r.expected_exit is True
     assert r.stdout.strip() == "ok"
+    assert r.stdout_bytes == len(r.stdout.encode("utf-8"))
+    assert r.stdout_sha256 == hashlib.sha256(r.stdout.encode("utf-8")).hexdigest()
+    assert r.stderr_bytes == 0
+    assert len(r.stderr_sha256) == 64
+    assert r.process_id > 0
+    assert r.env_profile == "python"
     assert r.timed_out is False
     assert r.process_tree_containment_proven is False
 
