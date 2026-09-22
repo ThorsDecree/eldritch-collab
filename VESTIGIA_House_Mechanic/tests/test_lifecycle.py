@@ -50,6 +50,8 @@ server = ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler)
 print("fixture-ready", flush=True)
 server.serve_forever()
 """.strip()
+    fixture_server = tmp_path / "fixture_http_server.py"
+    fixture_server.write_text(server_code + "\n", encoding="utf-8")
 
     recipes_path = tmp_path / "recipes.json"
     recipes_path.write_text(
@@ -62,8 +64,7 @@ server.serve_forever()
                         "argv": [
                             sys.executable,
                             "-u",
-                            "-c",
-                            server_code,
+                            str(fixture_server),
                             str(port),
                         ],
                         "cwd": ".",
@@ -120,7 +121,10 @@ def test_start_stop_and_restart_require_exact_owned_generation(tmp_path: Path) -
 
     try:
         started = controller.start(service, request_id="req-start")
-        assert started["verified"] is True
+        assert started["verified"] is True, {
+            "started": started,
+            "logs": registry.logs(service),
+        }
         assert started["outcome"] == "running_healthy"
         assert started["preflight_health"]["healthy"] is False
         first_generation = started["generation_id"]
@@ -177,7 +181,10 @@ def test_start_refuses_preexisting_healthy_endpoint(tmp_path: Path) -> None:
                 request_id="req-preexisting-wait",
                 timeout_seconds=0.5,
             )
-        assert observed.healthy is True
+        assert observed.healthy is True, {
+            "health": observed.to_dict(),
+            "logs": first.logs(service),
+        }
 
         with pytest.raises(
             LifecycleError,
