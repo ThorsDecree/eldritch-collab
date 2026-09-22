@@ -274,6 +274,24 @@ class ProcessRegistry:
                 owned.process.terminate()
                 terminate_called = True
                 owned.process.wait(timeout=max(0.1, float(timeout_seconds)))
+            except OSError as exc:
+                after = self.status(service)
+                if after.state == "exited":
+                    return {
+                        "action_occurred": False,
+                        "after": after.to_dict(),
+                        "termination": {
+                            "requested_generation_id": expected_generation_id,
+                            "terminate_called": terminate_called,
+                            "forced": False,
+                            "process_tree_containment_proven": False,
+                            "race": "process_exited_before_termination_completed",
+                        },
+                    }
+                raise ProcessOwnershipError(
+                    "termination_failed",
+                    f"owned process termination failed: {type(exc).__name__}",
+                ) from exc
             except subprocess.TimeoutExpired:
                 forced = True
                 if os.name == "nt":
