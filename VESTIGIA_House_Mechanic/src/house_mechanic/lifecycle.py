@@ -136,6 +136,9 @@ class LifecycleController:
         return {
             "action": "start",
             "service_id": service.id,
+            "service_sha256": service.digest(),
+            "start_recipe": recipe.id,
+            "start_recipe_sha256": recipe.digest(),
             "action_occurred": True,
             "verified": verified,
             "outcome": "running_healthy" if verified else "started_unverified",
@@ -180,12 +183,19 @@ class LifecycleController:
             True if final_health is None else not final_health.healthy
         )
         verified = bool(process_exit_verified and endpoint_absent_verified)
+        if verified:
+            outcome = "stopped"
+        elif not process_exit_verified:
+            outcome = "process_exit_unverified"
+        else:
+            outcome = "process_stopped_endpoint_still_healthy"
         return {
             "action": "stop",
             "service_id": service.id,
+            "service_sha256": service.digest(),
             "action_occurred": bool(stopped["action_occurred"]),
             "verified": verified,
-            "outcome": "stopped" if verified else "process_stopped_endpoint_still_healthy",
+            "outcome": outcome,
             "before": before.to_dict(),
             "after": stopped["after"],
             "generation_id": generation_id,
@@ -212,6 +222,7 @@ class LifecycleController:
             return {
                 "action": "restart",
                 "service_id": service.id,
+                "service_sha256": service.digest(),
                 "action_occurred": bool(stop_result["action_occurred"]),
                 "verified": False,
                 "outcome": "stop_unverified",
@@ -227,6 +238,7 @@ class LifecycleController:
             return {
                 "action": "restart",
                 "service_id": service.id,
+                "service_sha256": service.digest(),
                 "action_occurred": True,
                 "verified": False,
                 "outcome": "stopped_start_blocked",
@@ -243,6 +255,7 @@ class LifecycleController:
         return {
             "action": "restart",
             "service_id": service.id,
+            "service_sha256": service.digest(),
             "action_occurred": True,
             "verified": bool(start_result["verified"]),
             "outcome": "restarted_healthy" if start_result["verified"] else "restarted_unverified",
