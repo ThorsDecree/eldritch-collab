@@ -539,3 +539,7 @@ class HouseMechanicServer(ThreadingHTTPServer):
         self.run_slots = threading.BoundedSemaphore(self.max_parallel)
         super().__init__(("127.0.0.1", int(port)), _Handler)
         self.api = self
+
+    def server_close(self) -> None:
+        self.processes.terminate_all_for_shutdown()
+        super().server_close()
