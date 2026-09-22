@@ -30,6 +30,8 @@ The current implementation includes the v0.3 observability surface plus explicit
 
 The HTTP API still exposes **no lifecycle mutation**. There is no remote service start, stop, or restart route in v0.4.
 
+Any recipe referenced by a service as `start_recipe` or `stop_recipe` is reserved from the generic `POST /v1/run` endpoint. This prevents lifecycle authority from being smuggled through the ordinary recipe lane before typed lifecycle actions exist.
+
 ## Why ownership is instance-scoped
 
 A PID is not proof of identity.
