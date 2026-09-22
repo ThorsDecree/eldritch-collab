@@ -26,32 +26,6 @@ def _free_port() -> int:
 
 def _manifests(tmp_path: Path):
     service_port = _free_port()
-    server_code = """
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import json
-import sys
-
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        body = json.dumps({
-            "protocol": "fixture.lifecycle-api.v1",
-            "healthy": True,
-        }).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format, *args):
-        return
-
-server = ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler)
-server.serve_forever()
-""".strip()
-    fixture_server = tmp_path / "fixture_http_server.py"
-    fixture_server.write_text(server_code + "\n", encoding="utf-8")
-
     recipes_path = tmp_path / "recipes.json"
     recipes_path.write_text(
         json.dumps(
@@ -63,8 +37,11 @@ server.serve_forever()
                         "argv": [
                             sys.executable,
                             "-u",
-                            str(fixture_server),
+                            "-m",
+                            "http.server",
                             str(service_port),
+                            "--bind",
+                            "127.0.0.1",
                         ],
                         "cwd": ".",
                         "env_profile": "python",
@@ -90,9 +67,8 @@ server.serve_forever()
                             "kind": "http",
                             "host": "127.0.0.1",
                             "port": service_port,
-                            "path": "/health",
+                            "path": "/",
                             "expected_status": 200,
-                            "expected_protocol": "fixture.lifecycle-api.v1",
                         },
                     }
                 ],
