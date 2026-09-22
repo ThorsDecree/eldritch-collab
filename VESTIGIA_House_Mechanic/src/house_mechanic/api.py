@@ -217,12 +217,22 @@ class _Handler(BaseHTTPRequestHandler):
                 "recipe_id must be a non-empty string",
             )
 
-        recipe = self.api.recipes.recipes.get(recipe_id.strip())
+        recipe_id = recipe_id.strip()
+        recipe = self.api.recipes.recipes.get(recipe_id)
         if recipe is None:
             raise HouseMechanicAPIError(
                 404,
                 "unknown_recipe",
                 "recipe is not present in the operator manifest",
+            )
+        if recipe_id in self.api.lifecycle_recipe_ids:
+            raise HouseMechanicAPIError(
+                403,
+                "lifecycle_recipe_reserved",
+                (
+                    "recipe is reserved for a typed service lifecycle action "
+                    "and cannot run through the generic recipe endpoint"
+                ),
             )
         if not self.api.run_slots.acquire(blocking=False):
             raise HouseMechanicAPIError(
@@ -530,6 +540,12 @@ class HouseMechanicServer(ThreadingHTTPServer):
         self.repo_root = repo_root.resolve()
         self.recipes = recipes
         self.services = services
+        self.lifecycle_recipe_ids = {
+            recipe_id
+            for service in services.services.values()
+            for recipe_id in (service.start_recipe, service.stop_recipe)
+            if recipe_id is not None
+        }
         self.token = read_token(token_file)
         self.receipts = ReceiptStore(receipt_file)
         self.processes = ProcessRegistry(receipt_file.parent / "process_state")
