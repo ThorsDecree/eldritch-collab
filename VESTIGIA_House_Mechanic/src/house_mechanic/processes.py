@@ -188,7 +188,7 @@ class ProcessRegistry:
         recipe: Recipe,
         repo_root: Path,
     ) -> ProcessStatus:
-        """Internal primitive for lifecycle work; not exposed through v0.4 HTTP."""
+        """Launch one declared mechanic-owned child for the typed lifecycle API."""
         if not service.mechanic_owned:
             raise ValueError("external service cannot be launched as an owned process")
         with self._lock:
