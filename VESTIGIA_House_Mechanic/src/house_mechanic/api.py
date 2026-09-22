@@ -11,6 +11,7 @@ import uuid
 
 from .health import probe_service
 from .model import Manifest
+from .processes import ProcessRegistry
 from .receipts import ReceiptStore
 from .runner import run_recipe
 from .service_model import ServiceManifest
@@ -96,6 +97,16 @@ class _Handler(BaseHTTPRequestHandler):
                                 "process_authority": False,
                                 "redirects_followed": False,
                             },
+                            "service.process_status": {
+                                "effect": "read",
+                                "lifecycle_authority": False,
+                                "ownership_scope": "supervisor_instance",
+                            },
+                            "service.process_logs": {
+                                "effect": "read",
+                                "lifecycle_authority": False,
+                                "tail_limit_bytes": 16384,
+                            },
                             "receipt.recent": {
                                 "effect": "read",
                                 "raw_full_output_persisted": False,
@@ -176,6 +187,14 @@ class _Handler(BaseHTTPRequestHandler):
 
             if self.path == "/v1/receipt":
                 self._inspect_receipt(request_id)
+                return
+
+            if self.path == "/v1/process-status":
+                self._process_status(request_id)
+                return
+
+            if self.path == "/v1/process-logs":
+                self._process_logs(request_id)
                 return
 
             raise HouseMechanicAPIError(404, "not_found", "route not found")
@@ -310,6 +329,51 @@ class _Handler(BaseHTTPRequestHandler):
                 "receipt_persisted": True,
                 "durable_receipt_id": durable["receipt_id"],
                 "health": result.to_dict(),
+            },
+        )
+
+    def _service_from_payload(
+        self,
+        payload: dict[str, Any],
+    ):
+        self._require_exact_fields(payload, {"service_id"})
+        service_id = payload.get("service_id")
+        if not isinstance(service_id, str) or not service_id.strip():
+            raise HouseMechanicAPIError(
+                400,
+                "invalid_request",
+                "service_id must be a non-empty string",
+            )
+        service = self.api.services.services.get(service_id.strip())
+        if service is None:
+            raise HouseMechanicAPIError(
+                404,
+                "unknown_service",
+                "service is not present in the operator manifest",
+            )
+        return service
+
+    def _process_status(self, request_id: str) -> None:
+        service = self._service_from_payload(self._json_body())
+        self._send(
+            200,
+            {
+                "protocol": PROTOCOL,
+                "request_id": request_id,
+                "process": self.api.processes.status(service).to_dict(),
+                "lifecycle_authority_exposed": False,
+            },
+        )
+
+    def _process_logs(self, request_id: str) -> None:
+        service = self._service_from_payload(self._json_body())
+        self._send(
+            200,
+            {
+                "protocol": PROTOCOL,
+                "request_id": request_id,
+                "logs": self.api.processes.logs(service),
+                "lifecycle_authority_exposed": False,
             },
         )
 
@@ -468,6 +532,7 @@ class HouseMechanicServer(ThreadingHTTPServer):
         self.services = services
         self.token = read_token(token_file)
         self.receipts = ReceiptStore(receipt_file)
+        self.processes = ProcessRegistry(receipt_file.parent / "process_state")
         self.max_parallel = int(max_parallel)
         self.health_timeout_seconds = float(health_timeout_seconds)
         self.health_max_response_bytes = int(health_max_response_bytes)
