@@ -75,3 +75,21 @@ def test_receipt_store_persists_health_evidence(tmp_path: Path) -> None:
     record = store.append_health(result)
     assert record["kind"] == "service_health"
     assert store.recent(limit=5, kind="service_health")[0]["receipt_id"] == record["receipt_id"]
+
+
+def test_receipt_store_persists_lifecycle_evidence(tmp_path: Path) -> None:
+    store = ReceiptStore(tmp_path / "receipts.jsonl")
+    record = store.append_lifecycle(
+        request_id="req-lifecycle",
+        action="start",
+        evidence={
+            "action": "start",
+            "service_id": "daemon-bridge",
+            "generation_id": "hm_proc_fixture",
+            "verified": True,
+        },
+    )
+    assert record["kind"] == "service_lifecycle"
+    assert record["evidence"]["action"] == "start"
+    assert record["evidence"]["verified"] is True
+    assert store.recent(limit=5, kind="service_lifecycle")[0]["receipt_id"] == record["receipt_id"]
