@@ -117,6 +117,22 @@ class ReceiptStore:
             evidence=result.to_dict(),
         )
 
+    def append_lifecycle(
+        self,
+        *,
+        request_id: str,
+        action: str,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._append(
+            kind="service_lifecycle",
+            request_id=request_id,
+            evidence={
+                "action": action,
+                **evidence,
+            },
+        )
+
     def recent(
         self,
         *,
