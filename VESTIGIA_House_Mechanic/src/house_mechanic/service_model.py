@@ -91,8 +91,8 @@ class Service:
             "stop_recipe": self.stop_recipe,
             "health": self.health.to_dict() if self.health else None,
             "sha256": self.digest(),
-            "process_authority": False,
-            "lifecycle_authority_exposed": False,
+            "process_authority": self.mechanic_owned,
+            "lifecycle_authority_exposed": self.mechanic_owned,
         }
 
 

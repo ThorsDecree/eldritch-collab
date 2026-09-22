@@ -160,7 +160,8 @@ def test_api_persists_recipe_and_health_receipts(tmp_path: Path) -> None:
         assert status == 200
         assert health["healthy"] is True
         assert health["receipt_persistence"] is True
-        assert health["process_authority"] is False
+        assert health["process_authority"] is True
+        assert health["process_authority_scope"] == "mechanic_child_only"
 
         status, denied = _request(port, "GET", "/v1/recipes")
         assert status == 401
@@ -189,7 +190,7 @@ def test_api_persists_recipe_and_health_receipts(tmp_path: Path) -> None:
         assert process_status["process"]["declared_ownership"] == "mechanic_child"
         assert process_status["process"]["state"] == "not_started"
         assert process_status["process"]["process_owned"] is False
-        assert process_status["lifecycle_authority_exposed"] is False
+        assert process_status["lifecycle_authority_exposed"] is True
 
         status, process_logs = _request(
             port,
@@ -201,7 +202,7 @@ def test_api_persists_recipe_and_health_receipts(tmp_path: Path) -> None:
         assert status == 200
         assert process_logs["logs"]["process_owned"] is False
         assert process_logs["logs"]["stdout_tail"] == ""
-        assert process_logs["lifecycle_authority_exposed"] is False
+        assert process_logs["lifecycle_authority_exposed"] is True
 
         status, reserved = _request(
             port,

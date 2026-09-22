@@ -136,6 +136,8 @@ def test_v02_manifest_types_mechanic_owned_service(tmp_path: Path) -> None:
     service = manifest.services["daemon-bridge"]
     assert service.ownership == "mechanic_child"
     assert service.mechanic_owned is True
+    assert service.public_dict()["process_authority"] is True
+    assert service.public_dict()["lifecycle_authority_exposed"] is True
 
 
 def test_v02_external_service_rejects_lifecycle_recipes(tmp_path: Path) -> None:
