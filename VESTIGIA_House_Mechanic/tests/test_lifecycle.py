@@ -4,9 +4,11 @@ import json
 from pathlib import Path
 import socket
 import sys
+import time
 
 import pytest
 
+from house_mechanic.health import probe_service
 from house_mechanic.lifecycle import LifecycleController, LifecycleError
 from house_mechanic.model import load_manifest
 from house_mechanic.processes import ProcessRegistry
@@ -162,6 +164,20 @@ def test_start_refuses_preexisting_healthy_endpoint(tmp_path: Path) -> None:
     first = ProcessRegistry(tmp_path / "other-state")
     try:
         first.launch_owned(service, recipes.recipes["service.start"], tmp_path)
+        deadline = time.monotonic() + 5
+        observed = probe_service(
+            service,
+            request_id="req-preexisting-wait",
+            timeout_seconds=0.5,
+        )
+        while not observed.healthy and time.monotonic() < deadline:
+            time.sleep(0.05)
+            observed = probe_service(
+                service,
+                request_id="req-preexisting-wait",
+                timeout_seconds=0.5,
+            )
+        assert observed.healthy is True
 
         with pytest.raises(
             LifecycleError,
