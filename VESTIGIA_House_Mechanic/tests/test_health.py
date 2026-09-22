@@ -30,6 +30,7 @@ def _service(port: int, protocol: str = "daemon-bridge-api.v0.1") -> Service:
     return Service(
         id="daemon-bridge",
         description="fixture",
+        ownership="external",
         start_recipe=None,
         stop_recipe=None,
         health=HealthProbe(
