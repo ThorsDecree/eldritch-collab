@@ -53,3 +53,23 @@ def test_output_cap_stops_run(tmp_path: Path):
     assert r.output_limit_exceeded is True
     assert r.stdout_truncated is True
     assert len(r.stdout.encode("utf-8")) <= 1024
+
+
+def test_python_profile_can_initialize_socket_provider(tmp_path: Path):
+    r = run_recipe(
+        recipe(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import socket; "
+                    "s = socket.socket(); "
+                    "s.close(); "
+                    "print('socket-ok')"
+                ),
+            ]
+        ),
+        tmp_path,
+    )
+    assert r.exit_code == 0, r.stderr
+    assert r.stdout.strip() == "socket-ok"
