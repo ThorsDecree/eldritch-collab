@@ -17,7 +17,7 @@ from .runner import run_recipe
 from .service_model import ServiceManifest
 
 
-PROTOCOL = "vestigia.house-mechanic-api.v0.2"
+PROTOCOL = "vestigia.house-mechanic-api.v0.3"
 MAX_REQUEST_BYTES = 16_384
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
