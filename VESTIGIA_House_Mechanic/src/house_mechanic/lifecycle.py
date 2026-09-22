@@ -73,6 +73,18 @@ class LifecycleController:
             status = self.processes.status(service)
         return last, status.to_dict()
 
+    def _wait_unhealthy(
+        self,
+        service: Service,
+        request_id: str,
+    ) -> HealthResult:
+        deadline = time.monotonic() + self.health_wait_seconds
+        last = self._probe(service, request_id)
+        while last.healthy and time.monotonic() < deadline:
+            time.sleep(self.health_poll_seconds)
+            last = self._probe(service, request_id)
+        return last
+
     def start(self, service: Service, *, request_id: str) -> dict[str, Any]:
         self._require_owned(service)
         if service.start_recipe is None:
@@ -156,7 +168,7 @@ class LifecycleController:
             raise LifecycleError(exc.code, exc.message) from exc
 
         final_health = (
-            self._probe(service, request_id)
+            self._wait_unhealthy(service, request_id)
             if service.health is not None
             else None
         )
