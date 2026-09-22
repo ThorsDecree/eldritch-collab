@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -18,6 +19,12 @@ class RunReceipt:
     recipe_id: str
     recipe_sha256: str
     cwd: str
+    env_profile: str
+    source_commit: str | None
+    source_branch: str | None
+    source_dirty: bool | None
+    source_status_sha256: str | None
+    process_id: int
     started_at: str
     completed_at: str
     wall_seconds: float
@@ -27,6 +34,10 @@ class RunReceipt:
     output_limit_exceeded: bool
     stdout: str
     stderr: str
+    stdout_bytes: int
+    stderr_bytes: int
+    stdout_sha256: str
+    stderr_sha256: str
     stdout_truncated: bool
     stderr_truncated: bool
     process_tree_termination_attempted: bool
@@ -54,8 +65,11 @@ class _BoundedCollector:
                 self.truncated = True
                 overflow.set()
 
+    def raw(self) -> bytes:
+        return bytes(self.buf)
+
     def text(self) -> str:
-        return bytes(self.buf).decode("utf-8", errors="replace")
+        return self.raw().decode("utf-8", errors="replace")
 
 
 def _env(profile: str) -> dict[str, str]:
@@ -63,6 +77,41 @@ def _env(profile: str) -> dict[str, str]:
     if profile == "python":
         keep |= {"PYTHONUTF8", "PYTHONIOENCODING"}
     return {k: v for k, v in os.environ.items() if k in keep}
+
+
+def _git_output(repo_root: Path, *args: str) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo_root.resolve()), *args],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=_env("minimal"),
+            shell=False,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.decode("utf-8", errors="replace").strip()
+
+
+def _git_identity(repo_root: Path) -> tuple[str | None, str | None, bool | None, str | None]:
+    commit = _git_output(repo_root, "rev-parse", "HEAD")
+    if commit is None:
+        return None, None, None, None
+    branch = _git_output(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
+    status = _git_output(repo_root, "status", "--porcelain=v1", "-uno")
+    if status is None:
+        return commit, branch, None, None
+    return (
+        commit,
+        branch,
+        bool(status),
+        hashlib.sha256(status.encode("utf-8")).hexdigest(),
+    )
 
 
 def _terminate_tree(proc: subprocess.Popen[bytes]) -> bool:
@@ -83,7 +132,9 @@ def _terminate_tree(proc: subprocess.Popen[bytes]) -> bool:
 
 def run_recipe(recipe: Recipe, repo_root: Path, request_id: str | None = None) -> RunReceipt:
     request_id = request_id or str(uuid.uuid4())
-    cwd = (repo_root.resolve() / recipe.cwd).resolve()
+    root = repo_root.resolve()
+    cwd = (root / recipe.cwd).resolve()
+    source_commit, source_branch, source_dirty, source_status_sha256 = _git_identity(root)
     started = datetime.now(timezone.utc)
     t0 = time.monotonic()
     proc = subprocess.Popen(
@@ -95,6 +146,7 @@ def run_recipe(recipe: Recipe, repo_root: Path, request_id: str | None = None) -
         stderr=subprocess.PIPE,
         shell=False,
     )
+    process_id = int(proc.pid)
     assert proc.stdout is not None and proc.stderr is not None
     overflow = threading.Event()
     out = _BoundedCollector(recipe.max_stdout_bytes)
@@ -133,11 +185,19 @@ def run_recipe(recipe: Recipe, repo_root: Path, request_id: str | None = None) -
 
     completed = datetime.now(timezone.utc)
     exit_code = proc.poll()
+    stdout_raw = out.raw()
+    stderr_raw = err.raw()
     return RunReceipt(
         request_id=request_id,
         recipe_id=recipe.id,
         recipe_sha256=recipe.digest(),
         cwd=recipe.cwd,
+        env_profile=recipe.env_profile,
+        source_commit=source_commit,
+        source_branch=source_branch,
+        source_dirty=source_dirty,
+        source_status_sha256=source_status_sha256,
+        process_id=process_id,
         started_at=started.isoformat(),
         completed_at=completed.isoformat(),
         wall_seconds=round(time.monotonic() - t0, 6),
@@ -145,8 +205,12 @@ def run_recipe(recipe: Recipe, repo_root: Path, request_id: str | None = None) -
         expected_exit=exit_code in recipe.expected_exit_codes if exit_code is not None else False,
         timed_out=timed_out,
         output_limit_exceeded=overflow.is_set(),
-        stdout=out.text(),
-        stderr=err.text(),
+        stdout=stdout_raw.decode("utf-8", errors="replace"),
+        stderr=stderr_raw.decode("utf-8", errors="replace"),
+        stdout_bytes=len(stdout_raw),
+        stderr_bytes=len(stderr_raw),
+        stdout_sha256=hashlib.sha256(stdout_raw).hexdigest(),
+        stderr_sha256=hashlib.sha256(stderr_raw).hexdigest(),
         stdout_truncated=out.truncated,
         stderr_truncated=err.truncated,
         process_tree_termination_attempted=termination_attempted,
