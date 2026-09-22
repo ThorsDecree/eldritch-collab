@@ -25,6 +25,12 @@ def test_success_receipt(tmp_path: Path):
     assert r.exit_code == 0
     assert r.expected_exit is True
     assert r.stdout.strip() == "ok"
+    assert r.stdout_bytes == len(b"ok\n")
+    assert len(r.stdout_sha256) == 64
+    assert r.stderr_bytes == 0
+    assert len(r.stderr_sha256) == 64
+    assert r.process_id > 0
+    assert r.env_profile == "python"
     assert r.timed_out is False
     assert r.process_tree_containment_proven is False
 
