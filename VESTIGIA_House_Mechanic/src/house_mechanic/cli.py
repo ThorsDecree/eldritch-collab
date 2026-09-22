@@ -7,7 +7,7 @@ from pathlib import Path
 from .api import HouseMechanicServer
 from .model import load_manifest
 from .runner import run_recipe
-from .service_model import ServiceManifest, load_service_manifest
+from .service_model import load_service_manifest
 
 
 def main() -> int:
