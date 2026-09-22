@@ -181,7 +181,7 @@ def test_lifecycle_api_persists_verified_actions(tmp_path: Path) -> None:
             "/v1/process-stop",
             {
                 "service_id": "fixture",
-                "generation_id": "hm_proc_wrong_generation",
+                "generation_id": "hm_proc_00000000000000000000000000000000",
             },
             request_id="req-api-wrong-stop",
         )
