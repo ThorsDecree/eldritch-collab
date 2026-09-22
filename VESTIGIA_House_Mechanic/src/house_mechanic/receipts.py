@@ -36,6 +36,8 @@ class ReceiptStore:
         self.path = path.expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        with self.path.open("a", encoding="utf-8"):
+            pass
 
     def _append(
         self,
