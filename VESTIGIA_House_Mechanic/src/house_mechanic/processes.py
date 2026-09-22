@@ -10,6 +10,7 @@ import threading
 from typing import BinaryIO
 import uuid
 
+from .environment import filtered_environment
 from .model import Recipe
 from .service_model import Service
 
@@ -22,13 +23,6 @@ class ProcessOwnershipError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.message = message
-
-
-def _environment(profile: str) -> dict[str, str]:
-    keep = {"SystemRoot", "WINDIR", "COMSPEC", "PATH", "PATHEXT", "TEMP", "TMP"}
-    if profile == "python":
-        keep |= {"PYTHONUTF8", "PYTHONIOENCODING"}
-    return {key: value for key, value in os.environ.items() if key in keep}
 
 
 def _file_tail(path: Path, limit: int = LOG_TAIL_BYTES) -> tuple[bytes, int]:
@@ -206,7 +200,7 @@ class ProcessRegistry:
                 process = subprocess.Popen(
                     list(recipe.argv),
                     cwd=cwd,
-                    env=_environment(recipe.env_profile),
+                    env=filtered_environment(recipe.env_profile),
                     stdin=subprocess.DEVNULL,
                     stdout=stdout_handle,
                     stderr=stderr_handle,
