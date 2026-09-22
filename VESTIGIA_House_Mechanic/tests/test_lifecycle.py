@@ -96,10 +96,18 @@ def test_start_stop_and_restart_require_exact_owned_generation(tmp_path: Path) -
 
     try:
         started = controller.start(service, request_id="req-start")
-        assert started["verified"] is True, {
-            "started": started,
-            "logs": registry.logs(service),
-        }
+        if not started["verified"]:
+            print(
+                "LIFECYCLE_DIAGNOSTIC="
+                + json.dumps(
+                    {
+                        "started": started,
+                        "logs": registry.logs(service),
+                    },
+                    sort_keys=True,
+                )
+            )
+        assert started["verified"] is True
         assert started["outcome"] == "running_healthy"
         assert started["preflight_health"]["healthy"] is False
         first_generation = started["generation_id"]
@@ -156,10 +164,18 @@ def test_start_refuses_preexisting_healthy_endpoint(tmp_path: Path) -> None:
                 request_id="req-preexisting-wait",
                 timeout_seconds=0.5,
             )
-        assert observed.healthy is True, {
-            "health": observed.to_dict(),
-            "logs": first.logs(service),
-        }
+        if not observed.healthy:
+            print(
+                "PREEXISTING_DIAGNOSTIC="
+                + json.dumps(
+                    {
+                        "health": observed.to_dict(),
+                        "logs": first.logs(service),
+                    },
+                    sort_keys=True,
+                )
+            )
+        assert observed.healthy is True
 
         with pytest.raises(
             LifecycleError,
