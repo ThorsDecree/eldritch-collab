@@ -176,21 +176,100 @@ class DeploymentController:
     def _deployment_id() -> str:
         return f"hm_deploy_{uuid.uuid4().hex}"
 
-    def _cleanup_checkout(self, record: DeploymentRecord) -> dict[str, Any] | None:
-        if not record.active_worktree_path:
-            return None
+    def _queue_cleanup(
+        self,
+        record: DeploymentRecord,
+        *,
+        deployment_id: str | None,
+        worktree_path: str,
+        expected_commit: str | None,
+        safe_basis: str,
+        error: TaskError,
+    ) -> dict[str, Any]:
+        existing = next(
+            (
+                row
+                for row in record.cleanup_pending
+                if row.get("worktree_path") == worktree_path
+            ),
+            None,
+        )
+        now = datetime.now(UTC).isoformat()
+        if existing is None:
+            existing = {
+                "cleanup_id": f"hm_cleanup_{uuid.uuid4().hex}",
+                "deployment_id": deployment_id,
+                "worktree_path": worktree_path,
+                "expected_commit": expected_commit,
+                "safe_basis": safe_basis,
+                "created_at": now,
+                "attempts": 0,
+            }
+            record.cleanup_pending.append(existing)
+        existing["attempts"] = int(existing.get("attempts", 0)) + 1
+        existing["last_attempt_at"] = now
+        existing["last_error"] = {"code": error.code, "message": error.message}
+        record.updated_at = now
+        self.ledger.save(record)
+        return dict(existing)
+
+    def _cleanup_path(
+        self,
+        record: DeploymentRecord,
+        *,
+        deployment_id: str | None,
+        worktree_path: str,
+        expected_commit: str | None,
+        safe_basis: str,
+    ) -> dict[str, Any]:
+        path = Path(worktree_path)
         try:
             self.tasks.worktrees.remove_detached(
                 record.repository_id,
-                Path(record.active_worktree_path),
+                path,
+                expected_commit=expected_commit,
             )
-            return {"removed": True, "path_present": False}
+            return {
+                "removed": True,
+                "path_present": path.exists(),
+                "worktree_path": worktree_path,
+                "expected_commit": expected_commit,
+                "safe_basis": safe_basis,
+            }
         except TaskError as exc:
+            pending = self._queue_cleanup(
+                record,
+                deployment_id=deployment_id,
+                worktree_path=worktree_path,
+                expected_commit=expected_commit,
+                safe_basis=safe_basis,
+                error=exc,
+            )
             return {
                 "removed": False,
-                "path_present": Path(record.active_worktree_path).exists(),
+                "path_present": path.exists(),
+                "worktree_path": worktree_path,
+                "expected_commit": expected_commit,
+                "safe_basis": safe_basis,
+                "cleanup_pending": pending,
                 "error": {"code": exc.code, "message": exc.message},
             }
+
+    def _cleanup_checkout(
+        self,
+        record: DeploymentRecord,
+        *,
+        safe_basis: str,
+    ) -> dict[str, Any] | None:
+        if not record.active_worktree_path:
+            return None
+        return self._cleanup_path(
+            record,
+            deployment_id=record.active_deployment_id,
+            worktree_path=record.active_worktree_path,
+            expected_commit=record.active_commit,
+            safe_basis=safe_basis,
+        )
 
     def _materialize(
         self,
