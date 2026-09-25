@@ -260,3 +260,125 @@ def test_task_routes_fail_closed_when_not_configured(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_task_api_renews_extends_budget_and_refreshes_base(tmp_path: Path) -> None:
+    server, thread, receipt_file = _server(tmp_path)
+    port = server.server_address[1]
+    repo = tmp_path / "repo"
+    try:
+        status, acquired = _request(
+            port,
+            "POST",
+            "/v1/task-acquire",
+            {
+                "repository_id": "fixture",
+                "holder_id": "liora",
+                "purpose": "refresh api",
+                "iteration_limit": 1,
+            },
+        )
+        assert status == 200
+        task = acquired["task"]
+        task_id = task["task_id"]
+        worktree = Path(task["worktree_path"])
+
+        status, renewed = _request(
+            port,
+            "POST",
+            "/v1/task-renew",
+            {
+                "task_id": task_id,
+                "holder_id": "liora",
+                "authority_generation": 1,
+                "lease_seconds": 7200,
+            },
+        )
+        assert status == 200
+        assert renewed["receipt_persisted"] is True
+        assert renewed["task"]["authority_generation"] == 1
+
+        status, begun = _request(
+            port,
+            "POST",
+            "/v1/iteration-begin",
+            {
+                "task_id": task_id,
+                "holder_id": "liora",
+                "authority_generation": 1,
+            },
+        )
+        assert status == 200
+        status, checkpoint = _request(
+            port,
+            "POST",
+            "/v1/iteration-checkpoint",
+            {
+                "task_id": task_id,
+                "holder_id": "liora",
+                "authority_generation": 1,
+                "iteration_id": begun["task"]["current_iteration_id"],
+                "outcome": "not_run",
+            },
+        )
+        assert status == 200
+        assert checkpoint["task"]["state"] == "paused_budget_exhausted"
+
+        status, extended = _request(
+            port,
+            "POST",
+            "/v1/task-extend-budget",
+            {
+                "task_id": task_id,
+                "holder_id": "liora",
+                "authority_generation": 1,
+                "additional_iterations": 2,
+            },
+        )
+        assert status == 200
+        assert extended["task"]["state"] == "active"
+        assert extended["task"]["iteration_limit"] == 3
+
+        (worktree / "task.txt").write_text("task\n", encoding="utf-8")
+        _git(worktree, "add", "task.txt")
+        _git(worktree, "commit", "-m", "task change")
+        (repo / "upstream.txt").write_text("upstream\n", encoding="utf-8")
+        _git(repo, "add", "upstream.txt")
+        _git(repo, "commit", "-m", "upstream change")
+        new_base = _git(repo, "rev-parse", "HEAD")
+
+        status, refreshed = _request(
+            port,
+            "POST",
+            "/v1/task-refresh-base",
+            {
+                "task_id": task_id,
+                "holder_id": "liora",
+                "authority_generation": 1,
+                "base_ref": "main",
+            },
+        )
+        assert status == 200
+        assert refreshed["refresh_succeeded"] is True
+        assert refreshed["candidate_base_commit"] == new_base
+        assert refreshed["task"]["current_base_commit"] == new_base
+        assert refreshed["task"]["authority_generation"] == 2
+        assert refreshed["git"]["dirty"] is False
+
+        rows = [
+            json.loads(line)
+            for line in receipt_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        operations = [
+            row["evidence"].get("operation")
+            for row in rows
+            if row["kind"] == "dev_task_transition"
+        ]
+        assert "renew" in operations
+        assert "extend_budget" in operations
+        assert "refresh_base" in operations
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
