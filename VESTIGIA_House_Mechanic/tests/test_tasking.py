@@ -293,3 +293,165 @@ def test_cleanup_requires_terminal_state_and_preserves_branch(tmp_path: Path) ->
     assert released.state == "released"
     assert not Path(finished.worktree_path).exists()
     assert task.branch_name in _git(repo, "branch", "--list", task.branch_name)
+
+
+def test_renew_extends_lease_without_rotating_generation(tmp_path: Path) -> None:
+    clock = [datetime(2026, 9, 25, tzinfo=UTC)]
+
+    def now() -> datetime:
+        return clock[0]
+
+    _, _, _, supervisor = _setup(tmp_path, now=now)
+    task = supervisor.acquire(
+        repository_id="fixture",
+        holder_id="liora",
+        purpose="renew",
+        lease_seconds=60,
+    )
+    original_expiry = datetime.fromisoformat(task.lease_expires_at)
+    clock[0] += timedelta(seconds=30)
+    renewed = supervisor.renew(
+        task_id=task.task_id,
+        holder_id="liora",
+        authority_generation=1,
+        lease_seconds=120,
+    )
+    assert datetime.fromisoformat(renewed.lease_expires_at) > original_expiry
+    assert renewed.authority_generation == 1
+
+
+def test_budget_extension_reactivates_paused_task(tmp_path: Path) -> None:
+    _, _, _, supervisor = _setup(tmp_path)
+    task = supervisor.acquire(
+        repository_id="fixture",
+        holder_id="liora",
+        purpose="budget",
+        iteration_limit=1,
+    )
+    opened, _ = supervisor.begin_iteration(
+        task_id=task.task_id,
+        holder_id="liora",
+        authority_generation=1,
+    )
+    closed, _, _ = supervisor.checkpoint_iteration(
+        task_id=task.task_id,
+        holder_id="liora",
+        authority_generation=1,
+        iteration_id=opened.current_iteration_id or "",
+        outcome="not_run",
+    )
+    assert closed.state == "paused_budget_exhausted"
+
+    extended = supervisor.extend_budget(
+        task_id=task.task_id,
+        holder_id="liora",
+        authority_generation=1,
+        additional_iterations=2,
+    )
+    assert extended.iteration_limit == 3
+    assert extended.state == "active"
+
+
+def test_clean_base_refresh_preserves_original_base_and_rotates_generation(tmp_path: Path) -> None:
+    repo, _, _, supervisor = _setup(tmp_path)
+    task = supervisor.acquire(
+        repository_id="fixture",
+        holder_id="liora",
+        purpose="refresh-clean",
+    )
+    original_base = task.base_commit
+    worktree = Path(task.worktree_path)
+    (worktree / "task.txt").write_text("task\n", encoding="utf-8")
+    _git(worktree, "add", "task.txt")
+    _git(worktree, "commit", "-m", "task change")
+
+    (repo / "upstream.txt").write_text("upstream\n", encoding="utf-8")
+    _git(repo, "add", "upstream.txt")
+    _git(repo, "commit", "-m", "upstream change")
+    new_base = _git(repo, "rev-parse", "HEAD")
+
+    refreshed, candidate, success, snapshot, detail = supervisor.refresh_base(
+        task_id=task.task_id,
+        holder_id="liora",
+        authority_generation=1,
+        base_ref="main",
+    )
+
+    assert success is True
+    assert detail is None
+    assert candidate == new_base
+    assert refreshed.base_commit == original_base
+    assert refreshed.current_base_commit == new_base
+    assert refreshed.pending_base_commit is None
+    assert refreshed.authority_generation == 2
+    assert snapshot.branch == task.branch_name
+    assert snapshot.dirty is False
+    assert (worktree / "task.txt").read_text(encoding="utf-8") == "task\n"
+    assert (worktree / "upstream.txt").read_text(encoding="utf-8") == "upstream\n"
+
+
+def test_conflicted_refresh_is_preserved_until_explicit_abort(tmp_path: Path) -> None:
+    repo, ledger, worktrees, supervisor = _setup(tmp_path)
+    task = supervisor.acquire(
+        repository_id="fixture",
+        holder_id="liora",
+        purpose="refresh-conflict",
+    )
+    worktree = Path(task.worktree_path)
+
+    (worktree / "hello.txt").write_text("task version\n", encoding="utf-8")
+    _git(worktree, "add", "hello.txt")
+    _git(worktree, "commit", "-m", "task edits hello")
+
+    (repo / "hello.txt").write_text("upstream version\n", encoding="utf-8")
+    _git(repo, "add", "hello.txt")
+    _git(repo, "commit", "-m", "upstream edits hello")
+    candidate = _git(repo, "rev-parse", "HEAD")
+
+    blocked, resolved, success, _, detail = supervisor.refresh_base(
+        task_id=task.task_id,
+        holder_id="liora",
+        authority_generation=1,
+        base_ref="main",
+    )
+    assert success is False
+    assert resolved == candidate
+    assert blocked.state == "blocked_rebase_conflict"
+    assert blocked.pending_base_commit == candidate
+    assert detail
+
+    restarted_ledger = TaskLedger(ledger.directory)
+    restarted = TaskSupervisor(ledger=restarted_ledger, worktrees=worktrees)
+    after_restart = restarted_ledger.get(task.task_id)
+    assert after_restart.state == "blocked_rebase_conflict"
+    assert after_restart.authority_generation == 2
+
+    aborted, snapshot = restarted.abort_refresh(
+        task_id=task.task_id,
+        holder_id="liora",
+        authority_generation=2,
+    )
+    assert aborted.state == "active"
+    assert aborted.pending_base_commit is None
+    assert aborted.authority_generation == 3
+    assert snapshot.branch == task.branch_name
+    assert snapshot.dirty is False
+    assert (worktree / "hello.txt").read_text(encoding="utf-8") == "task version\n"
+
+
+def test_legacy_task_record_loads_current_base_from_original_base(tmp_path: Path) -> None:
+    _, ledger, _, supervisor = _setup(tmp_path)
+    task = supervisor.acquire(
+        repository_id="fixture",
+        holder_id="liora",
+        purpose="legacy",
+    )
+    path = ledger.directory / f"{task.task_id}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.pop("current_base_commit", None)
+    data.pop("pending_base_commit", None)
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = ledger.get(task.task_id)
+    assert loaded.current_base_commit == loaded.base_commit
+    assert loaded.pending_base_commit is None
