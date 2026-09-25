@@ -1,6 +1,6 @@
 # VESTIGIA House Mechanic
 
-Status: v0.8 renewable task budget and explicit base-refresh boundary.
+Status: v0.9 candidate deployment, last-known-good promotion, and verified rollback boundary.
 
 House Mechanic is the small host-side execution plane for VESTIGIA development work. It remains deliberately separate from the MCP Server and Runtime Workshop.
 
@@ -10,7 +10,25 @@ The governing rule is:
 
 House Mechanic exposes named, operator-authored recipes and typed service lifecycle actions. It still does not expose arbitrary command text, caller-supplied argv/cwd/environment, credentials, or a caller-selectable bind address.
 
-## Current v0.8 slice
+## Current v0.9 slice
+
+v0.9 begins Phase 4B by connecting clean task commits to designated mechanic-owned development services without exposing arbitrary deployment paths or commands:
+
+- service schema v0.3 adds an operator-owned deployment binding to one configured repository;
+- candidate source admission requires the current task holder/generation, a live lease, no open iteration, the matching repository, and a clean checkpointed worktree;
+- candidate execution is materialized into a detached disposable deployment worktree at the exact task commit, so the running service is not coupled to a mutable task checkout;
+- a running service must be stopped by exact owned generation before replacement;
+- candidate start still requires health transition verification;
+- a verified candidate can be explicitly promoted to last-known-good only while the exact generation is still running and healthy;
+- unhealthy candidates are stopped and, when a last-known-good commit exists, House Mechanic automatically attempts a verified rollback;
+- explicit rollback can also relaunch the exact last-known-good commit;
+- deployment state is durable, but process authority is not reconstructed after supervisor restart; active deployment records become `suspended_unverified` and require operator reconciliation;
+- deployment actions append durable `dev_deployment` receipts;
+- authenticated deployment status/candidate/promote/rollback routes are exposed through the fixed loopback API.
+
+Candidate deployment does not push, merge, publish, modify the supervisor, or auto-resolve Git conflicts.
+
+## Prior v0.8 coordination slice
 
 v0.8 closes the remaining Phase 4A coordination seams before deployment work:
 
@@ -269,7 +287,7 @@ Both are bounded at startup.
 
 ## Still out of scope
 
-v0.8 still does not add:
+v0.9 still does not add:
 
 - automatic rollback;
 - durable process reattachment;
@@ -283,11 +301,11 @@ v0.8 still does not add:
 
 ## Next bounded slice
 
-After the v0.8 coordination surface is green:
+After the v0.9 Phase 4B deployment surface is green:
 
-1. bind Phase 4B candidate deployment and last-known-good references;
-2. add explicit verified promotion/rollback semantics;
-3. expose a small stable MCP dev surface;
-4. close the inspect -> patch -> test -> deploy -> verify -> rollback/promote loop without requiring Jeff to carry commands between systems.
+1. harden deployment reconciliation/cleanup evidence around supervisor restarts and disposable checkout leaks;
+2. expose the small stable MCP dev surface;
+3. project task + deployment operations behind that stable descriptor set;
+4. exercise the complete inspect -> patch -> test -> deploy -> verify -> rollback/promote loop end-to-end without requiring Jeff to carry commands between systems.
 
 🏮🔧
