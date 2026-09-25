@@ -1,6 +1,6 @@
 # VESTIGIA House Mechanic
 
-Status: v0.5 bounded lifecycle development boundary.
+Status: v0.6 task-lease/worktree development boundary.
 
 House Mechanic is the small host-side execution plane for VESTIGIA development work. It remains deliberately separate from the MCP Server and Runtime Workshop.
 
@@ -10,7 +10,29 @@ The governing rule is:
 
 House Mechanic exposes named, operator-authored recipes and typed service lifecycle actions. It still does not expose arbitrary command text, caller-supplied argv/cwd/environment, credentials, or a caller-selectable bind address.
 
-## Current v0.5 slice
+## Current v0.6 slice
+
+v0.6 begins Phase 4A by adding durable development-task coordination without adding deployment authority:
+
+- operator-configured repository manifests;
+- exact base-commit pinning at task acquisition;
+- one disposable Git worktree and feature branch per task;
+- durable task records with restart suspension;
+- holder + authority-generation mutation checks;
+- lease expiry as an admission boundary, not a kill switch;
+- explicit patch/verification iterations;
+- local checkpoint commits even when verification fails;
+- no pointless commit for no-change diagnostic iterations;
+- consensual handoff with generation rotation;
+- explicit interrupted-iteration recovery after supervisor restart;
+- terminal task states separate from cleanup;
+- cleanup that preserves the task branch and refuses dirty worktrees.
+
+The holder/generation tuple protects against stale mutation authority. It is not claimed as cryptographic multi-principal authentication.
+
+This slice keeps task coordination internal; authenticated HTTP task projection and durable task/iteration receipts remain the next bounded step.
+
+## Prior v0.5 lifecycle slice
 
 v0.5 adds the first bounded service-control surface on top of the v0.4 ownership model:
 
@@ -211,7 +233,7 @@ Both are bounded at startup.
 
 ## Still out of scope
 
-v0.5 does not add:
+v0.6 still does not add:
 
 - automatic rollback;
 - durable process reattachment;
@@ -220,18 +242,18 @@ v0.5 does not add:
 - credential creation/rotation;
 - non-loopback listeners;
 - public deployment;
-- worktree leasing;
 - MCP dev projection;
 - supervisor self-update.
 
 ## Next bounded slice
 
-After v0.5 is reviewed and green:
+After the v0.6 task/worktree foundation is green:
 
-1. add disposable worktree/task leases;
-2. bind dev tasks to branches/worktrees and iteration budgets;
-3. add last-known-good deployment references and explicit rollback semantics;
-4. expose a small stable MCP dev surface;
-5. close the inspect -> patch -> test -> deploy -> verify loop without requiring Jeff to carry commands between systems.
+1. project task operations through the authenticated fixed-loopback API;
+2. add durable task-transition and iteration-checkpoint receipts;
+3. finish explicit renewal/budget-extension/base-refresh semantics;
+4. add last-known-good deployment references and explicit rollback semantics;
+5. expose a small stable MCP dev surface;
+6. close the inspect -> patch -> test -> deploy -> verify loop without requiring Jeff to carry commands between systems.
 
 🏮🔧
