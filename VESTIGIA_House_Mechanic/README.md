@@ -1,6 +1,6 @@
 # VESTIGIA House Mechanic
 
-Status: v0.7 authenticated task API and durable dev-evidence boundary.
+Status: v0.8 renewable task budget and explicit base-refresh boundary.
 
 House Mechanic is the small host-side execution plane for VESTIGIA development work. It remains deliberately separate from the MCP Server and Runtime Workshop.
 
@@ -10,7 +10,26 @@ The governing rule is:
 
 House Mechanic exposes named, operator-authored recipes and typed service lifecycle actions. It still does not expose arbitrary command text, caller-supplied argv/cwd/environment, credentials, or a caller-selectable bind address.
 
-## Current v0.7 slice
+## Current v0.8 slice
+
+v0.8 closes the remaining Phase 4A coordination seams before deployment work:
+
+- explicit lease renewal that must move expiry forward;
+- explicit iteration-budget extension within the configured ceiling;
+- paused-budget tasks reactivate only after an admitted extension;
+- exact original acquisition base is preserved as historical provenance;
+- `current_base_commit` tracks the presently integrated base separately;
+- explicit base refresh resolves only operator-allowed refs;
+- refresh refuses dirty or open-iteration worktrees;
+- clean refresh uses a bounded Git rebase and rotates authority generation;
+- conflicts are preserved as `blocked_rebase_conflict`; House Mechanic never auto-resolves them;
+- explicit refresh abort restores the prior task branch and rotates authority generation;
+- paused-budget and blocked-refresh authority generations are invalidated across supervisor restart;
+- renewal, budget changes, refresh, and abort are projected through the authenticated API and durable task-transition receipts.
+
+No automatic upstream following is added: base movement remains an explicit task operation.
+
+## Prior v0.7 task API/evidence slice
 
 v0.7 projects the Phase 4A task foundation through the authenticated fixed-loopback API and adds durable task evidence:
 
@@ -250,7 +269,7 @@ Both are bounded at startup.
 
 ## Still out of scope
 
-v0.7 still does not add:
+v0.8 still does not add:
 
 - automatic rollback;
 - durable process reattachment;
@@ -264,12 +283,11 @@ v0.7 still does not add:
 
 ## Next bounded slice
 
-After the v0.7 task API/evidence surface is green:
+After the v0.8 coordination surface is green:
 
-1. finish explicit lease renewal and budget-extension semantics;
-2. add explicit base-refresh/rebase with conflict preservation;
-3. add Phase 4B last-known-good deployment references and rollback semantics;
-4. expose a small stable MCP dev surface;
-5. close the inspect -> patch -> test -> deploy -> verify loop without requiring Jeff to carry commands between systems.
+1. bind Phase 4B candidate deployment and last-known-good references;
+2. add explicit verified promotion/rollback semantics;
+3. expose a small stable MCP dev surface;
+4. close the inspect -> patch -> test -> deploy -> verify -> rollback/promote loop without requiring Jeff to carry commands between systems.
 
 🏮🔧
