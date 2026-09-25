@@ -10,7 +10,8 @@ from typing import Any
 from .model import Manifest
 
 
-SERVICE_SCHEMA_VERSION = "vestigia.house-mechanic-services.v0.2"
+SERVICE_SCHEMA_VERSION = "vestigia.house-mechanic-services.v0.3"
+PREVIOUS_SERVICE_SCHEMA_VERSION = "vestigia.house-mechanic-services.v0.2"
 LEGACY_SERVICE_SCHEMA_VERSION = "vestigia.house-mechanic-services.v0.1"
 _ALLOWED_TOP = {"schema_version", "services"}
 _ALLOWED_SERVICE = {
@@ -20,9 +21,12 @@ _ALLOWED_SERVICE = {
     "start_recipe",
     "stop_recipe",
     "health",
+    "deployment",
 }
 _ALLOWED_OWNERSHIP = {"external", "mechanic_child"}
 _SERVICE_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_ALLOWED_DEPLOYMENT = {"repository_id"}
+_DEPLOYMENT_REPOSITORY_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _ALLOWED_HEALTH = {
     "kind",
     "host",
@@ -58,6 +62,14 @@ class HealthProbe:
 
 
 @dataclass(frozen=True)
+class DeploymentSpec:
+    repository_id: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"repository_id": self.repository_id}
+
+
+@dataclass(frozen=True)
 class Service:
     id: str
     description: str
@@ -65,6 +77,7 @@ class Service:
     start_recipe: str | None
     stop_recipe: str | None
     health: HealthProbe | None
+    deployment: DeploymentSpec | None
 
     @property
     def mechanic_owned(self) -> bool:
@@ -78,6 +91,7 @@ class Service:
             "start_recipe": self.start_recipe,
             "stop_recipe": self.stop_recipe,
             "health": self.health.to_dict() if self.health else None,
+            "deployment": self.deployment.to_dict() if self.deployment else None,
         }
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(raw).hexdigest()
@@ -90,6 +104,7 @@ class Service:
             "start_recipe": self.start_recipe,
             "stop_recipe": self.stop_recipe,
             "health": self.health.to_dict() if self.health else None,
+            "deployment": self.deployment.to_dict() if self.deployment else None,
             "sha256": self.digest(),
             "process_authority": self.mechanic_owned,
             "lifecycle_authority_exposed": self.mechanic_owned,
@@ -117,6 +132,29 @@ def _optional_recipe(
             f"{service_id}: {field} references unknown recipe: {normalized}"
         )
     return normalized
+
+
+def _deployment(service_id: str, value: object) -> DeploymentSpec | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ServiceManifestError(f"{service_id}: deployment must be an object")
+    unknown = set(value) - _ALLOWED_DEPLOYMENT
+    if unknown:
+        raise ServiceManifestError(
+            f"{service_id}: unknown deployment fields: {sorted(unknown)}"
+        )
+    repository_id = value.get("repository_id")
+    if not isinstance(repository_id, str):
+        raise ServiceManifestError(
+            f"{service_id}: deployment.repository_id must be a string"
+        )
+    repository_id = repository_id.strip()
+    if not _DEPLOYMENT_REPOSITORY_ID.fullmatch(repository_id):
+        raise ServiceManifestError(
+            f"{service_id}: deployment.repository_id must be path-safe"
+        )
+    return DeploymentSpec(repository_id=repository_id)
 
 
 def _health(service_id: str, value: object) -> HealthProbe | None:
@@ -187,6 +225,7 @@ def load_service_manifest(path: Path, recipes: Manifest) -> ServiceManifest:
     schema_version = data.get("schema_version")
     if schema_version not in {
         LEGACY_SERVICE_SCHEMA_VERSION,
+        PREVIOUS_SERVICE_SCHEMA_VERSION,
         SERVICE_SCHEMA_VERSION,
     }:
         raise ServiceManifestError("unsupported service manifest schema_version")
@@ -220,6 +259,10 @@ def load_service_manifest(path: Path, recipes: Manifest) -> ServiceManifest:
                 raise ServiceManifestError(
                     f"{service_id}: ownership requires service schema v0.2"
                 )
+            if "deployment" in row:
+                raise ServiceManifestError(
+                    f"{service_id}: deployment requires service schema v0.3"
+                )
             ownership = "external"
         else:
             ownership = str(row.get("ownership", "external")).strip()
@@ -241,13 +284,28 @@ def load_service_manifest(path: Path, recipes: Manifest) -> ServiceManifest:
             recipes,
         )
 
+        deployment = _deployment(service_id, row.get("deployment"))
+        if schema_version != SERVICE_SCHEMA_VERSION and deployment is not None:
+            raise ServiceManifestError(
+                f"{service_id}: deployment requires service schema v0.3"
+            )
+
         if (
-            schema_version == SERVICE_SCHEMA_VERSION
+            schema_version in {PREVIOUS_SERVICE_SCHEMA_VERSION, SERVICE_SCHEMA_VERSION}
             and ownership == "external"
             and (start_recipe is not None or stop_recipe is not None)
         ):
             raise ServiceManifestError(
                 f"{service_id}: external services cannot declare lifecycle recipes"
+            )
+
+        if ownership == "external" and deployment is not None:
+            raise ServiceManifestError(
+                f"{service_id}: external services cannot declare deployment authority"
+            )
+        if deployment is not None and (start_recipe is None or row.get("health") is None):
+            raise ServiceManifestError(
+                f"{service_id}: deployable services require start_recipe and health"
             )
 
         out[service_id] = Service(
@@ -257,5 +315,6 @@ def load_service_manifest(path: Path, recipes: Manifest) -> ServiceManifest:
             start_recipe=start_recipe,
             stop_recipe=stop_recipe,
             health=_health(service_id, row.get("health")),
+            deployment=deployment,
         )
     return ServiceManifest(out)
