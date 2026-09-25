@@ -85,7 +85,13 @@ class LifecycleController:
             last = self._probe(service, request_id)
         return last
 
-    def start(self, service: Service, *, request_id: str) -> dict[str, Any]:
+    def start(
+        self,
+        service: Service,
+        *,
+        request_id: str,
+        source_root: Path | None = None,
+    ) -> dict[str, Any]:
         self._require_owned(service)
         if service.start_recipe is None:
             raise LifecycleError(
@@ -122,10 +128,11 @@ class LifecycleController:
                 "declared start recipe is not present in the loaded recipe manifest",
             )
 
+        launch_root = self.repo_root if source_root is None else source_root.resolve()
         launched = self.processes.launch_owned(
             service,
             recipe,
-            self.repo_root,
+            launch_root,
         )
         final_health, after = self._wait_healthy(service, request_id)
         verified = bool(
@@ -150,6 +157,42 @@ class LifecycleController:
             "health_transition_required": True,
             "health_generation_bound": False,
             "health_attribution": "temporal_after_owned_launch",
+            "source_root_mode": "supervisor_repo" if source_root is None else "deployment_checkout",
+        }
+
+    def verify_running(
+        self,
+        service: Service,
+        *,
+        request_id: str,
+        generation_id: str,
+    ) -> dict[str, Any]:
+        self._require_owned(service)
+        status = self.processes.status(service)
+        if status.state != "running":
+            return {
+                "verified": False,
+                "outcome": "process_not_running",
+                "generation_id": generation_id,
+                "process": status.to_dict(),
+                "health": None,
+            }
+        if status.generation_id != generation_id:
+            return {
+                "verified": False,
+                "outcome": "generation_mismatch",
+                "generation_id": generation_id,
+                "process": status.to_dict(),
+                "health": None,
+            }
+        health = self._probe(service, request_id) if service.health is not None else None
+        verified = bool(health is None or health.healthy)
+        return {
+            "verified": verified,
+            "outcome": "running_healthy" if verified else "running_unhealthy",
+            "generation_id": generation_id,
+            "process": status.to_dict(),
+            "health": health.to_dict() if health else None,
         }
 
     def stop(
