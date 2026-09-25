@@ -326,9 +326,33 @@ class WorktreeManager:
             )
         return worktree
 
-    def remove_detached(self, repository_id: str, worktree: Path) -> None:
+    def remove_detached(
+        self,
+        repository_id: str,
+        worktree: Path,
+        *,
+        expected_commit: str | None = None,
+    ) -> None:
         _, repo = self._repository(repository_id)
-        if self.snapshot(worktree).dirty:
+        worktree = worktree.resolve()
+        deployment_root = (self.worktree_root / "_deployments").resolve()
+        try:
+            worktree.relative_to(deployment_root)
+        except ValueError as exc:
+            raise TaskError(
+                "deployment_path_invalid",
+                "deployment cleanup path is outside the deployment root",
+            ) from exc
+        if not worktree.exists():
+            self._run(repo, "worktree", "prune")
+            return
+        snapshot = self.snapshot(worktree)
+        if expected_commit is not None and snapshot.head != expected_commit.lower():
+            raise TaskError(
+                "deployment_commit_mismatch",
+                "deployment cleanup commit does not match recorded provenance",
+            )
+        if snapshot.dirty:
             raise TaskError(
                 "deployment_worktree_dirty",
                 "deployment cleanup refuses a dirty checkout",
