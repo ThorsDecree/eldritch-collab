@@ -511,14 +511,13 @@ class DeploymentController:
                     source_root=worktree,
                 )
             except LifecycleError as exc:
-                try:
-                    self.tasks.worktrees.remove_detached(record.repository_id, worktree)
-                    candidate_cleanup = {"removed": True}
-                except TaskError as cleanup_exc:
-                    candidate_cleanup = {
-                        "removed": False,
-                        "error": {"code": cleanup_exc.code, "message": cleanup_exc.message},
-                    }
+                candidate_cleanup = self._cleanup_path(
+                    record,
+                    deployment_id=deployment_id,
+                    worktree_path=str(worktree),
+                    expected_commit=snapshot.head,
+                    safe_basis="launch_failed_before_verified_service",
+                )
                 rollback = self._start_last_known_good(
                     service=service,
                     record=record,
