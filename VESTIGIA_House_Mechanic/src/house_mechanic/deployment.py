@@ -360,7 +360,15 @@ class DeploymentController:
         request_id: str,
     ) -> dict[str, Any]:
         self._require_deployable(service)
-        record = self.ledger.get_or_create(service)
+        assert service.deployment is not None
+        record = self.ledger.get(service.id)
+        if record is None:
+            record = DeploymentRecord(
+                service_id=service.id,
+                repository_id=service.deployment.repository_id,
+                state="idle",
+                updated_at="",
+            )
         process = self.lifecycle.processes.status(service)
         health = self.lifecycle.observe_health(service, request_id=request_id)
 
