@@ -133,6 +133,31 @@ class ReceiptStore:
             },
         )
 
+    def append_task_transition(
+        self,
+        *,
+        request_id: str,
+        operation: str,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._append(
+            kind="dev_task_transition",
+            request_id=request_id,
+            evidence={"operation": operation, **evidence},
+        )
+
+    def append_iteration_checkpoint(
+        self,
+        *,
+        request_id: str,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._append(
+            kind="dev_iteration_checkpoint",
+            request_id=request_id,
+            evidence=evidence,
+        )
+
     def recent(
         self,
         *,
