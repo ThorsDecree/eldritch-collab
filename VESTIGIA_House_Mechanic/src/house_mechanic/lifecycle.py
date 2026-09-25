@@ -55,6 +55,9 @@ class LifecycleController:
             max_response_bytes=self.health_max_response_bytes,
         )
 
+    def observe_health(self, service: Service, *, request_id: str) -> HealthResult:
+        return self._probe(service, request_id)
+
     def _wait_healthy(
         self,
         service: Service,
