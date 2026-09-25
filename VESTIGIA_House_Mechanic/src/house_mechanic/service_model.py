@@ -77,7 +77,7 @@ class Service:
     start_recipe: str | None
     stop_recipe: str | None
     health: HealthProbe | None
-    deployment: DeploymentSpec | None
+    deployment: DeploymentSpec | None = None
 
     @property
     def mechanic_owned(self) -> bool:
