@@ -451,9 +451,21 @@ class DeploymentController:
         with self._lock:
             record = self.ledger.get_or_create(service)
             before = record.to_dict()
+            if not record.cleanup_pending:
+                return {
+                    "operation": "cleanup_retry",
+                    "action_occurred": False,
+                    "verified": True,
+                    "outcome": "cleanup_complete",
+                    "removed_count": 0,
+                    "results": [],
+                    "before": before,
+                    "after": record.to_dict(),
+                }
             results: list[dict[str, Any]] = []
             retained: list[dict[str, Any]] = []
             removed_count = 0
+            state_changed = False
             for pending in list(record.cleanup_pending):
                 path_text = str(pending.get("worktree_path") or "")
                 if not path_text:
@@ -498,6 +510,7 @@ class DeploymentController:
                         expected_commit=pending.get("expected_commit"),
                     )
                     removed_count += 1
+                    state_changed = True
                     results.append(
                         {
                             "cleanup_id": pending.get("cleanup_id"),
@@ -510,6 +523,7 @@ class DeploymentController:
                 except TaskError as exc:
                     pending["attempts"] = int(pending.get("attempts", 0)) + 1
                     pending["last_attempt_at"] = datetime.now(UTC).isoformat()
+                    state_changed = True
                     pending["last_error"] = {
                         "code": exc.code,
                         "message": exc.message,
@@ -529,12 +543,13 @@ class DeploymentController:
                         }
                     )
 
-            record.cleanup_pending = retained
-            record.updated_at = datetime.now(UTC).isoformat()
-            self.ledger.save(record)
+            if state_changed:
+                record.cleanup_pending = retained
+                record.updated_at = datetime.now(UTC).isoformat()
+                self.ledger.save(record)
             return {
                 "operation": "cleanup_retry",
-                "action_occurred": removed_count > 0,
+                "action_occurred": state_changed,
                 "verified": len(retained) == 0,
                 "outcome": (
                     "cleanup_complete"
