@@ -593,14 +593,13 @@ class DeploymentController:
                     }
             candidate_cleanup = None
             if candidate_stop is not None and candidate_stop.get("verified"):
-                try:
-                    self.tasks.worktrees.remove_detached(record.repository_id, worktree)
-                    candidate_cleanup = {"removed": True}
-                except TaskError as exc:
-                    candidate_cleanup = {
-                        "removed": False,
-                        "error": {"code": exc.code, "message": exc.message},
-                    }
+                candidate_cleanup = self._cleanup_path(
+                    record,
+                    deployment_id=deployment_id,
+                    worktree_path=str(worktree),
+                    expected_commit=snapshot.head,
+                    safe_basis="verified_stop",
+                )
                 self._clear_active(record, state="idle", outcome="candidate_unhealthy_stopped")
             else:
                 self._save_active(
