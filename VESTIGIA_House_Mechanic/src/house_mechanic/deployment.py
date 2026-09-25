@@ -693,7 +693,10 @@ class DeploymentController:
                     cleanup_previous = self._cleanup_checkout(record, safe_basis="verified_stop")
                     self._clear_active(record, state="idle", outcome="previous_generation_stopped")
             elif before_process.state == "exited" and record.active_worktree_path:
-                cleanup_previous = self._cleanup_checkout(record)
+                cleanup_previous = self._cleanup_checkout(
+                    record,
+                    safe_basis="owned_process_exited",
+                )
                 self._clear_active(record, state="idle", outcome="previous_generation_already_exited")
 
             deployment_id, worktree = self._materialize(
