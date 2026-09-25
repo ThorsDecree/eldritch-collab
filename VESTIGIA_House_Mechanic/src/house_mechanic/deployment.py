@@ -353,6 +353,192 @@ class DeploymentController:
             "process": self.lifecycle.processes.status(service).to_dict(),
         }
 
+    def reconciliation(
+        self,
+        service: Service,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        self._require_deployable(service)
+        record = self.ledger.get_or_create(service)
+        process = self.lifecycle.processes.status(service)
+        health = self.lifecycle.observe_health(service, request_id=request_id)
+
+        checkout: dict[str, Any] | None = None
+        if record.active_worktree_path:
+            path = Path(record.active_worktree_path)
+            checkout = {
+                "worktree_path": record.active_worktree_path,
+                "path_present": path.exists(),
+                "expected_commit": record.active_commit,
+            }
+            if path.exists():
+                try:
+                    snapshot = self.tasks.worktrees.snapshot(path)
+                    checkout.update(
+                        {
+                            "observed_commit": snapshot.head,
+                            "commit_matches": (
+                                record.active_commit is not None
+                                and snapshot.head == record.active_commit
+                            ),
+                            "dirty": snapshot.dirty,
+                            "status_lines": list(snapshot.status_lines),
+                        }
+                    )
+                except TaskError as exc:
+                    checkout["inspection_error"] = {
+                        "code": exc.code,
+                        "message": exc.message,
+                    }
+
+        if record.state == "suspended_unverified":
+            if health.healthy:
+                interpretation = (
+                    "declared endpoint is healthy but no process is owned by this "
+                    "supervisor instance; pre-restart or external process may still be serving"
+                )
+            else:
+                interpretation = (
+                    "declared endpoint is not healthy, but process death and checkout "
+                    "release are not proven after supervisor restart"
+                )
+            operator_boundary_required = True
+        else:
+            interpretation = "no restart-suspension reconciliation boundary is active"
+            operator_boundary_required = False
+
+        return {
+            "operation": "reconcile",
+            "action_occurred": False,
+            "verified": record.state != "suspended_unverified",
+            "outcome": (
+                "operator_boundary_required"
+                if operator_boundary_required
+                else "reconciliation_not_required"
+            ),
+            "deployment": record.to_dict(),
+            "process": process.to_dict(),
+            "health": health.to_dict(),
+            "active_checkout": checkout,
+            "cleanup_pending_count": len(record.cleanup_pending),
+            "operator_boundary_required": operator_boundary_required,
+            "automatic_process_adoption": False,
+            "automatic_active_checkout_cleanup": False,
+            "interpretation": interpretation,
+        }
+
+    def retry_cleanup(
+        self,
+        service: Service,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        self._require_deployable(service)
+        allowed_basis = {
+            "verified_stop",
+            "owned_process_exited",
+            "launch_failed_before_verified_service",
+        }
+        with self._lock:
+            record = self.ledger.get_or_create(service)
+            before = record.to_dict()
+            results: list[dict[str, Any]] = []
+            retained: list[dict[str, Any]] = []
+            removed_count = 0
+            for pending in list(record.cleanup_pending):
+                path_text = str(pending.get("worktree_path") or "")
+                if not path_text:
+                    retained.append(pending)
+                    results.append(
+                        {
+                            "cleanup_id": pending.get("cleanup_id"),
+                            "removed": False,
+                            "outcome": "invalid_pending_record",
+                        }
+                    )
+                    continue
+                if (
+                    record.active_worktree_path is not None
+                    and path_text == record.active_worktree_path
+                ):
+                    retained.append(pending)
+                    results.append(
+                        {
+                            "cleanup_id": pending.get("cleanup_id"),
+                            "removed": False,
+                            "outcome": "active_checkout_preserved",
+                        }
+                    )
+                    continue
+                safe_basis = str(pending.get("safe_basis") or "")
+                if safe_basis not in allowed_basis:
+                    retained.append(pending)
+                    results.append(
+                        {
+                            "cleanup_id": pending.get("cleanup_id"),
+                            "removed": False,
+                            "outcome": "unrecognized_safe_basis",
+                        }
+                    )
+                    continue
+
+                try:
+                    self.tasks.worktrees.remove_detached(
+                        record.repository_id,
+                        Path(path_text),
+                        expected_commit=pending.get("expected_commit"),
+                    )
+                    removed_count += 1
+                    results.append(
+                        {
+                            "cleanup_id": pending.get("cleanup_id"),
+                            "removed": True,
+                            "outcome": "removed",
+                            "worktree_path": path_text,
+                            "safe_basis": safe_basis,
+                        }
+                    )
+                except TaskError as exc:
+                    pending["attempts"] = int(pending.get("attempts", 0)) + 1
+                    pending["last_attempt_at"] = datetime.now(UTC).isoformat()
+                    pending["last_error"] = {
+                        "code": exc.code,
+                        "message": exc.message,
+                    }
+                    retained.append(pending)
+                    results.append(
+                        {
+                            "cleanup_id": pending.get("cleanup_id"),
+                            "removed": False,
+                            "outcome": "retry_failed",
+                            "worktree_path": path_text,
+                            "safe_basis": safe_basis,
+                            "error": {
+                                "code": exc.code,
+                                "message": exc.message,
+                            },
+                        }
+                    )
+
+            record.cleanup_pending = retained
+            record.updated_at = datetime.now(UTC).isoformat()
+            self.ledger.save(record)
+            return {
+                "operation": "cleanup_retry",
+                "action_occurred": removed_count > 0,
+                "verified": len(retained) == 0,
+                "outcome": (
+                    "cleanup_complete"
+                    if not retained
+                    else "cleanup_pending_remains"
+                ),
+                "removed_count": removed_count,
+                "results": results,
+                "before": before,
+                "after": record.to_dict(),
+            }
+
     def _start_last_known_good(
         self,
         *,
