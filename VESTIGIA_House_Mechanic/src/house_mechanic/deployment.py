@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 import json
 import os
@@ -45,6 +45,9 @@ class DeploymentRecord:
     active_task_id: str | None = None
     active_generation_id: str | None = None
     active_worktree_path: str | None = None
+    suspended_from_state: str | None = None
+    suspended_at: str | None = None
+    cleanup_pending: list[dict[str, Any]] = field(default_factory=list)
     last_outcome: str | None = None
     updated_at: str = ""
 
@@ -56,7 +59,9 @@ class DeploymentRecord:
         if data.get("schema_version") != DEPLOYMENT_SCHEMA:
             raise ValueError("unsupported deployment schema")
         fields = cls.__dataclass_fields__  # type: ignore[attr-defined]
-        return cls(**{name: data[name] for name in fields})
+        payload = {name: data[name] for name in fields if name in data}
+        payload.setdefault("cleanup_pending", [])
+        return cls(**payload)
 
 
 class DeploymentLedger:
@@ -90,9 +95,12 @@ class DeploymentLedger:
             except Exception:
                 continue
             if record.state in _ACTIVE_STATES and record.active_generation_id is not None:
+                now = datetime.now(UTC).isoformat()
+                record.suspended_from_state = record.state
+                record.suspended_at = now
                 record.state = "suspended_unverified"
                 record.last_outcome = "supervisor_restart_lost_process_authority"
-                record.updated_at = datetime.now(UTC).isoformat()
+                record.updated_at = now
                 self._write(record)
 
     def get(self, service_id: str) -> DeploymentRecord | None:
