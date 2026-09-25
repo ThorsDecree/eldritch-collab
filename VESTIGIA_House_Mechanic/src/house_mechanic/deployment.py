@@ -495,7 +495,7 @@ class DeploymentController:
                         "after": record.to_dict(),
                     }
                 if record.active_generation_id == expected_generation_id:
-                    cleanup_previous = self._cleanup_checkout(record)
+                    cleanup_previous = self._cleanup_checkout(record, safe_basis="verified_stop")
                     self._clear_active(record, state="idle", outcome="previous_generation_stopped")
             elif before_process.state == "exited" and record.active_worktree_path:
                 cleanup_previous = self._cleanup_checkout(record)
@@ -750,7 +750,7 @@ class DeploymentController:
                         "after": record.to_dict(),
                     }
                 if record.active_generation_id == expected_generation_id:
-                    cleanup_current = self._cleanup_checkout(record)
+                    cleanup_current = self._cleanup_checkout(record, safe_basis="verified_stop")
                     self._clear_active(record, state="idle", outcome="rollback_current_stopped")
             elif process.state == "exited" and record.active_worktree_path:
                 cleanup_current = self._cleanup_checkout(record)
