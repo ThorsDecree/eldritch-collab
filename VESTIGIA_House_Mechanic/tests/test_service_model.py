@@ -177,3 +177,80 @@ def test_service_id_rejects_path_traversal(tmp_path: Path) -> None:
             ),
             _recipes(tmp_path),
         )
+
+
+def test_v03_manifest_binds_deployable_service_to_repository(tmp_path: Path) -> None:
+    manifest = load_service_manifest(
+        _write(
+            tmp_path,
+            {
+                "schema_version": "vestigia.house-mechanic-services.v0.3",
+                "services": [
+                    {
+                        "id": "runtime-dev",
+                        "ownership": "mechanic_child",
+                        "start_recipe": "bridge.start",
+                        "health": {
+                            "kind": "http",
+                            "host": "127.0.0.1",
+                            "port": 8766,
+                            "path": "/health",
+                            "expected_status": 200,
+                        },
+                        "deployment": {
+                            "repository_id": "eldritch-collab",
+                        },
+                    }
+                ],
+            },
+        ),
+        _recipes(tmp_path),
+    )
+    service = manifest.services["runtime-dev"]
+    assert service.deployment is not None
+    assert service.deployment.repository_id == "eldritch-collab"
+    assert service.public_dict()["deployment"] == {"repository_id": "eldritch-collab"}
+
+
+def test_v03_external_service_rejects_deployment_authority(tmp_path: Path) -> None:
+    with pytest.raises(ServiceManifestError, match="external services cannot declare deployment"):
+        load_service_manifest(
+            _write(
+                tmp_path,
+                {
+                    "schema_version": "vestigia.house-mechanic-services.v0.3",
+                    "services": [
+                        {
+                            "id": "runtime-dev",
+                            "ownership": "external",
+                            "deployment": {
+                                "repository_id": "eldritch-collab",
+                            },
+                        }
+                    ],
+                },
+            ),
+            _recipes(tmp_path),
+        )
+
+
+def test_v03_deployable_service_requires_start_and_health(tmp_path: Path) -> None:
+    with pytest.raises(ServiceManifestError, match="require start_recipe and health"):
+        load_service_manifest(
+            _write(
+                tmp_path,
+                {
+                    "schema_version": "vestigia.house-mechanic-services.v0.3",
+                    "services": [
+                        {
+                            "id": "runtime-dev",
+                            "ownership": "mechanic_child",
+                            "deployment": {
+                                "repository_id": "eldritch-collab",
+                            },
+                        }
+                    ],
+                },
+            ),
+            _recipes(tmp_path),
+        )
