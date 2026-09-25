@@ -229,6 +229,13 @@ class DeploymentController:
                 path,
                 expected_commit=expected_commit,
             )
+            record.cleanup_pending = [
+                row
+                for row in record.cleanup_pending
+                if row.get("worktree_path") != worktree_path
+            ]
+            record.updated_at = datetime.now(UTC).isoformat()
+            self.ledger.save(record)
             return {
                 "removed": True,
                 "path_present": path.exists(),
@@ -310,6 +317,8 @@ class DeploymentController:
         record.active_task_id = task_id
         record.active_generation_id = generation_id
         record.active_worktree_path = str(worktree)
+        record.suspended_from_state = None
+        record.suspended_at = None
         record.last_outcome = outcome
         record.updated_at = datetime.now(UTC).isoformat()
         return self.ledger.save(record)
@@ -322,6 +331,8 @@ class DeploymentController:
         record.active_task_id = None
         record.active_generation_id = None
         record.active_worktree_path = None
+        record.suspended_from_state = None
+        record.suspended_at = None
         record.last_outcome = outcome
         record.updated_at = datetime.now(UTC).isoformat()
         return self.ledger.save(record)
@@ -749,7 +760,10 @@ class DeploymentController:
                     cleanup_current = self._cleanup_checkout(record, safe_basis="verified_stop")
                     self._clear_active(record, state="idle", outcome="rollback_current_stopped")
             elif process.state == "exited" and record.active_worktree_path:
-                cleanup_current = self._cleanup_checkout(record)
+                cleanup_current = self._cleanup_checkout(
+                    record,
+                    safe_basis="owned_process_exited",
+                )
                 self._clear_active(record, state="idle", outcome="rollback_current_already_exited")
 
             rollback = self._start_last_known_good(
