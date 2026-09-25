@@ -129,11 +129,17 @@ class LifecycleController:
             )
 
         launch_root = self.repo_root if source_root is None else source_root.resolve()
-        launched = self.processes.launch_owned(
-            service,
-            recipe,
-            launch_root,
-        )
+        try:
+            launched = self.processes.launch_owned(
+                service,
+                recipe,
+                launch_root,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise LifecycleError(
+                "start_launch_failed",
+                f"owned service launch failed: {type(exc).__name__}",
+            ) from exc
         final_health, after = self._wait_healthy(service, request_id)
         verified = bool(
             final_health.healthy
