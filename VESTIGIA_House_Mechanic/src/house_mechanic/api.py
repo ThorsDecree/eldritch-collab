@@ -153,6 +153,32 @@ class _Handler(BaseHTTPRequestHandler):
                                 "authority_tuple": ["task_id", "holder_id", "authority_generation"],
                                 "durable_receipt": True,
                             },
+                            "task.renew": {
+                                "effect": "lease_mutation",
+                                "enabled": self.api.tasks is not None,
+                                "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+                                "durable_receipt": True,
+                            },
+                            "task.extend_budget": {
+                                "effect": "budget_mutation",
+                                "enabled": self.api.tasks is not None,
+                                "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+                                "durable_receipt": True,
+                            },
+                            "task.refresh_base": {
+                                "effect": "bounded_git_rebase",
+                                "enabled": self.api.tasks is not None,
+                                "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+                                "caller_supplies_git_argv": False,
+                                "conflicts_auto_resolved": False,
+                                "durable_receipt": True,
+                            },
+                            "task.abort_refresh": {
+                                "effect": "bounded_git_rebase_abort",
+                                "enabled": self.api.tasks is not None,
+                                "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+                                "durable_receipt": True,
+                            },
                         },
                     },
                 )
@@ -264,6 +290,10 @@ class _Handler(BaseHTTPRequestHandler):
                 "/v1/task-acquire": self._task_acquire,
                 "/v1/task-resume": self._task_resume,
                 "/v1/task-recover": self._task_recover,
+                "/v1/task-renew": self._task_renew,
+                "/v1/task-extend-budget": self._task_extend_budget,
+                "/v1/task-refresh-base": self._task_refresh_base,
+                "/v1/task-abort-refresh": self._task_abort_refresh,
                 "/v1/iteration-begin": self._iteration_begin,
                 "/v1/iteration-checkpoint": self._iteration_checkpoint,
                 "/v1/handoff-offer": self._handoff_offer,
@@ -770,6 +800,134 @@ class _Handler(BaseHTTPRequestHandler):
         except TaskError as exc:
             self._raise_task(exc)
         self._persist_task_transition(request_id=request_id, operation="recover_interrupted_iteration", before=before, after=record.to_dict())
+
+    def _task_renew(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(
+            payload,
+            {"task_id", "holder_id", "authority_generation", "lease_seconds"},
+        )
+        try:
+            before = tasks.ledger.get(str(payload.get("task_id") or "")).to_dict()
+            record = tasks.renew(
+                task_id=str(payload.get("task_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+                authority_generation=int(payload.get("authority_generation")),
+                lease_seconds=payload.get("lease_seconds"),
+            )
+        except (TaskError, TypeError, ValueError) as exc:
+            if isinstance(exc, TaskError):
+                self._raise_task(exc)
+            raise HouseMechanicAPIError(
+                400,
+                "invalid_request",
+                "authority_generation must be an integer",
+            )
+        self._persist_task_transition(
+            request_id=request_id,
+            operation="renew",
+            before=before,
+            after=record.to_dict(),
+        )
+
+    def _task_extend_budget(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(
+            payload,
+            {"task_id", "holder_id", "authority_generation", "additional_iterations"},
+        )
+        try:
+            before = tasks.ledger.get(str(payload.get("task_id") or "")).to_dict()
+            record = tasks.extend_budget(
+                task_id=str(payload.get("task_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+                authority_generation=int(payload.get("authority_generation")),
+                additional_iterations=int(payload.get("additional_iterations")),
+            )
+        except (TaskError, TypeError, ValueError) as exc:
+            if isinstance(exc, TaskError):
+                self._raise_task(exc)
+            raise HouseMechanicAPIError(
+                400,
+                "invalid_request",
+                "authority_generation and additional_iterations must be integers",
+            )
+        self._persist_task_transition(
+            request_id=request_id,
+            operation="extend_budget",
+            before=before,
+            after=record.to_dict(),
+        )
+
+    def _task_refresh_base(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(
+            payload,
+            {"task_id", "holder_id", "authority_generation", "base_ref"},
+        )
+        task_id = str(payload.get("task_id") or "")
+        try:
+            before = tasks.ledger.get(task_id).to_dict()
+            record, candidate, success, snapshot, detail = tasks.refresh_base(
+                task_id=task_id,
+                holder_id=str(payload.get("holder_id") or ""),
+                authority_generation=int(payload.get("authority_generation")),
+                base_ref=payload.get("base_ref"),
+            )
+        except (TaskError, TypeError, ValueError) as exc:
+            if isinstance(exc, TaskError):
+                self._raise_task(exc)
+            raise HouseMechanicAPIError(
+                400,
+                "invalid_request",
+                "authority_generation must be an integer",
+            )
+        self._persist_task_transition(
+            request_id=request_id,
+            operation="refresh_base",
+            before=before,
+            after=record.to_dict(),
+            extra={
+                "candidate_base_commit": candidate,
+                "refresh_succeeded": success,
+                "git": snapshot.to_dict(),
+                "git_detail": detail,
+            },
+        )
+
+    def _task_abort_refresh(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(
+            payload,
+            {"task_id", "holder_id", "authority_generation"},
+        )
+        task_id = str(payload.get("task_id") or "")
+        try:
+            before = tasks.ledger.get(task_id).to_dict()
+            record, snapshot = tasks.abort_refresh(
+                task_id=task_id,
+                holder_id=str(payload.get("holder_id") or ""),
+                authority_generation=int(payload.get("authority_generation")),
+            )
+        except (TaskError, TypeError, ValueError) as exc:
+            if isinstance(exc, TaskError):
+                self._raise_task(exc)
+            raise HouseMechanicAPIError(
+                400,
+                "invalid_request",
+                "authority_generation must be an integer",
+            )
+        self._persist_task_transition(
+            request_id=request_id,
+            operation="abort_refresh",
+            before=before,
+            after=record.to_dict(),
+            extra={"git": snapshot.to_dict()},
+        )
 
     def _iteration_begin(self, request_id: str) -> None:
         tasks = self._require_tasks()
