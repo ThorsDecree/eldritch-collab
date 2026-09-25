@@ -96,6 +96,8 @@ class TaskRecord:
     iteration_limit: int
     iterations_used: int
     state: str
+    current_base_commit: str | None = None
+    pending_base_commit: str | None = None
     current_iteration_id: str | None = None
     current_iteration_started_at: str | None = None
     pending_handoff_to: str | None = None
@@ -110,7 +112,10 @@ class TaskRecord:
         if data.get("schema_version") != TASK_SCHEMA:
             raise ValueError("unsupported task schema")
         fields = cls.__dataclass_fields__  # type: ignore[attr-defined]
-        return cls(**{name: data[name] for name in fields})
+        payload = {name: data[name] for name in fields if name in data}
+        if "current_base_commit" not in payload:
+            payload["current_base_commit"] = data.get("base_commit")
+        return cls(**payload)
 
 
 class TaskLedger:
@@ -267,6 +272,23 @@ class WorktreeManager:
         after = self.snapshot(worktree)
         return after.head, after
 
+    def rebase_onto(self, worktree: Path, target_commit: str) -> tuple[bool, GitSnapshot, str | None]:
+        before = self.snapshot(worktree)
+        if before.dirty:
+            raise TaskError("worktree_dirty", "base refresh refuses uncheckpointed changes")
+        result = self._run(worktree, "rebase", target_commit, check=False)
+        after = self.snapshot(worktree)
+        if result.returncode == 0:
+            return True, after, None
+        detail = (result.stderr.strip() or result.stdout.strip() or "git rebase failed")[-1000:]
+        return False, after, detail
+
+    def abort_rebase(self, worktree: Path) -> GitSnapshot:
+        result = self._run(worktree, "rebase", "--abort", check=False)
+        if result.returncode != 0:
+            raise TaskError("rebase_abort_failed", (result.stderr.strip() or "git rebase --abort failed")[-1000:])
+        return self.snapshot(worktree)
+
     def remove(self, repository_id: str, worktree: Path) -> None:
         _, repo = self._repository(repository_id)
         if self.snapshot(worktree).dirty:
@@ -348,6 +370,7 @@ class TaskSupervisor:
                 authority_generation=1, acquired_at=now.isoformat(),
                 lease_expires_at=(now + timedelta(seconds=self._lease(lease_seconds))).isoformat(),
                 iteration_limit=self._iterations(iteration_limit), iterations_used=0, state="active",
+                current_base_commit=base_commit,
                 updated_at=now.isoformat(),
             )
             try:
@@ -450,6 +473,104 @@ class TaskSupervisor:
                 record.state = "paused_budget_exhausted"
             record.updated_at = self._now().isoformat()
             return self.ledger.save(record), commit, snap
+
+    def renew(
+        self, *, task_id: str, holder_id: str, authority_generation: int,
+        lease_seconds: int | None = None,
+    ) -> TaskRecord:
+        with self._lock:
+            record = self.ledger.get(task_id)
+            self._authorize(record, holder_id, authority_generation, allow_handoff=False)
+            now = self._now()
+            current_expiry = datetime.fromisoformat(record.lease_expires_at)
+            candidate = now + timedelta(seconds=self._lease(lease_seconds))
+            if candidate <= current_expiry:
+                raise TaskError("lease_not_extended", "renewal must move lease expiry forward")
+            record.lease_expires_at = candidate.isoformat()
+            record.updated_at = now.isoformat()
+            return self.ledger.save(record)
+
+    def extend_budget(
+        self, *, task_id: str, holder_id: str, authority_generation: int,
+        additional_iterations: int,
+    ) -> TaskRecord:
+        with self._lock:
+            record = self.ledger.get(task_id)
+            if record.holder_id != self._holder(holder_id):
+                raise TaskError("wrong_holder", "holder_id does not own this task")
+            if record.authority_generation != authority_generation:
+                raise TaskError("stale_authority", "authority_generation is stale")
+            if record.state not in {"active", "paused_budget_exhausted"}:
+                raise TaskError("task_not_extendable", "task state does not admit budget extension")
+            if self._now() >= datetime.fromisoformat(record.lease_expires_at):
+                record.state = "suspended_unverified"
+                record.updated_at = self._now().isoformat()
+                self.ledger.save(record)
+                raise TaskError("lease_expired", "task lease expired before budget extension")
+            if record.current_iteration_id is not None:
+                raise TaskError("iteration_open", "budget cannot change during an open iteration")
+            if not isinstance(additional_iterations, int) or isinstance(additional_iterations, bool) or additional_iterations <= 0:
+                raise TaskError("invalid_budget", "additional_iterations must be a positive integer")
+            new_limit = record.iteration_limit + additional_iterations
+            if new_limit > self.max_iteration_limit:
+                raise TaskError("budget_ceiling_exceeded", "requested iteration budget exceeds configured ceiling")
+            record.iteration_limit = new_limit
+            if record.state == "paused_budget_exhausted" and record.iterations_used < record.iteration_limit:
+                record.state = "active"
+            record.updated_at = self._now().isoformat()
+            return self.ledger.save(record)
+
+    def refresh_base(
+        self, *, task_id: str, holder_id: str, authority_generation: int,
+        base_ref: str | None = None,
+    ) -> tuple[TaskRecord, str, bool, GitSnapshot, str | None]:
+        with self._lock:
+            record = self.ledger.get(task_id)
+            self._authorize(record, holder_id, authority_generation, allow_handoff=False)
+            if record.current_iteration_id is not None:
+                raise TaskError("iteration_open", "base refresh refuses an open iteration")
+            worktree = Path(record.worktree_path)
+            before = self.worktrees.snapshot(worktree)
+            if before.branch != record.branch_name:
+                raise TaskError("branch_mismatch", "worktree branch does not match task record")
+            if before.dirty:
+                raise TaskError("worktree_dirty", "base refresh refuses uncheckpointed changes")
+            candidate = self.worktrees.resolve_base(record.repository_id, base_ref)
+            record.pending_base_commit = candidate
+            record.updated_at = self._now().isoformat()
+            self.ledger.save(record)
+            success, after, detail = self.worktrees.rebase_onto(worktree, candidate)
+            if not success:
+                record.state = "blocked_rebase_conflict"
+                record.updated_at = self._now().isoformat()
+                self.ledger.save(record)
+                return record, candidate, False, after, detail
+            record.current_base_commit = candidate
+            record.pending_base_commit = None
+            record.authority_generation += 1
+            record.state = "active"
+            record.updated_at = self._now().isoformat()
+            return self.ledger.save(record), candidate, True, after, None
+
+    def abort_refresh(
+        self, *, task_id: str, holder_id: str, authority_generation: int,
+    ) -> tuple[TaskRecord, GitSnapshot]:
+        with self._lock:
+            record = self.ledger.get(task_id)
+            if record.holder_id != self._holder(holder_id):
+                raise TaskError("wrong_holder", "holder_id does not own this task")
+            if record.authority_generation != authority_generation:
+                raise TaskError("stale_authority", "authority_generation is stale")
+            if record.state != "blocked_rebase_conflict":
+                raise TaskError("refresh_not_blocked", "task is not blocked on a base-refresh conflict")
+            after = self.worktrees.abort_rebase(Path(record.worktree_path))
+            if after.branch != record.branch_name:
+                raise TaskError("branch_mismatch", "aborted worktree branch does not match task record")
+            record.pending_base_commit = None
+            record.authority_generation += 1
+            record.state = "active"
+            record.updated_at = self._now().isoformat()
+            return self.ledger.save(record), after
 
     def handoff_offer(self, *, task_id: str, holder_id: str, authority_generation: int, recipient_id: str) -> TaskRecord:
         with self._lock:
