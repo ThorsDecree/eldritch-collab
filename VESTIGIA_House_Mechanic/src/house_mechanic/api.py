@@ -16,9 +16,10 @@ from .processes import ProcessRegistry
 from .receipts import ReceiptStore
 from .runner import run_recipe
 from .service_model import ServiceManifest
+from .tasking import RepositoryManifest, TaskError, TaskLedger, TaskSupervisor, WorktreeManager
 
 
-PROTOCOL = "vestigia.house-mechanic-api.v0.4"
+PROTOCOL = "vestigia.house-mechanic-api.v0.5"
 MAX_REQUEST_BYTES = 16_384
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _GENERATION_ID = re.compile(r"^hm_proc_[0-9a-f]{32}$")
@@ -135,6 +136,23 @@ class _Handler(BaseHTTPRequestHandler):
                                 "effect": "read",
                                 "raw_full_output_persisted": False,
                             },
+                            "task.list": {
+                                "effect": "read",
+                                "enabled": self.api.tasks is not None,
+                            },
+                            "task.acquire": {
+                                "effect": "worktree_mutation",
+                                "enabled": self.api.tasks is not None,
+                                "caller_supplies_worktree_path": False,
+                                "caller_supplies_branch_name": False,
+                                "durable_receipt": True,
+                            },
+                            "task.mutate": {
+                                "effect": "bounded_worktree_mutation",
+                                "enabled": self.api.tasks is not None,
+                                "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+                                "durable_receipt": True,
+                            },
                         },
                     },
                 )
@@ -183,6 +201,18 @@ class _Handler(BaseHTTPRequestHandler):
                 )
                 return
 
+            if self.path == "/v1/tasks":
+                tasks = self._require_tasks()
+                self._send(
+                    200,
+                    {
+                        "protocol": PROTOCOL,
+                        "request_id": request_id,
+                        "tasks": [record.to_dict() for record in tasks.ledger.list()],
+                    },
+                )
+                return
+
             raise HouseMechanicAPIError(404, "not_found", "route not found")
         except HouseMechanicAPIError as exc:
             self._error(exc, request_id)
@@ -227,6 +257,23 @@ class _Handler(BaseHTTPRequestHandler):
 
             if self.path == "/v1/process-restart":
                 self._process_restart(request_id)
+                return
+
+            task_routes = {
+                "/v1/task-show": self._task_show,
+                "/v1/task-acquire": self._task_acquire,
+                "/v1/task-resume": self._task_resume,
+                "/v1/task-recover": self._task_recover,
+                "/v1/iteration-begin": self._iteration_begin,
+                "/v1/iteration-checkpoint": self._iteration_checkpoint,
+                "/v1/handoff-offer": self._handoff_offer,
+                "/v1/handoff-respond": self._handoff_respond,
+                "/v1/task-finish": self._task_finish,
+                "/v1/task-cleanup": self._task_cleanup,
+            }
+            task_handler = task_routes.get(self.path)
+            if task_handler is not None:
+                task_handler(request_id)
                 return
 
             raise HouseMechanicAPIError(404, "not_found", "route not found")
@@ -578,6 +625,310 @@ class _Handler(BaseHTTPRequestHandler):
             self.api.lifecycle_lock.release()
         self._persist_lifecycle(request_id=request_id, result=result)
 
+    def _require_tasks(self) -> TaskSupervisor:
+        if self.api.tasks is None:
+            raise HouseMechanicAPIError(
+                503,
+                "tasking_not_configured",
+                "House Mechanic tasking is not configured for this supervisor",
+            )
+        return self.api.tasks
+
+    @staticmethod
+    def _raise_task(exc: TaskError) -> None:
+        if exc.code in {"unknown_task", "unknown_repository"}:
+            status = 404
+        elif exc.code in {"wrong_holder"}:
+            status = 403
+        elif exc.code.startswith("invalid_") or exc.code in {"base_ref_not_allowed"}:
+            status = 400
+        else:
+            status = 409
+        raise HouseMechanicAPIError(status, exc.code, exc.message)
+
+    def _persist_task_transition(
+        self,
+        *,
+        request_id: str,
+        operation: str,
+        before: dict[str, Any] | None,
+        after: dict[str, Any],
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        evidence = {
+            "before": before,
+            "after": after,
+            "action_occurred": True,
+            **(extra or {}),
+        }
+        try:
+            durable = self.api.receipts.append_task_transition(
+                request_id=request_id,
+                operation=operation,
+                evidence=evidence,
+            )
+        except Exception:
+            self._send(
+                500,
+                {
+                    "protocol": PROTOCOL,
+                    "request_id": request_id,
+                    "action_occurred": True,
+                    "receipt_persisted": False,
+                    "task": after,
+                    "error": {
+                        "code": "receipt_persistence_failed",
+                        "message": "task mutation occurred but durable receipt persistence failed",
+                    },
+                },
+            )
+            return
+        self._send(
+            200,
+            {
+                "protocol": PROTOCOL,
+                "request_id": request_id,
+                "action_occurred": True,
+                "receipt_persisted": True,
+                "durable_receipt_id": durable["receipt_id"],
+                "task": after,
+                **(extra or {}),
+            },
+        )
+
+    def _task_show(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"task_id"})
+        try:
+            record, snapshot = tasks.show(str(payload.get("task_id") or ""))
+        except TaskError as exc:
+            self._raise_task(exc)
+        self._send(
+            200,
+            {
+                "protocol": PROTOCOL,
+                "request_id": request_id,
+                "task": record.to_dict(),
+                "git": snapshot.to_dict() if snapshot else None,
+            },
+        )
+
+    def _task_acquire(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(
+            payload,
+            {"repository_id", "holder_id", "purpose", "base_ref", "lease_seconds", "iteration_limit"},
+        )
+        try:
+            record = tasks.acquire(
+                repository_id=str(payload.get("repository_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+                purpose=str(payload.get("purpose") or ""),
+                base_ref=payload.get("base_ref"),
+                lease_seconds=payload.get("lease_seconds"),
+                iteration_limit=payload.get("iteration_limit"),
+            )
+            _, snapshot = tasks.show(record.task_id)
+        except TaskError as exc:
+            self._raise_task(exc)
+        self._persist_task_transition(
+            request_id=request_id,
+            operation="acquire",
+            before=None,
+            after=record.to_dict(),
+            extra={"git": snapshot.to_dict() if snapshot else None},
+        )
+
+    def _task_resume(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"task_id", "holder_id", "lease_seconds"})
+        try:
+            before = tasks.ledger.get(str(payload.get("task_id") or "")).to_dict()
+            record = tasks.resume(
+                task_id=str(payload.get("task_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+                lease_seconds=payload.get("lease_seconds"),
+            )
+        except TaskError as exc:
+            self._raise_task(exc)
+        self._persist_task_transition(request_id=request_id, operation="resume", before=before, after=record.to_dict())
+
+    def _task_recover(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"task_id", "holder_id", "lease_seconds"})
+        try:
+            before = tasks.ledger.get(str(payload.get("task_id") or "")).to_dict()
+            record = tasks.recover_interrupted_iteration(
+                task_id=str(payload.get("task_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+                lease_seconds=payload.get("lease_seconds"),
+            )
+        except TaskError as exc:
+            self._raise_task(exc)
+        self._persist_task_transition(request_id=request_id, operation="recover_interrupted_iteration", before=before, after=record.to_dict())
+
+    def _iteration_begin(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"task_id", "holder_id", "authority_generation"})
+        try:
+            before = tasks.ledger.get(str(payload.get("task_id") or "")).to_dict()
+            record, snapshot = tasks.begin_iteration(
+                task_id=str(payload.get("task_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+                authority_generation=int(payload.get("authority_generation")),
+            )
+        except (TaskError, TypeError, ValueError) as exc:
+            if isinstance(exc, TaskError):
+                self._raise_task(exc)
+            raise HouseMechanicAPIError(400, "invalid_request", "authority_generation must be an integer")
+        self._persist_task_transition(
+            request_id=request_id,
+            operation="iteration_begin",
+            before=before,
+            after=record.to_dict(),
+            extra={"git": snapshot.to_dict()},
+        )
+
+    def _iteration_checkpoint(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"task_id", "holder_id", "authority_generation", "iteration_id", "outcome"})
+        task_id = str(payload.get("task_id") or "")
+        try:
+            before = tasks.ledger.get(task_id).to_dict()
+            record, commit, snapshot = tasks.checkpoint_iteration(
+                task_id=task_id,
+                holder_id=str(payload.get("holder_id") or ""),
+                authority_generation=int(payload.get("authority_generation")),
+                iteration_id=str(payload.get("iteration_id") or ""),
+                outcome=str(payload.get("outcome") or ""),
+            )
+        except (TaskError, TypeError, ValueError) as exc:
+            if isinstance(exc, TaskError):
+                self._raise_task(exc)
+            raise HouseMechanicAPIError(400, "invalid_request", "authority_generation must be an integer")
+        evidence = {
+            "task_id": task_id,
+            "iteration_id": payload.get("iteration_id"),
+            "holder_id": record.holder_id,
+            "authority_generation": record.authority_generation,
+            "before": before,
+            "after": record.to_dict(),
+            "checkpoint_commit": commit,
+            "git": snapshot.to_dict(),
+            "outcome": payload.get("outcome"),
+            "action_occurred": True,
+        }
+        try:
+            durable = self.api.receipts.append_iteration_checkpoint(
+                request_id=request_id,
+                evidence=evidence,
+            )
+        except Exception:
+            self._send(
+                500,
+                {
+                    "protocol": PROTOCOL,
+                    "request_id": request_id,
+                    "action_occurred": True,
+                    "receipt_persisted": False,
+                    "task": record.to_dict(),
+                    "checkpoint_commit": commit,
+                    "error": {
+                        "code": "receipt_persistence_failed",
+                        "message": "iteration checkpoint occurred but durable receipt persistence failed",
+                    },
+                },
+            )
+            return
+        self._send(
+            200,
+            {
+                "protocol": PROTOCOL,
+                "request_id": request_id,
+                "action_occurred": True,
+                "receipt_persisted": True,
+                "durable_receipt_id": durable["receipt_id"],
+                "task": record.to_dict(),
+                "checkpoint_commit": commit,
+                "git": snapshot.to_dict(),
+            },
+        )
+
+    def _handoff_offer(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"task_id", "holder_id", "authority_generation", "recipient_id"})
+        try:
+            before = tasks.ledger.get(str(payload.get("task_id") or "")).to_dict()
+            record = tasks.handoff_offer(
+                task_id=str(payload.get("task_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+                authority_generation=int(payload.get("authority_generation")),
+                recipient_id=str(payload.get("recipient_id") or ""),
+            )
+        except (TaskError, TypeError, ValueError) as exc:
+            if isinstance(exc, TaskError):
+                self._raise_task(exc)
+            raise HouseMechanicAPIError(400, "invalid_request", "authority_generation must be an integer")
+        self._persist_task_transition(request_id=request_id, operation="handoff_offer", before=before, after=record.to_dict())
+
+    def _handoff_respond(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"task_id", "recipient_id", "accept", "lease_seconds"})
+        if not isinstance(payload.get("accept"), bool):
+            raise HouseMechanicAPIError(400, "invalid_request", "accept must be boolean")
+        try:
+            before = tasks.ledger.get(str(payload.get("task_id") or "")).to_dict()
+            record = tasks.handoff_respond(
+                task_id=str(payload.get("task_id") or ""),
+                recipient_id=str(payload.get("recipient_id") or ""),
+                accept=bool(payload.get("accept")),
+                lease_seconds=payload.get("lease_seconds"),
+            )
+        except TaskError as exc:
+            self._raise_task(exc)
+        self._persist_task_transition(request_id=request_id, operation="handoff_respond", before=before, after=record.to_dict())
+
+    def _task_finish(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"task_id", "holder_id", "authority_generation", "state", "reason"})
+        try:
+            before = tasks.ledger.get(str(payload.get("task_id") or "")).to_dict()
+            record = tasks.finish(
+                task_id=str(payload.get("task_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+                authority_generation=int(payload.get("authority_generation")),
+                state=str(payload.get("state") or ""),
+                reason=payload.get("reason"),
+            )
+        except (TaskError, TypeError, ValueError) as exc:
+            if isinstance(exc, TaskError):
+                self._raise_task(exc)
+            raise HouseMechanicAPIError(400, "invalid_request", "authority_generation must be an integer")
+        self._persist_task_transition(request_id=request_id, operation="finish", before=before, after=record.to_dict())
+
+    def _task_cleanup(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"task_id", "holder_id"})
+        try:
+            before = tasks.ledger.get(str(payload.get("task_id") or "")).to_dict()
+            record = tasks.cleanup(
+                task_id=str(payload.get("task_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+            )
+        except TaskError as exc:
+            self._raise_task(exc)
+        self._persist_task_transition(request_id=request_id, operation="cleanup", before=before, after=record.to_dict())
+
     def _inspect_receipt(self, request_id: str) -> None:
         payload = self._json_body()
         self._require_exact_fields(payload, {"receipt_id"})
@@ -718,6 +1069,9 @@ class HouseMechanicServer(ThreadingHTTPServer):
         health_max_response_bytes: int = 65_536,
         lifecycle_health_wait_seconds: float = 10.0,
         lifecycle_stop_timeout_seconds: float = 5.0,
+        repositories: RepositoryManifest | None = None,
+        worktree_root: Path | None = None,
+        task_state_dir: Path | None = None,
     ):
         if not 0 <= int(port) <= 65535:
             raise ValueError("House Mechanic port must be between 0 and 65535")
@@ -764,6 +1118,20 @@ class HouseMechanicServer(ThreadingHTTPServer):
         self.health_timeout_seconds = float(health_timeout_seconds)
         self.health_max_response_bytes = int(health_max_response_bytes)
         self.run_slots = threading.BoundedSemaphore(self.max_parallel)
+        if (repositories is None) != (worktree_root is None):
+            raise ValueError("repositories and worktree_root must be configured together")
+        if repositories is None:
+            self.tasks = None
+        else:
+            task_dir = task_state_dir or (receipt_file.parent / "task_state")
+            self.tasks = TaskSupervisor(
+                ledger=TaskLedger(task_dir),
+                worktrees=WorktreeManager(
+                    repo_root=self.repo_root,
+                    repositories=repositories,
+                    worktree_root=worktree_root,
+                ),
+            )
         super().__init__(("127.0.0.1", int(port)), _Handler)
         self.api = self
 
