@@ -293,6 +293,54 @@ class WorktreeManager:
             raise TaskError("rebase_abort_failed", (result.stderr.strip() or "git rebase --abort failed")[-1000:])
         return self.snapshot(worktree)
 
+    def materialize_detached(
+        self,
+        *,
+        repository_id: str,
+        service_id: str,
+        deployment_id: str,
+        commit: str,
+    ) -> Path:
+        _, repo = self._repository(repository_id)
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", service_id):
+            raise TaskError("invalid_service_id", "service_id is outside the bounded grammar")
+        if not re.fullmatch(r"hm_deploy_[0-9a-f]{32}", deployment_id):
+            raise TaskError("invalid_deployment_id", "deployment_id is not an issued deployment id")
+        resolved = self._run(repo, "rev-parse", "--verify", f"{commit}^{{commit}}").stdout.strip().lower()
+        if resolved != commit.lower():
+            raise TaskError("deployment_commit_unresolved", "deployment commit did not resolve exactly")
+        short = deployment_id.removeprefix("hm_deploy_")[:12]
+        worktree = (self.worktree_root / "_deployments" / service_id / short).resolve()
+        try:
+            worktree.relative_to(self.worktree_root)
+        except ValueError as exc:
+            raise TaskError("deployment_path_invalid", "generated deployment path escaped its root") from exc
+        if worktree.exists():
+            raise TaskError("deployment_worktree_exists", "generated deployment worktree already exists")
+        worktree.parent.mkdir(parents=True, exist_ok=True)
+        result = self._run(repo, "worktree", "add", "--detach", str(worktree), resolved, check=False)
+        if result.returncode != 0:
+            raise TaskError(
+                "deployment_worktree_create_failed",
+                (result.stderr.strip() or "git worktree add failed")[-1000:],
+            )
+        return worktree
+
+    def remove_detached(self, repository_id: str, worktree: Path) -> None:
+        _, repo = self._repository(repository_id)
+        if self.snapshot(worktree).dirty:
+            raise TaskError(
+                "deployment_worktree_dirty",
+                "deployment cleanup refuses a dirty checkout",
+            )
+        result = self._run(repo, "worktree", "remove", str(worktree), check=False)
+        if result.returncode != 0:
+            raise TaskError(
+                "deployment_worktree_remove_failed",
+                (result.stderr.strip() or "git worktree remove failed")[-1000:],
+            )
+        self._run(repo, "worktree", "prune")
+
     def remove(self, repository_id: str, worktree: Path) -> None:
         _, repo = self._repository(repository_id)
         if self.snapshot(worktree).dirty:
@@ -575,6 +623,38 @@ class TaskSupervisor:
             record.state = "active"
             record.updated_at = self._now().isoformat()
             return self.ledger.save(record), after
+
+    def deployment_candidate_source(
+        self,
+        *,
+        task_id: str,
+        holder_id: str,
+        authority_generation: int,
+        repository_id: str,
+    ) -> tuple[TaskRecord, GitSnapshot]:
+        with self._lock:
+            record = self.ledger.get(task_id)
+            if record.holder_id != self._holder(holder_id):
+                raise TaskError("wrong_holder", "holder_id does not own this task")
+            if record.authority_generation != authority_generation:
+                raise TaskError("stale_authority", "authority_generation is stale")
+            if record.state not in {"active", "paused_budget_exhausted"}:
+                raise TaskError("task_not_deployable", "task state does not admit candidate deployment")
+            if self._now() >= datetime.fromisoformat(record.lease_expires_at):
+                record.state = "suspended_unverified"
+                record.updated_at = self._now().isoformat()
+                self.ledger.save(record)
+                raise TaskError("lease_expired", "task lease expired before deployment admission")
+            if record.repository_id != repository_id:
+                raise TaskError("repository_mismatch", "task repository does not match service deployment binding")
+            if record.current_iteration_id is not None:
+                raise TaskError("iteration_open", "candidate deployment refuses an open iteration")
+            snapshot = self.worktrees.snapshot(Path(record.worktree_path))
+            if snapshot.branch != record.branch_name:
+                raise TaskError("branch_mismatch", "worktree branch does not match task record")
+            if snapshot.dirty:
+                raise TaskError("worktree_dirty", "candidate deployment requires a clean checkpointed worktree")
+            return record, snapshot
 
     def handoff_offer(self, *, task_id: str, holder_id: str, authority_generation: int, recipient_id: str) -> TaskRecord:
         with self._lock:
