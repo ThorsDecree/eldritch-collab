@@ -1471,6 +1471,12 @@ class HouseMechanicServer(ThreadingHTTPServer):
         self.run_slots = threading.BoundedSemaphore(self.max_parallel)
         if (repositories is None) != (worktree_root is None):
             raise ValueError("repositories and worktree_root must be configured together")
+        if repositories is None and (
+            task_state_dir is not None or deployment_state_dir is not None
+        ):
+            raise ValueError(
+                "task/deployment state paths require configured repositories"
+            )
         if repositories is None:
             self.tasks = None
             self.deployments = None
