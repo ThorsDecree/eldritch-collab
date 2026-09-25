@@ -1,6 +1,6 @@
 # VESTIGIA House Mechanic
 
-Status: v0.6 task-lease/worktree development boundary.
+Status: v0.7 authenticated task API and durable dev-evidence boundary.
 
 House Mechanic is the small host-side execution plane for VESTIGIA development work. It remains deliberately separate from the MCP Server and Runtime Workshop.
 
@@ -10,7 +10,24 @@ The governing rule is:
 
 House Mechanic exposes named, operator-authored recipes and typed service lifecycle actions. It still does not expose arbitrary command text, caller-supplied argv/cwd/environment, credentials, or a caller-selectable bind address.
 
-## Current v0.6 slice
+## Current v0.7 slice
+
+v0.7 projects the Phase 4A task foundation through the authenticated fixed-loopback API and adds durable task evidence:
+
+- authenticated task listing and inspection;
+- bounded task acquisition from operator-configured repositories;
+- resume and interrupted-iteration recovery;
+- iteration begin/checkpoint;
+- consensual handoff offer/respond;
+- terminal disposition and explicit cleanup;
+- durable `dev_task_transition` receipts;
+- durable `dev_iteration_checkpoint` receipts;
+- tasking fails closed unless repository/worktree configuration is present;
+- task capabilities truthfully report whether tasking is enabled.
+
+Task mutation still requires the current holder and authority generation. That tuple is stale-authority protection inside the already-authenticated local channel, not cryptographic resident identity.
+
+## Prior v0.6 task/worktree slice
 
 v0.6 begins Phase 4A by adding durable development-task coordination without adding deployment authority:
 
@@ -233,7 +250,7 @@ Both are bounded at startup.
 
 ## Still out of scope
 
-v0.6 still does not add:
+v0.7 still does not add:
 
 - automatic rollback;
 - durable process reattachment;
@@ -247,13 +264,12 @@ v0.6 still does not add:
 
 ## Next bounded slice
 
-After the v0.6 task/worktree foundation is green:
+After the v0.7 task API/evidence surface is green:
 
-1. project task operations through the authenticated fixed-loopback API;
-2. add durable task-transition and iteration-checkpoint receipts;
-3. finish explicit renewal/budget-extension/base-refresh semantics;
-4. add last-known-good deployment references and explicit rollback semantics;
-5. expose a small stable MCP dev surface;
-6. close the inspect -> patch -> test -> deploy -> verify loop without requiring Jeff to carry commands between systems.
+1. finish explicit lease renewal and budget-extension semantics;
+2. add explicit base-refresh/rebase with conflict preservation;
+3. add Phase 4B last-known-good deployment references and rollback semantics;
+4. expose a small stable MCP dev surface;
+5. close the inspect -> patch -> test -> deploy -> verify loop without requiring Jeff to carry commands between systems.
 
 🏮🔧
