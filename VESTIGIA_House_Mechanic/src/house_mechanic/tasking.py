@@ -153,6 +153,10 @@ class TaskLedger:
                 record.state = "suspended_unverified"
                 record.updated_at = self._now().isoformat()
                 self._write(record)
+            elif record.state in {"paused_budget_exhausted", "blocked_rebase_conflict"}:
+                record.authority_generation += 1
+                record.updated_at = self._now().isoformat()
+                self._write(record)
 
     def create(self, record: TaskRecord) -> TaskRecord:
         with self._lock:
