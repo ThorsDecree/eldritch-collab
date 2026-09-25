@@ -241,7 +241,15 @@ class DeploymentController:
 
     def status(self, service: Service) -> dict[str, Any]:
         self._require_deployable(service)
-        record = self.ledger.get_or_create(service)
+        assert service.deployment is not None
+        record = self.ledger.get(service.id)
+        if record is None:
+            record = DeploymentRecord(
+                service_id=service.id,
+                repository_id=service.deployment.repository_id,
+                state="idle",
+                updated_at="",
+            )
         return {
             "deployment": record.to_dict(),
             "process": self.lifecycle.processes.status(service).to_dict(),
@@ -270,6 +278,15 @@ class DeploymentController:
                 source_root=worktree,
             )
         except LifecycleError as exc:
+            try:
+                self.tasks.worktrees.remove_detached(record.repository_id, worktree)
+                cleanup = {"removed": True}
+            except TaskError as cleanup_exc:
+                cleanup = {
+                    "removed": False,
+                    "worktree_path": str(worktree),
+                    "error": {"code": cleanup_exc.code, "message": cleanup_exc.message},
+                }
             record.state = "rollback_failed"
             record.last_outcome = "rollback_start_blocked"
             record.updated_at = datetime.now(UTC).isoformat()
@@ -281,6 +298,7 @@ class DeploymentController:
                 "deployment_id": deployment_id,
                 "commit": commit,
                 "worktree_path": str(worktree),
+                "cleanup": cleanup,
                 "error": {"code": exc.code, "message": exc.message},
             }
 
@@ -392,6 +410,9 @@ class DeploymentController:
                 if record.active_generation_id == expected_generation_id:
                     cleanup_previous = self._cleanup_checkout(record)
                     self._clear_active(record, state="idle", outcome="previous_generation_stopped")
+            elif before_process.state == "exited" and record.active_worktree_path:
+                cleanup_previous = self._cleanup_checkout(record)
+                self._clear_active(record, state="idle", outcome="previous_generation_already_exited")
 
             deployment_id, worktree = self._materialize(
                 service=service,
@@ -644,6 +665,9 @@ class DeploymentController:
                 if record.active_generation_id == expected_generation_id:
                     cleanup_current = self._cleanup_checkout(record)
                     self._clear_active(record, state="idle", outcome="rollback_current_stopped")
+            elif process.state == "exited" and record.active_worktree_path:
+                cleanup_current = self._cleanup_checkout(record)
+                self._clear_active(record, state="idle", outcome="rollback_current_already_exited")
 
             rollback = self._start_last_known_good(
                 service=service,
