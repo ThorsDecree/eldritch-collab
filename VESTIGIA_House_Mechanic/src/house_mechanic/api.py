@@ -9,6 +9,7 @@ import threading
 from typing import Any
 import uuid
 
+from .deployment import DeploymentController, DeploymentError, DeploymentLedger
 from .health import probe_service
 from .lifecycle import LifecycleController, LifecycleError
 from .model import Manifest
@@ -19,7 +20,7 @@ from .service_model import ServiceManifest
 from .tasking import RepositoryManifest, TaskError, TaskLedger, TaskSupervisor, WorktreeManager
 
 
-PROTOCOL = "vestigia.house-mechanic-api.v0.6"
+PROTOCOL = "vestigia.house-mechanic-api.v0.7"
 MAX_REQUEST_BYTES = 16_384
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _GENERATION_ID = re.compile(r"^hm_proc_[0-9a-f]{32}$")
@@ -179,6 +180,31 @@ class _Handler(BaseHTTPRequestHandler):
                                 "authority_tuple": ["task_id", "holder_id", "authority_generation"],
                                 "durable_receipt": True,
                             },
+                            "deployment.status": {
+                                "effect": "read",
+                                "enabled": self.api.deployments is not None,
+                            },
+                            "deployment.candidate": {
+                                "effect": "owned_service_deployment",
+                                "enabled": self.api.deployments is not None,
+                                "candidate_source": "clean_checkpointed_task_commit",
+                                "automatic_conflict_resolution": False,
+                                "automatic_rollback_when_lkg_exists": True,
+                                "durable_receipt": True,
+                            },
+                            "deployment.promote": {
+                                "effect": "last_known_good_mutation",
+                                "enabled": self.api.deployments is not None,
+                                "exact_generation_required": True,
+                                "health_verification_required": True,
+                                "durable_receipt": True,
+                            },
+                            "deployment.rollback": {
+                                "effect": "owned_service_deployment",
+                                "enabled": self.api.deployments is not None,
+                                "exact_generation_required_when_running": True,
+                                "durable_receipt": True,
+                            },
                         },
                     },
                 )
@@ -239,6 +265,23 @@ class _Handler(BaseHTTPRequestHandler):
                 )
                 return
 
+            if self.path == "/v1/deployments":
+                deployments = self._require_deployments()
+                rows = []
+                for service in self.api.services.services.values():
+                    if service.deployment is None:
+                        continue
+                    rows.append(deployments.status(service))
+                self._send(
+                    200,
+                    {
+                        "protocol": PROTOCOL,
+                        "request_id": request_id,
+                        "deployments": rows,
+                    },
+                )
+                return
+
             raise HouseMechanicAPIError(404, "not_found", "route not found")
         except HouseMechanicAPIError as exc:
             self._error(exc, request_id)
@@ -294,6 +337,9 @@ class _Handler(BaseHTTPRequestHandler):
                 "/v1/task-extend-budget": self._task_extend_budget,
                 "/v1/task-refresh-base": self._task_refresh_base,
                 "/v1/task-abort-refresh": self._task_abort_refresh,
+                "/v1/deploy-candidate": self._deploy_candidate,
+                "/v1/deploy-promote": self._deploy_promote,
+                "/v1/deploy-rollback": self._deploy_rollback,
                 "/v1/iteration-begin": self._iteration_begin,
                 "/v1/iteration-checkpoint": self._iteration_checkpoint,
                 "/v1/handoff-offer": self._handoff_offer,
@@ -654,6 +700,152 @@ class _Handler(BaseHTTPRequestHandler):
         finally:
             self.api.lifecycle_lock.release()
         self._persist_lifecycle(request_id=request_id, result=result)
+
+    def _require_deployments(self) -> DeploymentController:
+        if self.api.deployments is None:
+            raise HouseMechanicAPIError(
+                503,
+                "deployment_not_configured",
+                "House Mechanic deployment is not configured for this supervisor",
+            )
+        return self.api.deployments
+
+    @staticmethod
+    def _raise_deployment(exc: DeploymentError) -> None:
+        if exc.code in {"deployment_not_configured"}:
+            status = 404
+        elif exc.code in {"wrong_holder"}:
+            status = 403
+        elif exc.code.startswith("invalid_"):
+            status = 400
+        else:
+            status = 409
+        raise HouseMechanicAPIError(status, exc.code, exc.message)
+
+    def _persist_deployment(
+        self,
+        *,
+        request_id: str,
+        result: dict[str, Any],
+    ) -> None:
+        operation = str(result.get("operation") or "unknown")
+        try:
+            durable = self.api.receipts.append_deployment(
+                request_id=request_id,
+                operation=operation,
+                evidence=result,
+            )
+        except Exception:
+            self._send(
+                500,
+                {
+                    "protocol": PROTOCOL,
+                    "request_id": request_id,
+                    "action_occurred": bool(result.get("action_occurred")),
+                    "verified": bool(result.get("verified")),
+                    "receipt_persisted": False,
+                    "deployment": result,
+                    "error": {
+                        "code": "receipt_persistence_failed",
+                        "message": "deployment action occurred but durable receipt persistence failed",
+                    },
+                },
+            )
+            return
+        self._send(
+            200,
+            {
+                "protocol": PROTOCOL,
+                "request_id": request_id,
+                "action_occurred": bool(result.get("action_occurred")),
+                "verified": bool(result.get("verified")),
+                "receipt_persisted": True,
+                "durable_receipt_id": durable["receipt_id"],
+                "deployment": result,
+            },
+        )
+
+    def _deployment_service(self, service_id: object):
+        if not isinstance(service_id, str) or not service_id.strip():
+            raise HouseMechanicAPIError(400, "invalid_request", "service_id must be a non-empty string")
+        service = self.api.services.services.get(service_id.strip())
+        if service is None:
+            raise HouseMechanicAPIError(404, "unknown_service", "service is not present in the operator manifest")
+        return service
+
+    def _deploy_candidate(self, request_id: str) -> None:
+        deployments = self._require_deployments()
+        payload = self._json_body()
+        self._require_exact_fields(
+            payload,
+            {
+                "service_id",
+                "task_id",
+                "holder_id",
+                "authority_generation",
+                "expected_generation_id",
+            },
+        )
+        service = self._deployment_service(payload.get("service_id"))
+        expected = payload.get("expected_generation_id")
+        if expected is not None and not isinstance(expected, str):
+            raise HouseMechanicAPIError(400, "invalid_request", "expected_generation_id must be a string or null")
+        try:
+            result = deployments.deploy_candidate(
+                service,
+                request_id=request_id,
+                task_id=str(payload.get("task_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+                authority_generation=int(payload.get("authority_generation")),
+                expected_generation_id=expected,
+            )
+        except (DeploymentError, TypeError, ValueError) as exc:
+            if isinstance(exc, DeploymentError):
+                self._raise_deployment(exc)
+            raise HouseMechanicAPIError(400, "invalid_request", "authority_generation must be an integer")
+        self._persist_deployment(request_id=request_id, result=result)
+
+    def _deploy_promote(self, request_id: str) -> None:
+        deployments = self._require_deployments()
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"service_id", "generation_id"})
+        service = self._deployment_service(payload.get("service_id"))
+        generation_id = self._generation_from_payload(payload)
+        try:
+            result = deployments.promote(
+                service,
+                request_id=request_id,
+                generation_id=generation_id,
+            )
+        except DeploymentError as exc:
+            self._raise_deployment(exc)
+        self._persist_deployment(request_id=request_id, result=result)
+
+    def _deploy_rollback(self, request_id: str) -> None:
+        deployments = self._require_deployments()
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"service_id", "expected_generation_id"})
+        service = self._deployment_service(payload.get("service_id"))
+        expected = payload.get("expected_generation_id")
+        if expected is not None:
+            if not isinstance(expected, str):
+                raise HouseMechanicAPIError(400, "invalid_request", "expected_generation_id must be a string or null")
+            expected = expected.strip()
+            if not _GENERATION_ID.fullmatch(expected):
+                raise HouseMechanicAPIError(
+                    400,
+                    "invalid_request",
+                    "expected_generation_id must match an issued House Mechanic generation",
+                )
+        try:
+            result = deployments.rollback(
+                service,
+                request_id=request_id,
+                expected_generation_id=expected,
+            )
+        except DeploymentError as exc:
+            self._raise_deployment(exc)
+        self._persist_deployment(request_id=request_id, result=result)
 
     def _require_tasks(self) -> TaskSupervisor:
         if self.api.tasks is None:
@@ -1230,6 +1422,7 @@ class HouseMechanicServer(ThreadingHTTPServer):
         repositories: RepositoryManifest | None = None,
         worktree_root: Path | None = None,
         task_state_dir: Path | None = None,
+        deployment_state_dir: Path | None = None,
     ):
         if not 0 <= int(port) <= 65535:
             raise ValueError("House Mechanic port must be between 0 and 65535")
@@ -1280,6 +1473,7 @@ class HouseMechanicServer(ThreadingHTTPServer):
             raise ValueError("repositories and worktree_root must be configured together")
         if repositories is None:
             self.tasks = None
+            self.deployments = None
         else:
             task_dir = task_state_dir or (receipt_file.parent / "task_state")
             self.tasks = TaskSupervisor(
@@ -1290,6 +1484,15 @@ class HouseMechanicServer(ThreadingHTTPServer):
                     worktree_root=worktree_root,
                 ),
             )
+            if any(service.deployment is not None for service in services.services.values()):
+                deployment_dir = deployment_state_dir or (receipt_file.parent / "deployment_state")
+                self.deployments = DeploymentController(
+                    tasks=self.tasks,
+                    lifecycle=self.lifecycle,
+                    ledger=DeploymentLedger(deployment_dir),
+                )
+            else:
+                self.deployments = None
         super().__init__(("127.0.0.1", int(port)), _Handler)
         self.api = self
 
