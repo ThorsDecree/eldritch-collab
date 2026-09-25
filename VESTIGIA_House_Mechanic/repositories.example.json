@@ -1,0 +1,11 @@
+{
+  "schema_version": "vestigia.house-mechanic-repositories.v0.1",
+  "repositories": [
+    {
+      "id": "eldritch-collab",
+      "path": ".",
+      "default_base_ref": "main",
+      "allowed_base_refs": ["main"]
+    }
+  ]
+}
