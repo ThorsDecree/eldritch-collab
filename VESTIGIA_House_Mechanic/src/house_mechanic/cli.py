@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .api import HouseMechanicServer
+from .api import HouseMechanicServer, PROTOCOL
 from .model import load_manifest
 from .runner import run_recipe
 from .service_model import load_service_manifest
@@ -26,6 +26,7 @@ def main() -> int:
     serve.add_argument("--repositories", type=Path)
     serve.add_argument("--worktree-root", type=Path)
     serve.add_argument("--task-state-dir", type=Path)
+    serve.add_argument("--deployment-state-dir", type=Path)
     serve.add_argument("--port", type=int, default=8770)
     serve.add_argument("--health-timeout", type=float, default=3.0)
     serve.add_argument("--health-max-response-bytes", type=int, default=65536)
@@ -49,8 +50,12 @@ def main() -> int:
             if args.worktree_root is None:
                 p.error("--worktree-root is required when --repositories is supplied")
             repositories = load_repository_manifest(args.repositories, args.repo_root)
-        elif args.worktree_root is not None or args.task_state_dir is not None:
-            p.error("--repositories is required when tasking paths are supplied")
+        elif (
+            args.worktree_root is not None
+            or args.task_state_dir is not None
+            or args.deployment_state_dir is not None
+        ):
+            p.error("--repositories is required when tasking/deployment paths are supplied")
         server = HouseMechanicServer(
             repo_root=args.repo_root,
             recipes=manifest,
@@ -66,12 +71,13 @@ def main() -> int:
             repositories=repositories,
             worktree_root=args.worktree_root,
             task_state_dir=args.task_state_dir,
+            deployment_state_dir=args.deployment_state_dir,
         )
         host, port = server.server_address
         print(
             json.dumps(
                 {
-                    "protocol": "vestigia.house-mechanic-api.v0.5",
+                    "protocol": PROTOCOL,
                     "host": host,
                     "port": port,
                     "recipe_count": len(manifest.recipes),

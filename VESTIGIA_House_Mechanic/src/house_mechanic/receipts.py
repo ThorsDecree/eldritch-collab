@@ -158,6 +158,19 @@ class ReceiptStore:
             evidence=evidence,
         )
 
+    def append_deployment(
+        self,
+        *,
+        request_id: str,
+        operation: str,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._append(
+            kind="dev_deployment",
+            request_id=request_id,
+            evidence={"operation": operation, **evidence},
+        )
+
     def recent(
         self,
         *,

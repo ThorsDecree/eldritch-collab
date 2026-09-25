@@ -1,5 +1,5 @@
 {
-  "schema_version": "vestigia.house-mechanic-services.v0.2",
+  "schema_version": "vestigia.house-mechanic-services.v0.3",
   "services": [
     {
       "id": "daemon-bridge",
