@@ -421,15 +421,26 @@ git commit -m "MCP: expose stable House Mechanic dev surface"
 
 **Files:**
 - Create: `VESTIGIA_MCP_Server/tests/test_dev_house_mechanic_integration.py`
+- Modify: `.github/workflows/vestigia-mcp-server.yml`
 - Modify only if a proven integration defect requires it: Task 1–3 implementation files.
 
 **Interfaces:**
 - Consumes: real `HouseMechanicServer` package code and MCP `create_server`.
 - Produces: an integration fixture proving the stable MCP surface can drive an actual bounded House Mechanic mutation and correlate evidence.
 
-- [ ] **Step 1: Add the end-to-end failing test**
+- [ ] **Step 1: Make House Mechanic available to the MCP integration test in CI**
 
-Start a fixture House Mechanic server with a bounded recipe or tasking configuration, then an MCP server/client surface pointing at it.
+Update `.github/workflows/vestigia-mcp-server.yml` so the MCP job also installs the sibling package:
+
+```text
+python -m pip install -e "..\VESTIGIA_House_Mechanic[dev]"
+```
+
+Add `VESTIGIA_House_Mechanic/pyproject.toml` to the pip cache dependency paths and to the workflow trigger paths relevant to this Phase 5 cross-package contract. Do not make MCP production dependencies import House Mechanic directly; this sibling install is test-only integration wiring.
+
+- [ ] **Step 2: Add the end-to-end failing test**
+
+Import the real `HouseMechanicServer` only from the test module. Start a fixture House Mechanic server with a bounded recipe or tasking configuration, then an MCP server/client surface pointing at it.
 
 The test must prove:
 
@@ -444,7 +455,7 @@ The test must prove:
 
 Use a mutation whose fixture has no external side effects beyond the test workspace.
 
-- [ ] **Step 2: Run the integration test and verify failure**
+- [ ] **Step 3: Run the integration test and verify failure**
 
 Run:
 
@@ -455,11 +466,11 @@ python -m pytest tests/test_dev_house_mechanic_integration.py -q
 
 Expected: FAIL until all cross-package wiring is complete.
 
-- [ ] **Step 3: Make only the minimal integration fixes required**
+- [ ] **Step 4: Make only the minimal integration fixes required**
 
 Do not broaden the stable four-tool surface and do not add new authority. Fix only discrepancies exposed by the real cross-layer test.
 
-- [ ] **Step 4: Run both package suites**
+- [ ] **Step 5: Run both package suites**
 
 Run:
 
@@ -472,10 +483,10 @@ python -m pytest -q
 
 Expected: both suites pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add VESTIGIA_House_Mechanic VESTIGIA_MCP_Server
+git add .github/workflows/vestigia-mcp-server.yml VESTIGIA_House_Mechanic VESTIGIA_MCP_Server
 git commit -m "Test Phase 5 MCP to House Mechanic receipt correlation"
 ```
 
