@@ -113,3 +113,17 @@ def test_daemon_bridge_peer_capabilities_are_perceive_only() -> None:
         capability = engine.require_allowed(name)
         assert capability.effect is EffectClass.PERCEIVE
         assert capability.default is Decision.ALLOW
+
+
+def test_stable_dev_surface_has_one_mutation_capability() -> None:
+    engine = PolicyEngine()
+    expected = {
+        "dev.capabilities": EffectClass.PERCEIVE,
+        "dev.process": EffectClass.PERCEIVE,
+        "dev.logs": EffectClass.PERCEIVE,
+        "dev.call": EffectClass.ACT,
+    }
+    for name, effect in expected.items():
+        capability = engine.require_allowed(name)
+        assert capability.effect is effect
+        assert capability.default is Decision.ALLOW
