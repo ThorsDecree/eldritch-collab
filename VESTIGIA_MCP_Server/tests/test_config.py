@@ -136,3 +136,58 @@ def test_daemon_bridge_rejects_non_loopback_env(monkeypatch) -> None:
     monkeypatch.setenv("VESTIGIA_MCP_DAEMON_BRIDGE_HOST", "0.0.0.0")
     with pytest.raises(ValueError, match="loopback"):
         Settings.from_env()
+
+
+def test_house_mechanic_dev_actions_distinguish_unset_wildcard_empty_and_exact(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("VESTIGIA_MCP_DEV_ACTIONS", raising=False)
+    assert Settings.from_env().dev_actions.mode == "wildcard"
+
+    monkeypatch.setenv("VESTIGIA_MCP_DEV_ACTIONS", "*")
+    wildcard = Settings.from_env().dev_actions
+    assert wildcard.mode == "wildcard"
+    assert wildcard.actions == ()
+
+    monkeypatch.setenv("VESTIGIA_MCP_DEV_ACTIONS", "")
+    denied = Settings.from_env().dev_actions
+    assert denied.mode == "deny_all"
+    assert denied.actions == ()
+
+    monkeypatch.setenv(
+        "VESTIGIA_MCP_DEV_ACTIONS",
+        " task.acquire, deployment.candidate,task.acquire ",
+    )
+    exact = Settings.from_env().dev_actions
+    assert exact.mode == "exact"
+    assert exact.actions == ("deployment.candidate", "task.acquire")
+
+
+def test_house_mechanic_settings_are_loopback_and_explicit(monkeypatch) -> None:
+    monkeypatch.setenv("VESTIGIA_MCP_HOUSE_MECHANIC_ENABLED", "true")
+    monkeypatch.setenv("VESTIGIA_MCP_HOUSE_MECHANIC_HOST", "localhost")
+    monkeypatch.setenv("VESTIGIA_MCP_HOUSE_MECHANIC_PORT", "9988")
+    monkeypatch.setenv(
+        "VESTIGIA_MCP_HOUSE_MECHANIC_TOKEN_PATH",
+        "/tmp/house-mechanic-token",
+    )
+    monkeypatch.setenv("VESTIGIA_MCP_HOUSE_MECHANIC_TIMEOUT_SECONDS", "21")
+    monkeypatch.setenv(
+        "VESTIGIA_MCP_HOUSE_MECHANIC_MAX_RESPONSE_BYTES",
+        "123456",
+    )
+
+    settings = Settings.from_env()
+
+    assert settings.house_mechanic_enabled is True
+    assert settings.house_mechanic_host == "127.0.0.1"
+    assert settings.house_mechanic_port == 9988
+    assert settings.house_mechanic_token_path == Path("/tmp/house-mechanic-token")
+    assert settings.house_mechanic_timeout_seconds == 21
+    assert settings.house_mechanic_max_response_bytes == 123456
+
+
+def test_house_mechanic_rejects_non_loopback_env(monkeypatch) -> None:
+    monkeypatch.setenv("VESTIGIA_MCP_HOUSE_MECHANIC_HOST", "0.0.0.0")
+    with pytest.raises(ValueError, match="loopback"):
+        Settings.from_env()
