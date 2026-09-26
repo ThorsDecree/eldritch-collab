@@ -163,6 +163,19 @@ def test_api_persists_recipe_and_health_receipts(tmp_path: Path) -> None:
         assert health["process_authority"] is True
         assert health["process_authority_scope"] == "mechanic_child_only"
 
+        status, capabilities = _request(
+            port,
+            "GET",
+            "/v1/capabilities",
+            token=TOKEN,
+        )
+        assert status == 200
+        process_meta = capabilities["operations"]["service.process_status"]
+        assert process_meta["mutation"] is False
+        assert process_meta["method"] == "POST"
+        assert process_meta["path"] == "/v1/process-status"
+        assert process_meta["input_schema"]["type"] == "object"
+
         status, denied = _request(port, "GET", "/v1/recipes")
         assert status == 401
         assert denied["error"]["code"] == "unauthorized"
