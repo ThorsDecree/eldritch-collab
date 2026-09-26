@@ -186,6 +186,8 @@ def test_authenticated_deployment_api_promotes_verified_candidate(tmp_path: Path
         assert status == 200
         assert caps["protocol"] == PROTOCOL
         assert caps["operations"]["deployment.candidate"]["enabled"] is True
+        assert caps["operations"]["deployment.reconcile"]["enabled"] is True
+        assert caps["operations"]["deployment.cleanup_retry"]["enabled"] is True
 
         status, acquired = _request(
             port,
@@ -268,6 +270,29 @@ def test_authenticated_deployment_api_promotes_verified_candidate(tmp_path: Path
         assert row["deployment"]["last_known_good_commit"] == candidate_commit
         assert row["process"]["generation_id"] == generation_id
 
+        status, reconciled = _request(
+            port,
+            "POST",
+            "/v1/deploy-reconcile",
+            {"service_id": "fixture"},
+        )
+        assert status == 200
+        assert reconciled["receipt_persisted"] is True
+        assert reconciled["action_occurred"] is False
+        assert reconciled["deployment"]["outcome"] == "reconciliation_not_required"
+
+        status, cleaned = _request(
+            port,
+            "POST",
+            "/v1/deploy-cleanup-retry",
+            {"service_id": "fixture"},
+        )
+        assert status == 200
+        assert cleaned["receipt_persisted"] is True
+        assert cleaned["action_occurred"] is False
+        assert cleaned["verified"] is True
+        assert cleaned["deployment"]["outcome"] == "cleanup_complete"
+
         rows = [
             json.loads(line)
             for line in receipt_file.read_text(encoding="utf-8").splitlines()
@@ -280,6 +305,8 @@ def test_authenticated_deployment_api_promotes_verified_candidate(tmp_path: Path
         ]
         assert "deploy_candidate" in deployment_ops
         assert "promote" in deployment_ops
+        assert "reconcile" in deployment_ops
+        assert "cleanup_retry" in deployment_ops
     finally:
         server.shutdown()
         server.server_close()

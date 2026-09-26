@@ -20,7 +20,7 @@ from .service_model import ServiceManifest
 from .tasking import RepositoryManifest, TaskError, TaskLedger, TaskSupervisor, WorktreeManager
 
 
-PROTOCOL = "vestigia.house-mechanic-api.v0.7"
+PROTOCOL = "vestigia.house-mechanic-api.v0.8"
 MAX_REQUEST_BYTES = 16_384
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _GENERATION_ID = re.compile(r"^hm_proc_[0-9a-f]{32}$")
@@ -205,6 +205,20 @@ class _Handler(BaseHTTPRequestHandler):
                                 "exact_generation_required_when_running": True,
                                 "durable_receipt": True,
                             },
+                            "deployment.reconcile": {
+                                "effect": "read_with_durable_observation",
+                                "enabled": self.api.deployments is not None,
+                                "process_adoption": False,
+                                "active_checkout_cleanup": False,
+                                "durable_receipt": True,
+                            },
+                            "deployment.cleanup_retry": {
+                                "effect": "bounded_checkout_cleanup",
+                                "enabled": self.api.deployments is not None,
+                                "safe_basis_required": True,
+                                "active_checkout_preserved": True,
+                                "durable_receipt": True,
+                            },
                         },
                     },
                 )
@@ -340,6 +354,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "/v1/deploy-candidate": self._deploy_candidate,
                 "/v1/deploy-promote": self._deploy_promote,
                 "/v1/deploy-rollback": self._deploy_rollback,
+                "/v1/deploy-reconcile": self._deploy_reconcile,
+                "/v1/deploy-cleanup-retry": self._deploy_cleanup_retry,
                 "/v1/iteration-begin": self._iteration_begin,
                 "/v1/iteration-checkpoint": self._iteration_checkpoint,
                 "/v1/handoff-offer": self._handoff_offer,
@@ -842,6 +858,34 @@ class _Handler(BaseHTTPRequestHandler):
                 service,
                 request_id=request_id,
                 expected_generation_id=expected,
+            )
+        except DeploymentError as exc:
+            self._raise_deployment(exc)
+        self._persist_deployment(request_id=request_id, result=result)
+
+    def _deploy_reconcile(self, request_id: str) -> None:
+        deployments = self._require_deployments()
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"service_id"})
+        service = self._deployment_service(payload.get("service_id"))
+        try:
+            result = deployments.reconciliation(
+                service,
+                request_id=request_id,
+            )
+        except DeploymentError as exc:
+            self._raise_deployment(exc)
+        self._persist_deployment(request_id=request_id, result=result)
+
+    def _deploy_cleanup_retry(self, request_id: str) -> None:
+        deployments = self._require_deployments()
+        payload = self._json_body()
+        self._require_exact_fields(payload, {"service_id"})
+        service = self._deployment_service(payload.get("service_id"))
+        try:
+            result = deployments.retry_cleanup(
+                service,
+                request_id=request_id,
             )
         except DeploymentError as exc:
             self._raise_deployment(exc)

@@ -302,3 +302,134 @@ def test_deployment_ledger_suspends_active_generation_after_restart(tmp_path: Pa
         assert record.last_outcome == "supervisor_restart_lost_process_authority"
     finally:
         processes.terminate_all_for_shutdown()
+
+
+def test_restart_reconciliation_reports_health_without_adopting_process(tmp_path: Path) -> None:
+    repo, service, tasks, processes, deployments = _fixture(tmp_path)
+    restarted_processes = ProcessRegistry(tmp_path / "process-state-restarted")
+    try:
+        task = tasks.acquire(
+            repository_id="fixture",
+            holder_id="liora",
+            purpose="reconcile restart",
+        )
+        _checkpoint(
+            tasks,
+            task.task_id,
+            holder="liora",
+            generation=1,
+            mutate=lambda worktree: (worktree / "marker.txt").write_text(
+                "reconcile\n",
+                encoding="utf-8",
+            ),
+        )
+        deployed = deployments.deploy_candidate(
+            service,
+            request_id="req-reconcile-deploy",
+            task_id=task.task_id,
+            holder_id="liora",
+            authority_generation=1,
+        )
+        assert deployed["verified"] is True
+        active_path = Path(deployed["after"]["active_worktree_path"])
+
+        restarted_lifecycle = LifecycleController(
+            repo_root=repo,
+            recipes=deployments.lifecycle.recipes,
+            processes=restarted_processes,
+            health_probe_timeout_seconds=0.25,
+            health_wait_seconds=3.0,
+            health_poll_seconds=0.05,
+            stop_timeout_seconds=2.0,
+        )
+        restarted = DeploymentController(
+            tasks=tasks,
+            lifecycle=restarted_lifecycle,
+            ledger=DeploymentLedger(tmp_path / "deployment-state"),
+        )
+
+        observed = restarted.reconciliation(
+            service,
+            request_id="req-reconcile-observe",
+        )
+        assert observed["verified"] is False
+        assert observed["outcome"] == "operator_boundary_required"
+        assert observed["operator_boundary_required"] is True
+        assert observed["automatic_process_adoption"] is False
+        assert observed["automatic_active_checkout_cleanup"] is False
+        assert observed["process"]["state"] == "not_started"
+        assert observed["health"]["healthy"] is True
+        assert observed["deployment"]["state"] == "suspended_unverified"
+        assert observed["deployment"]["suspended_from_state"] == "candidate_running"
+        assert observed["deployment"]["suspended_at"]
+        assert observed["active_checkout"]["path_present"] is True
+        assert observed["active_checkout"]["commit_matches"] is True
+        assert active_path.exists()
+    finally:
+        restarted_processes.terminate_all_for_shutdown()
+        processes.terminate_all_for_shutdown()
+
+
+def test_dirty_retired_checkout_is_queued_then_safely_retried(tmp_path: Path) -> None:
+    _repo, service, tasks, processes, deployments = _fixture(tmp_path)
+    try:
+        task = tasks.acquire(
+            repository_id="fixture",
+            holder_id="liora",
+            purpose="cleanup retry",
+        )
+        good_commit = _checkpoint(
+            tasks,
+            task.task_id,
+            holder="liora",
+            generation=1,
+            mutate=lambda worktree: (worktree / "marker.txt").write_text(
+                "good\n",
+                encoding="utf-8",
+            ),
+        )
+        deployed = deployments.deploy_candidate(
+            service,
+            request_id="req-cleanup-deploy",
+            task_id=task.task_id,
+            holder_id="liora",
+            authority_generation=1,
+        )
+        generation = deployed["after"]["active_generation_id"]
+        assert generation
+        promoted = deployments.promote(
+            service,
+            request_id="req-cleanup-promote",
+            generation_id=generation,
+        )
+        old_worktree = Path(promoted["after"]["active_worktree_path"])
+        (old_worktree / "marker.txt").write_text("dirty after launch\n", encoding="utf-8")
+
+        rolled = deployments.rollback(
+            service,
+            request_id="req-cleanup-rollback",
+            expected_generation_id=generation,
+        )
+        assert rolled["verified"] is True
+        assert rolled["cleanup_current"]["removed"] is False
+        after = rolled["after"]
+        assert len(after["cleanup_pending"]) == 1
+        pending = after["cleanup_pending"][0]
+        assert pending["worktree_path"] == str(old_worktree)
+        assert pending["expected_commit"] == good_commit
+        assert pending["safe_basis"] == "verified_stop"
+        assert old_worktree.exists()
+
+        _git(old_worktree, "reset", "--hard", good_commit)
+        retried = deployments.retry_cleanup(
+            service,
+            request_id="req-cleanup-retry",
+        )
+        assert retried["verified"] is True
+        assert retried["outcome"] == "cleanup_complete"
+        assert retried["removed_count"] == 1
+        assert retried["after"]["cleanup_pending"] == []
+        assert not old_worktree.exists()
+        assert Path(retried["after"]["active_worktree_path"]).exists()
+    finally:
+        processes.terminate_all_for_shutdown()

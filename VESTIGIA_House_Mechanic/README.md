@@ -1,6 +1,6 @@
 # VESTIGIA House Mechanic
 
-Status: v0.9 candidate deployment, last-known-good promotion, and verified rollback boundary.
+Status: v0.10 restart reconciliation and disposable-checkout cleanup evidence boundary.
 
 House Mechanic is the small host-side execution plane for VESTIGIA development work. It remains deliberately separate from the MCP Server and Runtime Workshop.
 
@@ -10,7 +10,24 @@ The governing rule is:
 
 House Mechanic exposes named, operator-authored recipes and typed service lifecycle actions. It still does not expose arbitrary command text, caller-supplied argv/cwd/environment, credentials, or a caller-selectable bind address.
 
-## Current v0.9 slice
+## Current v0.10 slice
+
+v0.10 hardens the Phase 4B failure/restart seam without granting process reattachment authority:
+
+- restart suspension now records the prior active deployment state and suspension timestamp;
+- reconciliation inspection observes current supervisor ownership, declared health, and active checkout provenance without adopting a remembered PID/process generation;
+- a healthy endpoint after restart is reported as possible pre-restart/external service presence, not proof of ownership;
+- an unhealthy endpoint after restart is not treated as proof that the old process is dead or that its checkout is safe to remove;
+- active suspended deployment checkouts are never cleaned automatically;
+- failed cleanup after a verified stop, observed owned-process exit, or pre-launch failure is persisted as retryable cleanup evidence;
+- each pending cleanup records deployment ID, exact expected commit, path, safety basis, attempts, and last error;
+- cleanup retries refuse paths outside the deployment root, refuse dirty checkouts, refuse commit mismatches, and preserve the currently active checkout;
+- missing already-retired paths are pruned conservatively rather than treated as fatal;
+- reconciliation and cleanup retry are projected through the authenticated API and leave durable `dev_deployment` receipts.
+
+The restart rule remains intentionally strict: durable deployment metadata survives; process-control authority does not.
+
+## Prior v0.9 deployment slice
 
 v0.9 begins Phase 4B by connecting clean task commits to designated mechanic-owned development services without exposing arbitrary deployment paths or commands:
 
@@ -287,9 +304,8 @@ Both are bounded at startup.
 
 ## Still out of scope
 
-v0.9 still does not add:
+v0.10 still does not add:
 
-- automatic rollback;
 - durable process reattachment;
 - arbitrary commands;
 - system package installation;
@@ -301,11 +317,11 @@ v0.9 still does not add:
 
 ## Next bounded slice
 
-After the v0.9 Phase 4B deployment surface is green:
+After the v0.10 reconciliation/cleanup surface is green:
 
-1. harden deployment reconciliation/cleanup evidence around supervisor restarts and disposable checkout leaks;
-2. expose the small stable MCP dev surface;
-3. project task + deployment operations behind that stable descriptor set;
-4. exercise the complete inspect -> patch -> test -> deploy -> verify -> rollback/promote loop end-to-end without requiring Jeff to carry commands between systems.
+1. expose the small stable MCP dev surface;
+2. project task + deployment operations behind that stable descriptor set;
+3. exercise the complete inspect -> patch -> test -> deploy -> verify -> rollback/promote loop end-to-end without requiring Jeff to carry commands between systems;
+4. keep operator boundaries explicit for restart reconciliation that would require asserting an unowned process is truly gone.
 
 🏮🔧
