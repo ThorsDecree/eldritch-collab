@@ -209,7 +209,7 @@ def test_real_house_mechanic_mutation_joins_receipts_and_allowlist_can_narrow(
         run_request_ids = [
             row["request_id"]
             for row in rows
-            if row.get("kind") == "run"
+            if row.get("kind") == "recipe_run"
         ]
         assert len(run_request_ids) == 2
         assert all(value.startswith("mcp_req_") for value in run_request_ids)
