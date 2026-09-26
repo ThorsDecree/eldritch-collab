@@ -1,0 +1,27 @@
+{
+  "name": "expected crash after external delivery before receipt",
+  "config": {"allowed_users": ["1001"]},
+  "steps": [
+    {
+      "op": "message",
+      "message_id": 500,
+      "user_id": 1001,
+      "channel_id": 3001,
+      "content": "ping",
+      "expect": {"accepted": true, "trigger_kind": "direct"}
+    },
+    {
+      "op": "runtime_commit",
+      "message_id": 500,
+      "operation_id": "turn-500",
+      "text": "pong"
+    },
+    {"op": "arm_failpoint", "name": "after_delivery_before_receipt"},
+    {
+      "op": "deliver_text",
+      "message_id": 500,
+      "operation_id": "turn-500",
+      "text": "pong"
+    }
+  ]
+}

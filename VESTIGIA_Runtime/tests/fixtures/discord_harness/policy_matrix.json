@@ -1,0 +1,46 @@
+{
+  "name": "policy matrix",
+  "config": {
+    "allowed_users": ["1001"],
+    "allowed_channels": ["2001"],
+    "allow_dms": true,
+    "require_mention_or_reply": true
+  },
+  "steps": [
+    {
+      "op": "message",
+      "message_id": 100,
+      "user_id": 1001,
+      "channel_id": 3001,
+      "content": "dm hello",
+      "expect": {"accepted": true, "trigger_kind": "direct"}
+    },
+    {
+      "op": "message",
+      "message_id": 101,
+      "user_id": 1002,
+      "channel_id": 3002,
+      "content": "stranger dm",
+      "expect": {"accepted": false, "rejection": "user_not_allowed"}
+    },
+    {
+      "op": "message",
+      "message_id": 102,
+      "user_id": 1001,
+      "channel_id": 2001,
+      "guild_id": 4001,
+      "content": "ambient",
+      "expect": {"accepted": false, "trigger_kind": "ignored", "addressed": false}
+    },
+    {
+      "op": "message",
+      "message_id": 103,
+      "user_id": 1001,
+      "channel_id": 2001,
+      "guild_id": 4001,
+      "content": "ping",
+      "mention_bot": true,
+      "expect": {"accepted": true, "trigger_kind": "direct", "addressed": true}
+    }
+  ]
+}
