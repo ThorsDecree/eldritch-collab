@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .adapters.archive import normalize_relative_path
+from .house_mechanic import DevActionFilter, parse_dev_actions
 
 
 def _optional_path(name: str) -> Path | None:
@@ -93,6 +94,18 @@ def _daemon_bridge_host_env() -> str:
     return host
 
 
+def _house_mechanic_host_env() -> str:
+    host = os.getenv(
+        "VESTIGIA_MCP_HOUSE_MECHANIC_HOST",
+        "127.0.0.1",
+    ).strip().lower()
+    if host == "localhost":
+        return "127.0.0.1"
+    if host != "127.0.0.1":
+        raise ValueError("VESTIGIA MCP House Mechanic host must be loopback")
+    return host
+
+
 @dataclass(frozen=True)
 class Settings:
     live_archive_root: Path | None
@@ -120,6 +133,15 @@ class Settings:
     daemon_bridge_token_path: Path | None = None
     daemon_bridge_timeout_seconds: int = 120
     daemon_bridge_max_response_bytes: int = 262_144
+    house_mechanic_enabled: bool = False
+    house_mechanic_host: str = "127.0.0.1"
+    house_mechanic_port: int = 8770
+    house_mechanic_token_path: Path | None = None
+    house_mechanic_timeout_seconds: int = 120
+    house_mechanic_max_response_bytes: int = 262_144
+    dev_actions: DevActionFilter = field(
+        default_factory=lambda: DevActionFilter(mode="wildcard", actions=())
+    )
     mounts_file: Path | None = None
     runtimes_file: Path | None = None
     gametable_enabled: bool = False
@@ -204,6 +226,25 @@ class Settings:
             ),
             daemon_bridge_max_response_bytes=_positive_int_env(
                 "VESTIGIA_MCP_DAEMON_BRIDGE_MAX_RESPONSE_BYTES", 262_144
+            ),
+            house_mechanic_enabled=_bool_env(
+                "VESTIGIA_MCP_HOUSE_MECHANIC_ENABLED"
+            ),
+            house_mechanic_host=_house_mechanic_host_env(),
+            house_mechanic_port=_positive_int_env(
+                "VESTIGIA_MCP_HOUSE_MECHANIC_PORT", 8770
+            ),
+            house_mechanic_token_path=_optional_path(
+                "VESTIGIA_MCP_HOUSE_MECHANIC_TOKEN_PATH"
+            ),
+            house_mechanic_timeout_seconds=_positive_int_env(
+                "VESTIGIA_MCP_HOUSE_MECHANIC_TIMEOUT_SECONDS", 120
+            ),
+            house_mechanic_max_response_bytes=_positive_int_env(
+                "VESTIGIA_MCP_HOUSE_MECHANIC_MAX_RESPONSE_BYTES", 262_144
+            ),
+            dev_actions=parse_dev_actions(
+                os.environ.get("VESTIGIA_MCP_DEV_ACTIONS")
             ),
             mounts_file=_optional_path("VESTIGIA_MCP_MOUNTS_FILE"),
             runtimes_file=_optional_path("VESTIGIA_MCP_RUNTIMES_FILE"),

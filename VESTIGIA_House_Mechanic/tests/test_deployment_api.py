@@ -188,6 +188,20 @@ def test_authenticated_deployment_api_promotes_verified_candidate(tmp_path: Path
         assert caps["operations"]["deployment.candidate"]["enabled"] is True
         assert caps["operations"]["deployment.reconcile"]["enabled"] is True
         assert caps["operations"]["deployment.cleanup_retry"]["enabled"] is True
+        candidate_meta = caps["operations"]["deployment.candidate"]
+        assert candidate_meta["mutation"] is True
+        assert candidate_meta["method"] == "POST"
+        assert candidate_meta["path"] == "/v1/deploy-candidate"
+        schema = candidate_meta["input_schema"]
+        assert schema["type"] == "object"
+        assert schema["additionalProperties"] is False
+        assert set(schema["required"]) == {
+            "service_id",
+            "task_id",
+            "holder_id",
+            "authority_generation",
+        }
+        assert schema["properties"]["expected_generation_id"]["type"] == ["string", "null"]
 
         status, acquired = _request(
             port,

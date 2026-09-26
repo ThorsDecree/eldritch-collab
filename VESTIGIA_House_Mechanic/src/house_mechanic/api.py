@@ -20,7 +20,7 @@ from .service_model import ServiceManifest
 from .tasking import RepositoryManifest, TaskError, TaskLedger, TaskSupervisor, WorktreeManager
 
 
-PROTOCOL = "vestigia.house-mechanic-api.v0.8"
+PROTOCOL = "vestigia.house-mechanic-api.v0.9"
 MAX_REQUEST_BYTES = 16_384
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _GENERATION_ID = re.compile(r"^hm_proc_[0-9a-f]{32}$")
@@ -45,6 +45,495 @@ def read_token(path: Path) -> str:
     if len(token) < 16:
         raise ValueError("House Mechanic token must contain at least 16 characters")
     return token
+
+
+def _object_schema(
+    properties: dict[str, dict[str, Any]] | None = None,
+    *,
+    required: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties or {},
+        "required": list(required),
+    }
+
+
+_STRING = {"type": "string"}
+_INTEGER = {"type": "integer"}
+_BOOLEAN = {"type": "boolean"}
+_NULLABLE_STRING = {"type": ["string", "null"]}
+_NULLABLE_INTEGER = {"type": ["integer", "null"]}
+
+
+def operation_capabilities(api: "HouseMechanicServer") -> dict[str, dict[str, Any]]:
+    empty = _object_schema()
+    service_id = {"service_id": _STRING}
+    generation = {"service_id": _STRING, "generation_id": _STRING}
+    task_enabled = api.tasks is not None
+    deployment_enabled = api.deployments is not None
+    return {
+        "recipe.list": {
+            "effect": "read",
+            "mutation": False,
+            "method": "GET",
+            "path": "/v1/recipes",
+            "input_schema": empty,
+            "caller_supplies_argv": False,
+        },
+        "recipe.run": {
+            "effect": "bounded_local_process",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/run",
+            "input_schema": _object_schema(
+                {"recipe_id": _STRING},
+                required=("recipe_id",),
+            ),
+            "caller_supplies_argv": False,
+            "caller_supplies_cwd": False,
+            "caller_supplies_env": False,
+            "durable_receipt": True,
+            "max_parallel": api.max_parallel,
+        },
+        "service.list": {
+            "effect": "read",
+            "mutation": False,
+            "method": "GET",
+            "path": "/v1/services",
+            "input_schema": empty,
+            "process_authority": False,
+        },
+        "service.health": {
+            "effect": "loopback_read",
+            "mutation": False,
+            "method": "POST",
+            "path": "/v1/health-check",
+            "input_schema": _object_schema(service_id, required=("service_id",)),
+            "process_authority": False,
+            "redirects_followed": False,
+        },
+        "service.process_status": {
+            "effect": "read",
+            "mutation": False,
+            "method": "POST",
+            "path": "/v1/process-status",
+            "input_schema": _object_schema(service_id, required=("service_id",)),
+            "lifecycle_authority": False,
+            "ownership_scope": "supervisor_instance",
+        },
+        "service.process_logs": {
+            "effect": "read",
+            "mutation": False,
+            "method": "POST",
+            "path": "/v1/process-logs",
+            "input_schema": _object_schema(service_id, required=("service_id",)),
+            "lifecycle_authority": False,
+            "tail_limit_bytes": 16384,
+        },
+        "service.start": {
+            "effect": "owned_process_mutation",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/process-start",
+            "input_schema": _object_schema(service_id, required=("service_id",)),
+            "ownership_required": "mechanic_child",
+            "health_transition_required": True,
+            "health_generation_bound": False,
+        },
+        "service.stop": {
+            "effect": "owned_process_mutation",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/process-stop",
+            "input_schema": _object_schema(
+                generation,
+                required=("service_id", "generation_id"),
+            ),
+            "ownership_required": "mechanic_child",
+            "exact_generation_required": True,
+        },
+        "service.restart": {
+            "effect": "owned_process_mutation",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/process-restart",
+            "input_schema": _object_schema(
+                generation,
+                required=("service_id", "generation_id"),
+            ),
+            "ownership_required": "mechanic_child",
+            "exact_generation_required": True,
+            "health_transition_required": True,
+        },
+        "receipt.recent": {
+            "effect": "read",
+            "mutation": False,
+            "method": "GET",
+            "path": "/v1/receipts",
+            "input_schema": empty,
+            "raw_full_output_persisted": False,
+        },
+        "receipt.inspect": {
+            "effect": "read",
+            "mutation": False,
+            "method": "POST",
+            "path": "/v1/receipt",
+            "input_schema": _object_schema(
+                {"receipt_id": _STRING},
+                required=("receipt_id",),
+            ),
+            "raw_full_output_persisted": False,
+        },
+        "task.list": {
+            "effect": "read",
+            "mutation": False,
+            "method": "GET",
+            "path": "/v1/tasks",
+            "input_schema": empty,
+            "enabled": task_enabled,
+        },
+        "task.show": {
+            "effect": "read",
+            "mutation": False,
+            "method": "POST",
+            "path": "/v1/task-show",
+            "input_schema": _object_schema(
+                {"task_id": _STRING},
+                required=("task_id",),
+            ),
+            "enabled": task_enabled,
+        },
+        "task.acquire": {
+            "effect": "worktree_mutation",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/task-acquire",
+            "input_schema": _object_schema(
+                {
+                    "repository_id": _STRING,
+                    "holder_id": _STRING,
+                    "purpose": _STRING,
+                    "base_ref": _NULLABLE_STRING,
+                    "lease_seconds": _NULLABLE_INTEGER,
+                    "iteration_limit": _NULLABLE_INTEGER,
+                },
+                required=("repository_id", "holder_id", "purpose"),
+            ),
+            "enabled": task_enabled,
+            "caller_supplies_worktree_path": False,
+            "caller_supplies_branch_name": False,
+            "durable_receipt": True,
+        },
+        "task.resume": {
+            "effect": "lease_mutation",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/task-resume",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "lease_seconds": _NULLABLE_INTEGER,
+                },
+                required=("task_id", "holder_id"),
+            ),
+            "enabled": task_enabled,
+            "durable_receipt": True,
+        },
+        "task.recover": {
+            "effect": "worktree_recovery",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/task-recover",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "lease_seconds": _NULLABLE_INTEGER,
+                },
+                required=("task_id", "holder_id"),
+            ),
+            "enabled": task_enabled,
+            "durable_receipt": True,
+        },
+        "task.renew": {
+            "effect": "lease_mutation",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/task-renew",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "authority_generation": _INTEGER,
+                    "lease_seconds": _NULLABLE_INTEGER,
+                },
+                required=("task_id", "holder_id", "authority_generation"),
+            ),
+            "enabled": task_enabled,
+            "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+            "durable_receipt": True,
+        },
+        "task.extend_budget": {
+            "effect": "budget_mutation",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/task-extend-budget",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "authority_generation": _INTEGER,
+                    "additional_iterations": _INTEGER,
+                },
+                required=(
+                    "task_id",
+                    "holder_id",
+                    "authority_generation",
+                    "additional_iterations",
+                ),
+            ),
+            "enabled": task_enabled,
+            "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+            "durable_receipt": True,
+        },
+        "task.refresh_base": {
+            "effect": "bounded_git_rebase",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/task-refresh-base",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "authority_generation": _INTEGER,
+                    "base_ref": _NULLABLE_STRING,
+                },
+                required=("task_id", "holder_id", "authority_generation"),
+            ),
+            "enabled": task_enabled,
+            "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+            "caller_supplies_git_argv": False,
+            "conflicts_auto_resolved": False,
+            "durable_receipt": True,
+        },
+        "task.abort_refresh": {
+            "effect": "bounded_git_rebase_abort",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/task-abort-refresh",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "authority_generation": _INTEGER,
+                },
+                required=("task_id", "holder_id", "authority_generation"),
+            ),
+            "enabled": task_enabled,
+            "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+            "durable_receipt": True,
+        },
+        "iteration.begin": {
+            "effect": "bounded_worktree_mutation",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/iteration-begin",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "authority_generation": _INTEGER,
+                },
+                required=("task_id", "holder_id", "authority_generation"),
+            ),
+            "enabled": task_enabled,
+            "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+            "durable_receipt": True,
+        },
+        "iteration.checkpoint": {
+            "effect": "bounded_worktree_mutation",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/iteration-checkpoint",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "authority_generation": _INTEGER,
+                    "iteration_id": _STRING,
+                    "outcome": _STRING,
+                },
+                required=(
+                    "task_id",
+                    "holder_id",
+                    "authority_generation",
+                    "iteration_id",
+                    "outcome",
+                ),
+            ),
+            "enabled": task_enabled,
+            "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+            "durable_receipt": True,
+        },
+        "handoff.offer": {
+            "effect": "authority_transfer_prepare",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/handoff-offer",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "authority_generation": _INTEGER,
+                    "recipient_id": _STRING,
+                },
+                required=(
+                    "task_id",
+                    "holder_id",
+                    "authority_generation",
+                    "recipient_id",
+                ),
+            ),
+            "enabled": task_enabled,
+            "durable_receipt": True,
+        },
+        "handoff.respond": {
+            "effect": "authority_transfer_mutation",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/handoff-respond",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "recipient_id": _STRING,
+                    "accept": _BOOLEAN,
+                    "lease_seconds": _NULLABLE_INTEGER,
+                },
+                required=("task_id", "recipient_id", "accept"),
+            ),
+            "enabled": task_enabled,
+            "durable_receipt": True,
+        },
+        "task.finish": {
+            "effect": "task_state_mutation",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/task-finish",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "authority_generation": _INTEGER,
+                    "state": _STRING,
+                    "reason": _NULLABLE_STRING,
+                },
+                required=("task_id", "holder_id", "authority_generation", "state"),
+            ),
+            "enabled": task_enabled,
+            "durable_receipt": True,
+        },
+        "task.cleanup": {
+            "effect": "worktree_cleanup",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/task-cleanup",
+            "input_schema": _object_schema(
+                {"task_id": _STRING, "holder_id": _STRING},
+                required=("task_id", "holder_id"),
+            ),
+            "enabled": task_enabled,
+            "durable_receipt": True,
+        },
+        "deployment.status": {
+            "effect": "read",
+            "mutation": False,
+            "method": "GET",
+            "path": "/v1/deployments",
+            "input_schema": empty,
+            "enabled": deployment_enabled,
+        },
+        "deployment.candidate": {
+            "effect": "owned_service_deployment",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/deploy-candidate",
+            "input_schema": _object_schema(
+                {
+                    "service_id": _STRING,
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "authority_generation": _INTEGER,
+                    "expected_generation_id": _NULLABLE_STRING,
+                },
+                required=(
+                    "service_id",
+                    "task_id",
+                    "holder_id",
+                    "authority_generation",
+                ),
+            ),
+            "enabled": deployment_enabled,
+            "candidate_source": "clean_checkpointed_task_commit",
+            "automatic_conflict_resolution": False,
+            "automatic_rollback_when_lkg_exists": True,
+            "durable_receipt": True,
+        },
+        "deployment.promote": {
+            "effect": "last_known_good_mutation",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/deploy-promote",
+            "input_schema": _object_schema(
+                generation,
+                required=("service_id", "generation_id"),
+            ),
+            "enabled": deployment_enabled,
+            "exact_generation_required": True,
+            "health_verification_required": True,
+            "durable_receipt": True,
+        },
+        "deployment.rollback": {
+            "effect": "owned_service_deployment",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/deploy-rollback",
+            "input_schema": _object_schema(
+                {
+                    "service_id": _STRING,
+                    "expected_generation_id": _NULLABLE_STRING,
+                },
+                required=("service_id",),
+            ),
+            "enabled": deployment_enabled,
+            "exact_generation_required_when_running": True,
+            "durable_receipt": True,
+        },
+        "deployment.reconcile": {
+            "effect": "read_with_durable_observation",
+            "mutation": False,
+            "method": "POST",
+            "path": "/v1/deploy-reconcile",
+            "input_schema": _object_schema(service_id, required=("service_id",)),
+            "enabled": deployment_enabled,
+            "process_adoption": False,
+            "active_checkout_cleanup": False,
+            "durable_receipt": True,
+        },
+        "deployment.cleanup_retry": {
+            "effect": "bounded_checkout_cleanup",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/deploy-cleanup-retry",
+            "input_schema": _object_schema(service_id, required=("service_id",)),
+            "enabled": deployment_enabled,
+            "safe_basis_required": True,
+            "active_checkout_preserved": True,
+            "durable_receipt": True,
+        },
+    }
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -80,146 +569,7 @@ class _Handler(BaseHTTPRequestHandler):
                     {
                         "protocol": PROTOCOL,
                         "request_id": request_id,
-                        "operations": {
-                            "recipe.list": {
-                                "effect": "read",
-                                "caller_supplies_argv": False,
-                            },
-                            "recipe.run": {
-                                "effect": "bounded_local_process",
-                                "caller_supplies_argv": False,
-                                "caller_supplies_cwd": False,
-                                "caller_supplies_env": False,
-                                "durable_receipt": True,
-                                "max_parallel": self.api.max_parallel,
-                            },
-                            "service.list": {
-                                "effect": "read",
-                                "process_authority": False,
-                            },
-                            "service.health": {
-                                "effect": "loopback_read",
-                                "process_authority": False,
-                                "redirects_followed": False,
-                            },
-                            "service.process_status": {
-                                "effect": "read",
-                                "lifecycle_authority": False,
-                                "ownership_scope": "supervisor_instance",
-                            },
-                            "service.process_logs": {
-                                "effect": "read",
-                                "lifecycle_authority": False,
-                                "tail_limit_bytes": 16384,
-                            },
-                            "service.start": {
-                                "effect": "owned_process_mutation",
-                                "ownership_required": "mechanic_child",
-                                "health_transition_required": True,
-                                "health_generation_bound": False,
-                            },
-                            "service.stop": {
-                                "effect": "owned_process_mutation",
-                                "ownership_required": "mechanic_child",
-                                "exact_generation_required": True,
-                            },
-                            "service.restart": {
-                                "effect": "owned_process_mutation",
-                                "ownership_required": "mechanic_child",
-                                "exact_generation_required": True,
-                                "health_transition_required": True,
-                            },
-                            "receipt.recent": {
-                                "effect": "read",
-                                "raw_full_output_persisted": False,
-                            },
-                            "receipt.inspect": {
-                                "effect": "read",
-                                "raw_full_output_persisted": False,
-                            },
-                            "task.list": {
-                                "effect": "read",
-                                "enabled": self.api.tasks is not None,
-                            },
-                            "task.acquire": {
-                                "effect": "worktree_mutation",
-                                "enabled": self.api.tasks is not None,
-                                "caller_supplies_worktree_path": False,
-                                "caller_supplies_branch_name": False,
-                                "durable_receipt": True,
-                            },
-                            "task.mutate": {
-                                "effect": "bounded_worktree_mutation",
-                                "enabled": self.api.tasks is not None,
-                                "authority_tuple": ["task_id", "holder_id", "authority_generation"],
-                                "durable_receipt": True,
-                            },
-                            "task.renew": {
-                                "effect": "lease_mutation",
-                                "enabled": self.api.tasks is not None,
-                                "authority_tuple": ["task_id", "holder_id", "authority_generation"],
-                                "durable_receipt": True,
-                            },
-                            "task.extend_budget": {
-                                "effect": "budget_mutation",
-                                "enabled": self.api.tasks is not None,
-                                "authority_tuple": ["task_id", "holder_id", "authority_generation"],
-                                "durable_receipt": True,
-                            },
-                            "task.refresh_base": {
-                                "effect": "bounded_git_rebase",
-                                "enabled": self.api.tasks is not None,
-                                "authority_tuple": ["task_id", "holder_id", "authority_generation"],
-                                "caller_supplies_git_argv": False,
-                                "conflicts_auto_resolved": False,
-                                "durable_receipt": True,
-                            },
-                            "task.abort_refresh": {
-                                "effect": "bounded_git_rebase_abort",
-                                "enabled": self.api.tasks is not None,
-                                "authority_tuple": ["task_id", "holder_id", "authority_generation"],
-                                "durable_receipt": True,
-                            },
-                            "deployment.status": {
-                                "effect": "read",
-                                "enabled": self.api.deployments is not None,
-                            },
-                            "deployment.candidate": {
-                                "effect": "owned_service_deployment",
-                                "enabled": self.api.deployments is not None,
-                                "candidate_source": "clean_checkpointed_task_commit",
-                                "automatic_conflict_resolution": False,
-                                "automatic_rollback_when_lkg_exists": True,
-                                "durable_receipt": True,
-                            },
-                            "deployment.promote": {
-                                "effect": "last_known_good_mutation",
-                                "enabled": self.api.deployments is not None,
-                                "exact_generation_required": True,
-                                "health_verification_required": True,
-                                "durable_receipt": True,
-                            },
-                            "deployment.rollback": {
-                                "effect": "owned_service_deployment",
-                                "enabled": self.api.deployments is not None,
-                                "exact_generation_required_when_running": True,
-                                "durable_receipt": True,
-                            },
-                            "deployment.reconcile": {
-                                "effect": "read_with_durable_observation",
-                                "enabled": self.api.deployments is not None,
-                                "process_adoption": False,
-                                "active_checkout_cleanup": False,
-                                "durable_receipt": True,
-                            },
-                            "deployment.cleanup_retry": {
-                                "effect": "bounded_checkout_cleanup",
-                                "enabled": self.api.deployments is not None,
-                                "safe_basis_required": True,
-                                "active_checkout_preserved": True,
-                                "durable_receipt": True,
-                            },
-                        },
+                        "operations": operation_capabilities(self.api),
                     },
                 )
                 return

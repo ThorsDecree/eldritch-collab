@@ -310,6 +310,30 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Record a seat's GameTable concession without erasing game history.",
     ),
     Capability(
+        "dev.capabilities",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect the live House Mechanic contract and deployment-scoped mutation projection.",
+    ),
+    Capability(
+        "dev.process",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Inspect House Mechanic service process and optional health evidence without lifecycle authority.",
+    ),
+    Capability(
+        "dev.logs",
+        EffectClass.PERCEIVE,
+        Decision.ALLOW,
+        "Read bounded House Mechanic process logs or durable development receipts.",
+    ),
+    Capability(
+        "dev.call",
+        EffectClass.ACT,
+        Decision.ALLOW,
+        "Dispatch one live-advertised, deployment-allowed House Mechanic mutation.",
+    ),
+    Capability(
         "daemon_bridge.status",
         EffectClass.PERCEIVE,
         Decision.ALLOW,
