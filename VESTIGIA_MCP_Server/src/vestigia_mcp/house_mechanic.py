@@ -225,9 +225,10 @@ class HouseMechanicClient:
                 if isinstance(error, dict)
                 else ""
             )
+            code_part = f" [{code}]" if code else ""
             suffix = f": {message}" if message else ""
             raise HouseMechanicClientError(
-                f"House Mechanic returned HTTP {status}{suffix}",
+                f"House Mechanic returned HTTP {status}{code_part}{suffix}",
                 status=status,
                 code=code,
             )
