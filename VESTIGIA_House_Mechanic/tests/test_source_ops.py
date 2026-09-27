@@ -40,7 +40,7 @@ def _setup(tmp_path: Path, *, now=None):
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.name", "Fixture")
     _git(repo, "config", "user.email", "fixture@example.invalid")
-    (repo / "hello.txt").write_text("one\n", encoding="utf-8")
+    (repo / "hello.txt").write_bytes(b"one\\n")
     _git(repo, "add", "hello.txt")
     _git(repo, "commit", "-m", "initial")
 
@@ -95,7 +95,7 @@ def _workspace(tmp_path: Path, *, now=None):
 def test_read_returns_utf8_text_hash_and_relative_path(tmp_path: Path) -> None:
     task, _, workspace, _ = _workspace(tmp_path)
     worktree = Path(task.worktree_path)
-    (worktree / "second.txt").write_text("two\n", encoding="utf-8")
+    (worktree / "second.txt").write_bytes(b"two\\n")
 
     result = workspace.read(
         task_id=task.task_id,
