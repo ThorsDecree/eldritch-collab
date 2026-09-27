@@ -539,6 +539,46 @@ def _modify_create_proposal(tmp_path: Path):
     return task, supervisor, workspace, SourceOpError, worktree, before, iteration_id, result
 
 
+def test_diff_refuses_rendered_preview_above_configured_limit(tmp_path: Path) -> None:
+    _, supervisor = _setup(tmp_path)
+    task = supervisor.acquire(
+        repository_id="fixture",
+        holder_id="vestigia",
+        purpose="bounded diff preview",
+    )
+    _, PatchProposalStore, TaskSourceWorkspace = _source_ops()
+    workspace = TaskSourceWorkspace(
+        tasks=supervisor,
+        proposal_store=PatchProposalStore(tmp_path / "proposals"),
+        max_diff_bytes=64,
+    )
+    worktree = Path(task.worktree_path)
+    original = "a" * 256 + "\n"
+    (worktree / "long-line.txt").write_text(original, encoding="utf-8")
+    iteration = _begin(supervisor, task)
+
+    with pytest.raises(SourceOpError) as exc:
+        workspace.diff(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id=iteration,
+            mutations=[
+                {
+                    "op": "modify",
+                    "path": "long-line.txt",
+                    "expected_sha256": hashlib.sha256(
+                        original.encode("utf-8")
+                    ).hexdigest(),
+                    "old": "a",
+                    "new": "b",
+                }
+            ],
+        )
+
+    assert exc.value.code == "diff_too_large"
+
+
 def test_patch_applies_exact_modify_and_create_proposal(tmp_path: Path) -> None:
     task, _, workspace, _, worktree, before, iteration_id, proposal = _modify_create_proposal(tmp_path)
 
