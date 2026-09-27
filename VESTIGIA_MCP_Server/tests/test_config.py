@@ -173,7 +173,7 @@ def test_house_mechanic_default_response_budget_covers_source_proposal_preview(
 
     settings = Settings.from_env()
 
-    assert settings.house_mechanic_max_response_bytes == 16 * 1024 * 1024
+    assert settings.house_mechanic_max_response_bytes == 32 * 1024 * 1024
 
 
 def test_house_mechanic_settings_are_loopback_and_explicit(monkeypatch) -> None:
