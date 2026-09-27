@@ -17,11 +17,13 @@ from .processes import ProcessRegistry
 from .receipts import ReceiptStore
 from .runner import run_recipe
 from .service_model import ServiceManifest
+from .source_ops import PatchProposalStore, SourceOpError, TaskSourceWorkspace
 from .tasking import RepositoryManifest, TaskError, TaskLedger, TaskSupervisor, WorktreeManager
 
 
 PROTOCOL = "vestigia.house-mechanic-api.v0.9"
 MAX_REQUEST_BYTES = 16_384
+MAX_SOURCE_DIFF_REQUEST_BYTES = 5 * 1024 * 1024
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _GENERATION_ID = re.compile(r"^hm_proc_[0-9a-f]{32}$")
 
@@ -185,6 +187,105 @@ def operation_capabilities(api: "HouseMechanicServer") -> dict[str, dict[str, An
                 required=("receipt_id",),
             ),
             "raw_full_output_persisted": False,
+        },
+        "task.read": {
+            "effect": "bounded_worktree_read",
+            "mutation": False,
+            "method": "POST",
+            "path": "/v1/task-read",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "authority_generation": _INTEGER,
+                    "paths": {
+                        "type": "array",
+                        "items": _STRING,
+                        "minItems": 1,
+                        "maxItems": 32,
+                    },
+                },
+                required=("task_id", "holder_id", "authority_generation", "paths"),
+            ),
+            "enabled": task_enabled,
+            "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+            "durable_receipt": True,
+        },
+        "task.diff": {
+            "effect": "bounded_worktree_patch_proposal",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/task-diff",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "authority_generation": _INTEGER,
+                    "iteration_id": _STRING,
+                    "mutations": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 32,
+                        "items": {
+                            "oneOf": [
+                                _object_schema(
+                                    {
+                                        "op": {"type": "string", "const": "modify"},
+                                        "path": _STRING,
+                                        "expected_sha256": _STRING,
+                                        "old": _STRING,
+                                        "new": _STRING,
+                                    },
+                                    required=("op", "path", "expected_sha256", "old", "new"),
+                                ),
+                                _object_schema(
+                                    {
+                                        "op": {"type": "string", "const": "create"},
+                                        "path": _STRING,
+                                        "expected_state": {"type": "string", "const": "absent"},
+                                        "content": _STRING,
+                                    },
+                                    required=("op", "path", "expected_state", "content"),
+                                ),
+                            ]
+                        },
+                    },
+                },
+                required=("task_id", "holder_id", "authority_generation", "iteration_id", "mutations"),
+            ),
+            "enabled": task_enabled,
+            "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+            "requires_open_iteration": True,
+            "durable_receipt": True,
+        },
+        "task.patch": {
+            "effect": "bounded_worktree_source_mutation",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/task-patch",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "authority_generation": _INTEGER,
+                    "iteration_id": _STRING,
+                    "proposal_id": _STRING,
+                    "proposal_digest": _STRING,
+                },
+                required=(
+                    "task_id",
+                    "holder_id",
+                    "authority_generation",
+                    "iteration_id",
+                    "proposal_id",
+                    "proposal_digest",
+                ),
+            ),
+            "enabled": task_enabled,
+            "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+            "requires_open_iteration": True,
+            "durable_receipt": True,
+            "atomic": True,
         },
         "task.list": {
             "effect": "read",
@@ -693,6 +794,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
 
             task_routes = {
+                "/v1/task-read": self._task_read,
+                "/v1/task-diff": self._task_diff,
+                "/v1/task-patch": self._task_patch,
                 "/v1/task-show": self._task_show,
                 "/v1/task-acquire": self._task_acquire,
                 "/v1/task-resume": self._task_resume,
@@ -1241,6 +1345,206 @@ class _Handler(BaseHTTPRequestHandler):
             self._raise_deployment(exc)
         self._persist_deployment(request_id=request_id, result=result)
 
+    def _require_source_workspace(self) -> TaskSourceWorkspace:
+        if self.api.source_workspace is None:
+            raise HouseMechanicAPIError(
+                503,
+                "tasking_not_configured",
+                "House Mechanic task source operations are not configured for this supervisor",
+            )
+        return self.api.source_workspace
+
+    @staticmethod
+    def _raise_source(exc: SourceOpError) -> None:
+        if exc.code in {"proposal_not_found", "file_missing"}:
+            status = 404
+        elif exc.code.startswith("invalid_") or exc.code in {
+            "unsafe_path",
+            "too_many_files",
+        }:
+            status = 400
+        else:
+            status = 409
+        raise HouseMechanicAPIError(status, exc.code, exc.message)
+
+    def _persist_source_operation(
+        self,
+        *,
+        request_id: str,
+        operation: str,
+        evidence: dict[str, Any],
+        response: dict[str, Any],
+    ) -> None:
+        try:
+            durable = self.api.receipts.append_source_operation(
+                request_id=request_id,
+                operation=operation,
+                evidence=evidence,
+            )
+        except Exception:
+            self._send(
+                500,
+                {
+                    "protocol": PROTOCOL,
+                    "request_id": request_id,
+                    "action_occurred": operation != "task.read",
+                    "receipt_persisted": False,
+                    **response,
+                    "error": {
+                        "code": "receipt_persistence_failed",
+                        "message": "source operation completed but durable receipt persistence failed",
+                    },
+                },
+            )
+            return
+        self._send(
+            200,
+            {
+                "protocol": PROTOCOL,
+                "request_id": request_id,
+                "action_occurred": operation != "task.read",
+                "receipt_persisted": True,
+                "durable_receipt_id": durable["receipt_id"],
+                **response,
+            },
+        )
+
+    def _task_read(self, request_id: str) -> None:
+        workspace = self._require_source_workspace()
+        payload = self._json_body()
+        self._require_exact_fields(
+            payload,
+            {"task_id", "holder_id", "authority_generation", "paths"},
+        )
+        try:
+            result = workspace.read(
+                task_id=str(payload.get("task_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+                authority_generation=int(payload.get("authority_generation")),
+                paths=payload.get("paths"),
+            )
+        except (TaskError, SourceOpError, TypeError, ValueError) as exc:
+            if isinstance(exc, TaskError):
+                self._raise_task(exc)
+            if isinstance(exc, SourceOpError):
+                self._raise_source(exc)
+            raise HouseMechanicAPIError(400, "invalid_request", "task.read request fields are invalid")
+        evidence = {
+            "task_id": result["task_id"],
+            "authority_generation": result["authority_generation"],
+            "paths": [item["path"] for item in result["items"]],
+            "items": [
+                {
+                    "path": item["path"],
+                    "size_bytes": item["size_bytes"],
+                    "sha256": item["sha256"],
+                    "encoding": item["encoding"],
+                    "truncated": item["truncated"],
+                }
+                for item in result["items"]
+            ],
+        }
+        self._persist_source_operation(
+            request_id=request_id,
+            operation="task.read",
+            evidence=evidence,
+            response=result,
+        )
+
+    def _task_diff(self, request_id: str) -> None:
+        workspace = self._require_source_workspace()
+        payload = self._json_body(max_bytes=MAX_SOURCE_DIFF_REQUEST_BYTES)
+        self._require_exact_fields(
+            payload,
+            {"task_id", "holder_id", "authority_generation", "iteration_id", "mutations"},
+        )
+        try:
+            result = workspace.diff(
+                task_id=str(payload.get("task_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+                authority_generation=int(payload.get("authority_generation")),
+                iteration_id=str(payload.get("iteration_id") or ""),
+                mutations=payload.get("mutations"),
+            )
+            proposal = workspace.proposal_store.get(result["proposal_id"])
+        except (TaskError, SourceOpError, TypeError, ValueError) as exc:
+            if isinstance(exc, TaskError):
+                self._raise_task(exc)
+            if isinstance(exc, SourceOpError):
+                self._raise_source(exc)
+            raise HouseMechanicAPIError(400, "invalid_request", "task.diff request fields are invalid")
+        evidence = {
+            "task_id": proposal.task_id,
+            "authority_generation": proposal.authority_generation,
+            "iteration_id": proposal.iteration_id,
+            "proposal_id": proposal.proposal_id,
+            "proposal_digest": proposal.proposal_digest,
+            "state": proposal.state,
+            "paths": [item["path"] for item in proposal.mutations],
+            "mutations": [
+                {
+                    "op": item["op"],
+                    "path": item["path"],
+                    "pre_state": item["pre_state"],
+                }
+                for item in proposal.mutations
+            ],
+            "unified_diff_sha256": __import__("hashlib").sha256(
+                proposal.unified_diff.encode("utf-8")
+            ).hexdigest(),
+        }
+        self._persist_source_operation(
+            request_id=request_id,
+            operation="task.diff",
+            evidence=evidence,
+            response=result,
+        )
+
+    def _task_patch(self, request_id: str) -> None:
+        workspace = self._require_source_workspace()
+        payload = self._json_body()
+        self._require_exact_fields(
+            payload,
+            {
+                "task_id",
+                "holder_id",
+                "authority_generation",
+                "iteration_id",
+                "proposal_id",
+                "proposal_digest",
+            },
+        )
+        try:
+            result = workspace.patch(
+                task_id=str(payload.get("task_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+                authority_generation=int(payload.get("authority_generation")),
+                iteration_id=str(payload.get("iteration_id") or ""),
+                proposal_id=str(payload.get("proposal_id") or ""),
+                proposal_digest=str(payload.get("proposal_digest") or ""),
+            )
+        except (TaskError, SourceOpError, TypeError, ValueError) as exc:
+            if isinstance(exc, TaskError):
+                self._raise_task(exc)
+            if isinstance(exc, SourceOpError):
+                self._raise_source(exc)
+            raise HouseMechanicAPIError(400, "invalid_request", "task.patch request fields are invalid")
+        evidence = {
+            "task_id": result["task_id"],
+            "authority_generation": result["authority_generation"],
+            "iteration_id": result["iteration_id"],
+            "proposal_id": result["proposal_id"],
+            "proposal_digest": result["proposal_digest"],
+            "state": result["state"],
+            "mutations": result["mutations"],
+        }
+        self._persist_source_operation(
+            request_id=request_id,
+            operation="task.patch",
+            evidence=evidence,
+            response=result,
+        )
+
     def _require_tasks(self) -> TaskSupervisor:
         if self.api.tasks is None:
             raise HouseMechanicAPIError(
@@ -1724,7 +2028,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not hmac.compare_digest(supplied, self.api.token):
             raise HouseMechanicAPIError(401, "unauthorized", "bearer token rejected")
 
-    def _json_body(self) -> dict[str, Any]:
+    def _json_body(self, *, max_bytes: int = MAX_REQUEST_BYTES) -> dict[str, Any]:
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
             raise HouseMechanicAPIError(
@@ -1740,7 +2044,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "invalid_request",
                 "invalid Content-Length",
             ) from exc
-        if length < 0 or length > MAX_REQUEST_BYTES:
+        if length < 0 or length > max_bytes:
             raise HouseMechanicAPIError(
                 413,
                 "request_too_large",
@@ -1873,6 +2177,7 @@ class HouseMechanicServer(ThreadingHTTPServer):
             )
         if repositories is None:
             self.tasks = None
+            self.source_workspace = None
             self.deployments = None
         else:
             task_dir = task_state_dir or (receipt_file.parent / "task_state")
@@ -1883,6 +2188,10 @@ class HouseMechanicServer(ThreadingHTTPServer):
                     repositories=repositories,
                     worktree_root=worktree_root,
                 ),
+            )
+            self.source_workspace = TaskSourceWorkspace(
+                tasks=self.tasks,
+                proposal_store=PatchProposalStore(task_dir / "patch_proposals"),
             )
             if any(service.deployment is not None for service in services.services.values()):
                 deployment_dir = deployment_state_dir or (receipt_file.parent / "deployment_state")
