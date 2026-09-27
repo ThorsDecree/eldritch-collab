@@ -486,3 +486,196 @@ def test_diff_enforces_file_count_file_size_and_total_payload_limits(tmp_path: P
             ],
         )
     assert patch_big.value.code == "patch_too_large"
+
+
+def _modify_create_proposal(tmp_path: Path):
+    task, supervisor, workspace, SourceOpError = _workspace(tmp_path)
+    worktree = Path(task.worktree_path)
+    before = (worktree / "hello.txt").read_bytes()
+    text = before.decode("utf-8")
+    iteration_id = _begin_iteration(supervisor, task)
+    result = workspace.diff(
+        task_id=task.task_id,
+        holder_id="vestigia",
+        authority_generation=1,
+        iteration_id=iteration_id,
+        mutations=[
+            {
+                "op": "modify",
+                "path": "hello.txt",
+                "expected_sha256": hashlib.sha256(before).hexdigest(),
+                "old": text,
+                "new": text.replace("one", "ONE", 1),
+            },
+            {
+                "op": "create",
+                "path": "Vesti/new_machine.py",
+                "expected_state": "absent",
+                "content": "print('hello from the workbench')\n",
+            },
+        ],
+    )
+    return task, supervisor, workspace, SourceOpError, worktree, before, iteration_id, result
+
+
+def test_patch_applies_exact_modify_and_create_proposal(tmp_path: Path) -> None:
+    task, _, workspace, _, worktree, before, iteration_id, proposal = _modify_create_proposal(tmp_path)
+
+    result = workspace.patch(
+        task_id=task.task_id,
+        holder_id="vestigia",
+        authority_generation=1,
+        iteration_id=iteration_id,
+        proposal_id=proposal["proposal_id"],
+        proposal_digest=proposal["proposal_digest"],
+    )
+
+    assert (worktree / "hello.txt").read_text(encoding="utf-8").startswith("ONE")
+    assert (worktree / "Vesti" / "new_machine.py").read_text(encoding="utf-8") == "print('hello from the workbench')\n"
+    assert [item["path"] for item in result["mutations"]] == ["hello.txt", "Vesti/new_machine.py"]
+    assert result["mutations"][0]["pre_sha256"] == hashlib.sha256(before).hexdigest()
+    assert len(result["mutations"][0]["post_sha256"]) == 64
+    assert result["mutations"][1]["pre_state"] == "absent"
+    assert workspace.proposal_store.get(proposal["proposal_id"]).state == "consumed"
+
+
+def test_patch_refuses_digest_mismatch(tmp_path: Path) -> None:
+    task, _, workspace, SourceOpError, worktree, before, iteration_id, proposal = _modify_create_proposal(tmp_path)
+
+    with pytest.raises(SourceOpError) as exc:
+        workspace.patch(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id=iteration_id,
+            proposal_id=proposal["proposal_id"],
+            proposal_digest="0" * 64,
+        )
+    assert exc.value.code == "proposal_digest_mismatch"
+    assert (worktree / "hello.txt").read_bytes() == before
+    assert not (worktree / "Vesti" / "new_machine.py").exists()
+
+
+def test_patch_refuses_consumed_proposal_replay(tmp_path: Path) -> None:
+    task, _, workspace, SourceOpError, _, _, iteration_id, proposal = _modify_create_proposal(tmp_path)
+
+    workspace.patch(
+        task_id=task.task_id,
+        holder_id="vestigia",
+        authority_generation=1,
+        iteration_id=iteration_id,
+        proposal_id=proposal["proposal_id"],
+        proposal_digest=proposal["proposal_digest"],
+    )
+
+    with pytest.raises(SourceOpError) as exc:
+        workspace.patch(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id=iteration_id,
+            proposal_id=proposal["proposal_id"],
+            proposal_digest=proposal["proposal_digest"],
+        )
+    assert exc.value.code == "proposal_consumed"
+
+
+def test_patch_refuses_changed_prestate_after_diff(tmp_path: Path) -> None:
+    task, _, workspace, SourceOpError, worktree, _, iteration_id, proposal = _modify_create_proposal(tmp_path)
+    (worktree / "hello.txt").write_text("somebody else changed this\n", encoding="utf-8")
+
+    with pytest.raises(SourceOpError) as exc:
+        workspace.patch(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id=iteration_id,
+            proposal_id=proposal["proposal_id"],
+            proposal_digest=proposal["proposal_digest"],
+        )
+    assert exc.value.code == "proposal_stale"
+    assert not (worktree / "Vesti" / "new_machine.py").exists()
+
+
+def test_patch_refuses_generation_or_iteration_drift(tmp_path: Path) -> None:
+    task, supervisor, workspace, _, _, _, iteration_id, proposal = _modify_create_proposal(tmp_path)
+
+    with pytest.raises(TaskError) as stale:
+        workspace.patch(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=2,
+            iteration_id=iteration_id,
+            proposal_id=proposal["proposal_id"],
+            proposal_digest=proposal["proposal_digest"],
+        )
+    assert stale.value.code == "stale_authority"
+
+    supervisor.checkpoint_iteration(
+        task_id=task.task_id,
+        holder_id="vestigia",
+        authority_generation=1,
+        iteration_id=iteration_id,
+        outcome="not_run",
+    )
+    with pytest.raises(TaskError) as closed:
+        workspace.patch(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id=iteration_id,
+            proposal_id=proposal["proposal_id"],
+            proposal_digest=proposal["proposal_digest"],
+        )
+    assert closed.value.code == "iteration_required"
+
+
+def test_patch_rolls_back_all_targets_on_mid_apply_failure(tmp_path: Path, monkeypatch) -> None:
+    task, _, workspace, SourceOpError, worktree, before, iteration_id, proposal = _modify_create_proposal(tmp_path)
+    original_replace = workspace._replace_file
+    calls = {"count": 0}
+
+    def fail_second(source: Path, target: Path) -> None:
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise OSError("injected second-file failure")
+        original_replace(source, target)
+
+    monkeypatch.setattr(workspace, "_replace_file", fail_second)
+
+    with pytest.raises(SourceOpError) as exc:
+        workspace.patch(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id=iteration_id,
+            proposal_id=proposal["proposal_id"],
+            proposal_digest=proposal["proposal_digest"],
+        )
+    assert exc.value.code == "atomic_apply_failed"
+    assert (worktree / "hello.txt").read_bytes() == before
+    assert not (worktree / "Vesti" / "new_machine.py").exists()
+    assert workspace.proposal_store.get(proposal["proposal_id"]).state == "ready"
+
+
+def test_checkpoint_tracks_files_created_by_task_patch(tmp_path: Path) -> None:
+    task, supervisor, workspace, _, worktree, _, iteration_id, proposal = _modify_create_proposal(tmp_path)
+
+    workspace.patch(
+        task_id=task.task_id,
+        holder_id="vestigia",
+        authority_generation=1,
+        iteration_id=iteration_id,
+        proposal_id=proposal["proposal_id"],
+        proposal_digest=proposal["proposal_digest"],
+    )
+    _, commit, _ = supervisor.checkpoint_iteration(
+        task_id=task.task_id,
+        holder_id="vestigia",
+        authority_generation=1,
+        iteration_id=iteration_id,
+        outcome="pass",
+    )
+
+    assert commit is not None
+    assert _git(worktree, "ls-files", "Vesti/new_machine.py") == "Vesti/new_machine.py"
