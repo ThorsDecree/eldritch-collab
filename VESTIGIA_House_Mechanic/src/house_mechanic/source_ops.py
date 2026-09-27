@@ -111,6 +111,7 @@ class TaskSourceWorkspace:
         self.max_file_bytes = int(max_file_bytes)
         self.max_patch_bytes = int(max_patch_bytes)
         self.max_files = int(max_files)
+        self._lock = threading.RLock()
 
     @staticmethod
     def _relative_parts(raw: str) -> tuple[str, ...]:
@@ -358,3 +359,249 @@ class TaskSourceWorkspace:
             "state": proposal.state,
             "unified_diff": proposal.unified_diff,
         }
+
+    @staticmethod
+    def _proposal_content_digest(proposal: PatchProposal) -> str:
+        basis = {
+            "schema_version": PATCH_PROPOSAL_SCHEMA,
+            "proposal_id": proposal.proposal_id,
+            "task_id": proposal.task_id,
+            "holder_id": proposal.holder_id,
+            "authority_generation": proposal.authority_generation,
+            "iteration_id": proposal.iteration_id,
+            "mutations": proposal.mutations,
+            "unified_diff": proposal.unified_diff,
+            "created_at": proposal.created_at,
+        }
+        canonical = json.dumps(basis, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _write_temp(parent: Path, name: str, data: bytes) -> Path:
+        temp = parent / f".{name}.{uuid.uuid4().hex}.hm-tmp"
+        with temp.open("wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return temp
+
+    @staticmethod
+    def _replace_file(source: Path, target: Path) -> None:
+        os.replace(source, target)
+
+    def _restore_path(self, target: Path, pre_bytes: bytes | None) -> None:
+        if pre_bytes is None:
+            if target.exists():
+                if target.is_dir():
+                    raise OSError("atomic rollback target unexpectedly became a directory")
+                target.unlink()
+            return
+        restore = self._write_temp(target.parent, target.name, pre_bytes)
+        try:
+            self._replace_file(restore, target)
+        finally:
+            if restore.exists():
+                restore.unlink()
+
+    def patch(
+        self,
+        *,
+        task_id: str,
+        holder_id: str,
+        authority_generation: int,
+        iteration_id: str,
+        proposal_id: str,
+        proposal_digest: str,
+    ) -> dict[str, Any]:
+        with self._lock:
+            record, worktree = self.tasks.authorized_worktree(
+                task_id=task_id,
+                holder_id=holder_id,
+                authority_generation=authority_generation,
+                iteration_id=iteration_id,
+                require_open_iteration=True,
+            )
+            proposal = self.proposal_store.get(proposal_id)
+            if proposal.state == "consumed":
+                raise SourceOpError("proposal_consumed", "patch proposal has already been applied")
+            if proposal.state != "ready":
+                raise SourceOpError("proposal_stale", "patch proposal is not ready for application")
+            if proposal.proposal_digest != proposal_digest:
+                raise SourceOpError("proposal_digest_mismatch", "proposal digest does not match")
+            if self._proposal_content_digest(proposal) != proposal.proposal_digest:
+                raise SourceOpError("proposal_digest_mismatch", "stored proposal contents do not match its digest")
+            if (
+                proposal.task_id != record.task_id
+                or proposal.holder_id != record.holder_id
+                or proposal.authority_generation != record.authority_generation
+                or proposal.iteration_id != iteration_id
+            ):
+                raise SourceOpError("proposal_stale", "proposal authority binding is no longer current")
+
+            planned: list[dict[str, Any]] = []
+            total_payload = 0
+            for mutation in proposal.mutations:
+                op = mutation["op"]
+                relative, target = self._resolve_candidate(worktree, mutation["path"])
+                if relative != mutation["path"]:
+                    raise SourceOpError("proposal_stale", "proposal path no longer normalizes identically")
+                if op == "modify":
+                    if not target.is_file():
+                        raise SourceOpError("proposal_stale", "modified source file is no longer present")
+                    data, current = self._read_text_bytes(target)
+                    actual = hashlib.sha256(data).hexdigest()
+                    if actual != mutation["pre_state"]["sha256"] or actual != mutation["expected_sha256"]:
+                        raise SourceOpError("proposal_stale", "modified source file pre-state changed after preview")
+                    old = mutation["old"]
+                    if current.count(old) != 1:
+                        raise SourceOpError("proposal_stale", "exact old text changed after preview")
+                    resulting = current.replace(old, mutation["new"], 1).encode("utf-8")
+                    if len(resulting) > self.max_file_bytes:
+                        raise SourceOpError("file_too_large", "resulting source file exceeds the configured byte ceiling")
+                    total_payload += len(old.encode("utf-8")) + len(mutation["new"].encode("utf-8"))
+                    planned.append(
+                        {
+                            "op": "modify",
+                            "path": relative,
+                            "target": target,
+                            "pre_bytes": data,
+                            "post_bytes": resulting,
+                            "pre_sha256": actual,
+                        }
+                    )
+                elif op == "create":
+                    if target.exists():
+                        raise SourceOpError("proposal_stale", "create target no longer has absent pre-state")
+                    content = mutation["content"].encode("utf-8")
+                    if len(content) > self.max_file_bytes:
+                        raise SourceOpError("file_too_large", "resulting source file exceeds the configured byte ceiling")
+                    total_payload += len(content)
+                    planned.append(
+                        {
+                            "op": "create",
+                            "path": relative,
+                            "target": target,
+                            "pre_bytes": None,
+                            "post_bytes": content,
+                            "pre_sha256": None,
+                        }
+                    )
+                else:
+                    raise SourceOpError("proposal_stale", "proposal contains an unsupported mutation")
+                if total_payload > self.max_patch_bytes:
+                    raise SourceOpError("patch_too_large", "patch proposal exceeds the configured byte ceiling")
+
+            staged: list[tuple[dict[str, Any], Path]] = []
+            created_dirs: set[Path] = set()
+            touched: list[dict[str, Any]] = []
+            try:
+                for item in planned:
+                    target: Path = item["target"]
+                    missing: list[Path] = []
+                    cursor = target.parent
+                    root = worktree.resolve()
+                    while cursor != root and not cursor.exists():
+                        missing.append(cursor)
+                        cursor = cursor.parent
+                    if cursor != root:
+                        try:
+                            cursor.resolve(strict=False).relative_to(root)
+                        except ValueError as exc:
+                            raise SourceOpError("unsafe_path", "source parent escaped the task worktree") from exc
+                    for directory in reversed(missing):
+                        directory.mkdir()
+                        created_dirs.add(directory)
+                    relative, checked = self._resolve_candidate(worktree, item["path"])
+                    if checked != target or relative != item["path"]:
+                        raise SourceOpError("proposal_stale", "source path changed during patch staging")
+                    if item["op"] == "create" and target.exists():
+                        raise SourceOpError("proposal_stale", "create target appeared during patch staging")
+                    if item["op"] == "modify":
+                        current = target.read_bytes()
+                        if hashlib.sha256(current).hexdigest() != item["pre_sha256"]:
+                            raise SourceOpError("proposal_stale", "modified source file changed during patch staging")
+                    temp = self._write_temp(target.parent, target.name, item["post_bytes"])
+                    staged.append((item, temp))
+
+                for item, temp in staged:
+                    target = item["target"]
+                    self._replace_file(temp, target)
+                    touched.append(item)
+
+                proposal.state = "consumed"
+                proposal.consumed_at = datetime.now(UTC).isoformat()
+                self.proposal_store.save(proposal)
+            except SourceOpError:
+                rollback_errors: list[str] = []
+                for item in reversed(touched):
+                    try:
+                        self._restore_path(item["target"], item["pre_bytes"])
+                    except Exception as exc:  # pragma: no cover - catastrophic disk failure
+                        rollback_errors.append(type(exc).__name__)
+                for _, temp in staged:
+                    try:
+                        if temp.exists():
+                            temp.unlink()
+                    except OSError:
+                        pass
+                for directory in sorted(created_dirs, key=lambda p: len(p.parts), reverse=True):
+                    try:
+                        directory.rmdir()
+                    except OSError:
+                        pass
+                if touched and rollback_errors:
+                    raise SourceOpError("atomic_rollback_failed", "patch failed and rollback could not fully restore pre-state")
+                raise
+            except Exception as exc:
+                rollback_errors: list[str] = []
+                for item in reversed(touched):
+                    try:
+                        self._restore_path(item["target"], item["pre_bytes"])
+                    except Exception as rollback_exc:  # pragma: no cover - catastrophic disk failure
+                        rollback_errors.append(type(rollback_exc).__name__)
+                for _, temp in staged:
+                    try:
+                        if temp.exists():
+                            temp.unlink()
+                    except OSError:
+                        pass
+                for directory in sorted(created_dirs, key=lambda p: len(p.parts), reverse=True):
+                    try:
+                        directory.rmdir()
+                    except OSError:
+                        pass
+                if rollback_errors:
+                    raise SourceOpError("atomic_rollback_failed", "patch failed and rollback could not fully restore pre-state") from exc
+                raise SourceOpError("atomic_apply_failed", "patch application failed; all touched paths were restored") from exc
+
+            results: list[dict[str, Any]] = []
+            for item in planned:
+                post_sha = hashlib.sha256(item["post_bytes"]).hexdigest()
+                if item["op"] == "modify":
+                    results.append(
+                        {
+                            "op": "modify",
+                            "path": item["path"],
+                            "pre_sha256": item["pre_sha256"],
+                            "post_sha256": post_sha,
+                        }
+                    )
+                else:
+                    results.append(
+                        {
+                            "op": "create",
+                            "path": item["path"],
+                            "pre_state": "absent",
+                            "post_sha256": post_sha,
+                        }
+                    )
+            return {
+                "task_id": record.task_id,
+                "authority_generation": record.authority_generation,
+                "iteration_id": iteration_id,
+                "proposal_id": proposal.proposal_id,
+                "proposal_digest": proposal.proposal_digest,
+                "state": proposal.state,
+                "mutations": results,
+            }
+
