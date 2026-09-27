@@ -393,3 +393,252 @@ def test_task_api_renews_extends_budget_and_refreshes_base(tmp_path: Path) -> No
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_task_source_operations_are_fixed_typed_routes_with_receipts(tmp_path: Path) -> None:
+    server, thread, receipt_file = _server(tmp_path)
+    port = server.server_address[1]
+    try:
+        status, caps = _request(port, "GET", "/v1/capabilities")
+        assert status == 200
+        operations = caps["operations"]
+
+        read_meta = operations["task.read"]
+        assert read_meta["enabled"] is True
+        assert read_meta["mutation"] is False
+        assert read_meta["effect"] == "bounded_worktree_read"
+        assert read_meta["method"] == "POST"
+        assert read_meta["path"] == "/v1/task-read"
+        assert read_meta["input_schema"]["additionalProperties"] is False
+        assert set(read_meta["input_schema"]["required"]) == {
+            "task_id", "holder_id", "authority_generation", "paths"
+        }
+
+        diff_meta = operations["task.diff"]
+        assert diff_meta["enabled"] is True
+        assert diff_meta["mutation"] is True
+        assert diff_meta["effect"] == "bounded_worktree_patch_proposal"
+        assert diff_meta["path"] == "/v1/task-diff"
+        assert diff_meta["input_schema"]["additionalProperties"] is False
+
+        patch_meta = operations["task.patch"]
+        assert patch_meta["enabled"] is True
+        assert patch_meta["mutation"] is True
+        assert patch_meta["effect"] == "bounded_worktree_source_mutation"
+        assert patch_meta["path"] == "/v1/task-patch"
+        assert patch_meta["input_schema"]["additionalProperties"] is False
+
+        _, acquired = _request(
+            port,
+            "POST",
+            "/v1/task-acquire",
+            {
+                "repository_id": "fixture",
+                "holder_id": "vestigia",
+                "purpose": "source api",
+                "iteration_limit": 2,
+            },
+        )
+        task = acquired["task"]
+        task_id = task["task_id"]
+        worktree = Path(task["worktree_path"])
+
+        status, read = _request(
+            port,
+            "POST",
+            "/v1/task-read",
+            {
+                "task_id": task_id,
+                "holder_id": "vestigia",
+                "authority_generation": 1,
+                "paths": ["hello.txt"],
+            },
+        )
+        assert status == 200
+        assert read["receipt_persisted"] is True
+        assert read["items"][0]["path"] == "hello.txt"
+        assert read["items"][0]["text"] == (worktree / "hello.txt").read_text(encoding="utf-8")
+
+        status, begun = _request(
+            port,
+            "POST",
+            "/v1/iteration-begin",
+            {
+                "task_id": task_id,
+                "holder_id": "vestigia",
+                "authority_generation": 1,
+            },
+        )
+        assert status == 200
+        iteration_id = begun["task"]["current_iteration_id"]
+        before = (worktree / "hello.txt").read_bytes()
+        before_text = before.decode("utf-8")
+        import hashlib
+
+        status, diff = _request(
+            port,
+            "POST",
+            "/v1/task-diff",
+            {
+                "task_id": task_id,
+                "holder_id": "vestigia",
+                "authority_generation": 1,
+                "iteration_id": iteration_id,
+                "mutations": [
+                    {
+                        "op": "modify",
+                        "path": "hello.txt",
+                        "expected_sha256": hashlib.sha256(before).hexdigest(),
+                        "old": before_text,
+                        "new": before_text.replace("one", "ONE", 1),
+                    },
+                    {
+                        "op": "create",
+                        "path": "Vesti/api_created.txt",
+                        "expected_state": "absent",
+                        "content": "created through task.diff\n",
+                    },
+                ],
+            },
+        )
+        assert status == 200
+        assert diff["receipt_persisted"] is True
+        assert diff["state"] == "ready"
+        assert (worktree / "hello.txt").read_bytes() == before
+        assert not (worktree / "Vesti" / "api_created.txt").exists()
+
+        status, bad = _request(
+            port,
+            "POST",
+            "/v1/task-patch",
+            {
+                "task_id": task_id,
+                "holder_id": "vestigia",
+                "authority_generation": 1,
+                "iteration_id": iteration_id,
+                "proposal_id": diff["proposal_id"],
+                "proposal_digest": "0" * 64,
+            },
+        )
+        assert status == 409
+        assert bad["error"]["code"] == "proposal_digest_mismatch"
+
+        status, patched = _request(
+            port,
+            "POST",
+            "/v1/task-patch",
+            {
+                "task_id": task_id,
+                "holder_id": "vestigia",
+                "authority_generation": 1,
+                "iteration_id": iteration_id,
+                "proposal_id": diff["proposal_id"],
+                "proposal_digest": diff["proposal_digest"],
+            },
+        )
+        assert status == 200
+        assert patched["receipt_persisted"] is True
+        assert patched["state"] == "consumed"
+        assert (worktree / "Vesti" / "api_created.txt").is_file()
+
+        rows = [
+            json.loads(line)
+            for line in receipt_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        source_rows = [row for row in rows if row["kind"] == "dev_source_operation"]
+        assert [row["evidence"]["operation"] for row in source_rows] == [
+            "task.read", "task.diff", "task.patch"
+        ]
+        read_evidence = source_rows[0]["evidence"]
+        assert read_evidence["paths"] == ["hello.txt"]
+        assert "text" not in json.dumps(read_evidence)
+        diff_evidence = source_rows[1]["evidence"]
+        assert diff_evidence["proposal_id"] == diff["proposal_id"]
+        assert diff_evidence["proposal_digest"] == diff["proposal_digest"]
+        patch_evidence = source_rows[2]["evidence"]
+        assert patch_evidence["proposal_id"] == diff["proposal_id"]
+        assert all("post_sha256" in item for item in patch_evidence["mutations"])
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_task_diff_has_larger_route_specific_request_ceiling(tmp_path: Path) -> None:
+    server, thread, _ = _server(tmp_path)
+    port = server.server_address[1]
+    try:
+        _, acquired = _request(
+            port,
+            "POST",
+            "/v1/task-acquire",
+            {
+                "repository_id": "fixture",
+                "holder_id": "vestigia",
+                "purpose": "large diff api",
+            },
+        )
+        task = acquired["task"]
+        _, begun = _request(
+            port,
+            "POST",
+            "/v1/iteration-begin",
+            {
+                "task_id": task["task_id"],
+                "holder_id": "vestigia",
+                "authority_generation": 1,
+            },
+        )
+        iteration_id = begun["task"]["current_iteration_id"]
+
+        status, large_diff = _request(
+            port,
+            "POST",
+            "/v1/task-diff",
+            {
+                "task_id": task["task_id"],
+                "holder_id": "vestigia",
+                "authority_generation": 1,
+                "iteration_id": iteration_id,
+                "mutations": [
+                    {
+                        "op": "create",
+                        "path": "Vesti/large-but-bounded.txt",
+                        "expected_state": "absent",
+                        "content": "x" * 20_000,
+                    }
+                ],
+            },
+        )
+        assert status == 200
+        assert large_diff["state"] == "ready"
+
+        status, ordinary = _request(
+            port,
+            "POST",
+            "/v1/task-show",
+            {"task_id": task["task_id"], "padding": "x" * 20_000},
+        )
+        assert status == 413
+        assert ordinary["error"]["code"] == "request_too_large"
+
+        status, oversized = _request(
+            port,
+            "POST",
+            "/v1/task-diff",
+            {
+                "task_id": task["task_id"],
+                "holder_id": "vestigia",
+                "authority_generation": 1,
+                "iteration_id": iteration_id,
+                "mutations": [],
+                "padding": "x" * (5 * 1024 * 1024),
+            },
+        )
+        assert status == 413
+        assert oversized["error"]["code"] == "request_too_large"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
