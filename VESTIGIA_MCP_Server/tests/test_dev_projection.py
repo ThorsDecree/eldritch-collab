@@ -15,7 +15,7 @@ from vestigia_mcp.server import create_server
 
 
 TOKEN = "phase5-projection-token"
-PROTOCOL = "vestigia.house-mechanic-api.v0.9"
+PROTOCOL = "vestigia.house-mechanic-api.v0.10"
 
 
 class _MechanicHandler(BaseHTTPRequestHandler):
