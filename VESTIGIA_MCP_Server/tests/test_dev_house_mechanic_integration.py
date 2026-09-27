@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
+import subprocess
 import sys
 import threading
 
 from mcp import Client
 
+import house_mechanic
 from house_mechanic.api import HouseMechanicServer
 from house_mechanic.model import load_manifest
 from house_mechanic.service_model import ServiceManifest
+from house_mechanic.tasking import load_repository_manifest
 from vestigia_mcp.config import Settings
 from vestigia_mcp.house_mechanic import DevActionFilter
 from vestigia_mcp.server import create_server
@@ -18,10 +22,30 @@ from vestigia_mcp.server import create_server
 
 TOKEN = "phase5-real-house-mechanic-token"
 
+def _git(cwd: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
 
 def _start_house_mechanic(tmp_path: Path):
     repo = tmp_path / "repo"
     repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.name", "Fixture")
+    _git(repo, "config", "user.email", "fixture@example.invalid")
+    _git(repo, "config", "core.autocrlf", "false")
+    (repo / "hello.txt").write_bytes(b"one\n")
+    _git(repo, "add", "hello.txt")
+    _git(repo, "commit", "-m", "initial")
     recipes_path = tmp_path / "recipes.json"
     recipes_path.write_text(
         json.dumps(
@@ -49,6 +73,24 @@ def _start_house_mechanic(tmp_path: Path):
         encoding="utf-8",
     )
     recipes = load_manifest(recipes_path, repo)
+    repositories_path = tmp_path / "repositories.json"
+    repositories_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "vestigia.house-mechanic-repositories.v0.1",
+                "repositories": [
+                    {
+                        "id": "fixture",
+                        "path": ".",
+                        "default_base_ref": "main",
+                        "allowed_base_refs": ["main"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    repositories = load_repository_manifest(repositories_path, repo)
     token_path = tmp_path / "house-mechanic-token"
     token_path.write_text(TOKEN + "\n", encoding="utf-8")
     receipt_file = tmp_path / "house-mechanic-receipts.jsonl"
@@ -58,6 +100,9 @@ def _start_house_mechanic(tmp_path: Path):
         services=ServiceManifest({}),
         token_file=token_path,
         receipt_file=receipt_file,
+        repositories=repositories,
+        worktree_root=tmp_path / "worktrees",
+        task_state_dir=tmp_path / "task-state",
         port=0,
     )
     thread = threading.Thread(target=mechanic.serve_forever, daemon=True)
@@ -213,6 +258,250 @@ def test_real_house_mechanic_mutation_joins_receipts_and_allowlist_can_narrow(
         ]
         assert len(run_request_ids) == 2
         assert all(value.startswith("mcp_req_") for value in run_request_ids)
+    finally:
+        mechanic.shutdown()
+        mechanic.server_close()
+        thread.join(timeout=2)
+
+
+
+def test_real_task_source_edit_loop_is_joined_and_allowlist_preserves_reads(
+    tmp_path: Path,
+) -> None:
+    mechanic, thread, token_path, _ = _start_house_mechanic(tmp_path)
+    state: dict[str, object] = {}
+
+    async def exercise() -> None:
+        wildcard = create_server(
+            _mcp_settings(
+                tmp_path,
+                port=mechanic.server_address[1],
+                token_path=token_path,
+                action_filter=DevActionFilter(mode="wildcard", actions=()),
+                suffix="source-loop",
+            )
+        )
+        async with Client(wildcard) as client:
+            caps = await client.call_tool("dev.capabilities", {})
+            assert caps.is_error is False
+            assert caps.structured_content is not None
+            assert caps.structured_content["protocol"] == "vestigia.house-mechanic-api.v0.10"
+            assert house_mechanic.__version__ == "0.12.0.dev0"
+            assert "task.read" in caps.structured_content["projected_calls"]
+            assert "task.diff" in caps.structured_content["projected_mutations"]
+            assert "task.patch" in caps.structured_content["projected_mutations"]
+
+            acquired = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.acquire",
+                    "arguments": {
+                        "repository_id": "fixture",
+                        "holder_id": "vestigia",
+                        "purpose": "prove source edit loop",
+                    },
+                },
+            )
+            assert acquired.is_error is False
+            assert acquired.structured_content is not None
+            task = acquired.structured_content["result"]["task"]
+            task_id = task["task_id"]
+            worktree = Path(task["worktree_path"])
+
+            read = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.read",
+                    "arguments": {
+                        "task_id": task_id,
+                        "holder_id": "vestigia",
+                        "authority_generation": 1,
+                        "paths": ["hello.txt"],
+                    },
+                },
+            )
+            assert read.is_error is False
+            assert read.structured_content is not None
+            read_result = read.structured_content["result"]
+            assert read_result["items"][0]["text"] == "one\n"
+            expected_hash = read_result["items"][0]["sha256"]
+            assert expected_hash == hashlib.sha256(b"one\n").hexdigest()
+
+            begun = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "iteration.begin",
+                    "arguments": {
+                        "task_id": task_id,
+                        "holder_id": "vestigia",
+                        "authority_generation": 1,
+                    },
+                },
+            )
+            assert begun.is_error is False
+            assert begun.structured_content is not None
+            iteration_id = begun.structured_content["result"]["task"]["current_iteration_id"]
+            assert iteration_id
+
+            proposed = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.diff",
+                    "arguments": {
+                        "task_id": task_id,
+                        "holder_id": "vestigia",
+                        "authority_generation": 1,
+                        "iteration_id": iteration_id,
+                        "mutations": [
+                            {
+                                "op": "modify",
+                                "path": "hello.txt",
+                                "expected_sha256": expected_hash,
+                                "old": "one\n",
+                                "new": "two\n",
+                            },
+                            {
+                                "op": "create",
+                                "path": "Vesti/new-machine.txt",
+                                "expected_state": "absent",
+                                "content": "built by the house\n",
+                            },
+                        ],
+                    },
+                },
+            )
+            assert proposed.is_error is False
+            assert proposed.structured_content is not None
+            proposal = proposed.structured_content["result"]
+            assert (worktree / "hello.txt").read_text(encoding="utf-8") == "one\n"
+            assert not (worktree / "Vesti" / "new-machine.txt").exists()
+
+            patched = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.patch",
+                    "arguments": {
+                        "task_id": task_id,
+                        "holder_id": "vestigia",
+                        "authority_generation": 1,
+                        "iteration_id": iteration_id,
+                        "proposal_id": proposal["proposal_id"],
+                        "proposal_digest": proposal["proposal_digest"],
+                    },
+                },
+            )
+            assert patched.is_error is False
+            assert patched.structured_content is not None
+            patch_body = patched.structured_content
+            patch_request_id = patch_body["request_id"]
+            patch_result = patch_body["result"]
+            assert patch_result["request_id"] == patch_request_id
+            assert (worktree / "hello.txt").read_text(encoding="utf-8") == "two\n"
+            assert (worktree / "Vesti" / "new-machine.txt").read_text(
+                encoding="utf-8"
+            ) == "built by the house\n"
+
+            mechanic_receipt = await client.call_tool(
+                "dev.logs",
+                {
+                    "source": "receipts",
+                    "receipt_id": patch_result["durable_receipt_id"],
+                },
+            )
+            assert mechanic_receipt.is_error is False
+            assert mechanic_receipt.structured_content is not None
+            assert (
+                mechanic_receipt.structured_content["receipt"]["request_id"]
+                == patch_request_id
+            )
+
+            mcp_receipt = await client.call_tool(
+                "receipts.recent",
+                {
+                    "capability": "dev.call",
+                    "request_id": patch_request_id,
+                },
+            )
+            assert mcp_receipt.is_error is False
+            assert mcp_receipt.structured_content is not None
+            assert mcp_receipt.structured_content["matched_total"] == 1
+
+            checkpoint = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "iteration.checkpoint",
+                    "arguments": {
+                        "task_id": task_id,
+                        "holder_id": "vestigia",
+                        "authority_generation": 1,
+                        "iteration_id": iteration_id,
+                        "outcome": "pass",
+                    },
+                },
+            )
+            assert checkpoint.is_error is False
+            assert checkpoint.structured_content is not None
+            checkpoint_commit = checkpoint.structured_content["result"][
+                "checkpoint_commit"
+            ]
+            assert checkpoint_commit
+            assert _git(worktree, "status", "--porcelain=v1") == ""
+            assert "Vesti/new-machine.txt" in _git(
+                worktree, "ls-tree", "-r", "--name-only", checkpoint_commit
+            ).splitlines()
+
+            state.update(
+                task_id=task_id,
+                worktree=worktree,
+                authority_generation=1,
+            )
+
+        exact = create_server(
+            _mcp_settings(
+                tmp_path,
+                port=mechanic.server_address[1],
+                token_path=token_path,
+                action_filter=DevActionFilter(
+                    mode="exact",
+                    actions=("task.diff",),
+                ),
+                suffix="source-filter",
+            )
+        )
+        async with Client(exact) as client:
+            safe_read = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.read",
+                    "arguments": {
+                        "task_id": state["task_id"],
+                        "holder_id": "vestigia",
+                        "authority_generation": state["authority_generation"],
+                        "paths": ["hello.txt"],
+                    },
+                },
+            )
+            assert safe_read.is_error is False
+
+            denied_patch = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.patch",
+                    "arguments": {
+                        "task_id": state["task_id"],
+                        "holder_id": "vestigia",
+                        "authority_generation": state["authority_generation"],
+                        "iteration_id": "not-current",
+                        "proposal_id": "hm_patch_" + "0" * 32,
+                        "proposal_digest": "0" * 64,
+                    },
+                },
+            )
+            assert denied_patch.is_error is True
+            assert "not allowed" in str(denied_patch.content)
+
+    try:
+        asyncio.run(exercise())
     finally:
         mechanic.shutdown()
         mechanic.server_close()

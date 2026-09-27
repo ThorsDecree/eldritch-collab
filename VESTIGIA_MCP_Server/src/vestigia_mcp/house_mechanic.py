@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 
-PROTOCOL = "vestigia.house-mechanic-api.v0.9"
+PROTOCOL = "vestigia.house-mechanic-api.v0.10"
 _TOKEN_MAX_BYTES = 4_096
 _SUPPORTED_METHODS = {"GET", "POST"}
 
@@ -258,19 +258,20 @@ class HouseMechanicClient:
         return ".." not in path.split("/")
 
     @classmethod
-    def _projectable_mutation(
+    def _projectable_call(
         cls,
         metadata: object,
     ) -> tuple[bool, str | None]:
         if not isinstance(metadata, dict):
             return False, "metadata_not_object"
-        if metadata.get("mutation") is not True:
-            return False, "not_mutation"
         if metadata.get("enabled") is False:
             return False, "disabled"
+        mutation = metadata.get("mutation")
+        if mutation not in {True, False}:
+            return False, "invalid_mutation_flag"
         method = metadata.get("method")
         if method != "POST":
-            return False, "unsupported_mutation_method"
+            return False, "unsupported_call_method"
         if not cls._safe_path(metadata.get("path")):
             return False, "unsafe_route"
         schema = metadata.get("input_schema")
@@ -282,6 +283,21 @@ class HouseMechanicClient:
             return False, "invalid_input_schema"
         if not isinstance(schema.get("required"), list):
             return False, "invalid_input_schema"
+        if mutation is False and metadata.get("effect") != "bounded_worktree_read":
+            return False, "not_mutation"
+        return True, None
+
+    @classmethod
+    def _projectable_mutation(
+        cls,
+        metadata: object,
+    ) -> tuple[bool, str | None]:
+        eligible, reason = cls._projectable_call(metadata)
+        if not eligible:
+            return False, reason
+        assert isinstance(metadata, dict)
+        if metadata.get("mutation") is not True:
+            return False, "not_mutation"
         return True, None
 
     def status(self) -> dict[str, object]:
@@ -336,6 +352,29 @@ class HouseMechanicClient:
             )
         return response
 
+    def projected_calls(
+        self,
+        response: dict[str, Any] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        capabilities = response if response is not None else self.capabilities()
+        operations = capabilities.get("operations")
+        if not isinstance(operations, dict):
+            raise HouseMechanicClientError(
+                "House Mechanic capabilities response is missing operations"
+            )
+        projected: dict[str, dict[str, Any]] = {}
+        for action, metadata in operations.items():
+            if not isinstance(action, str):
+                continue
+            eligible, _ = self._projectable_call(metadata)
+            if not eligible:
+                continue
+            assert isinstance(metadata, dict)
+            if metadata.get("mutation") is True and not self.action_filter.allows(action):
+                continue
+            projected[action] = dict(metadata)
+        return projected
+
     def projected_mutations(
         self,
         response: dict[str, Any] | None = None,
@@ -369,10 +408,10 @@ class HouseMechanicClient:
         for action, metadata in operations.items():
             if not isinstance(action, str):
                 continue
-            eligible, reason = self._projectable_mutation(metadata)
+            eligible, reason = self._projectable_call(metadata)
             if not eligible:
                 rejected[action] = reason or "ineligible"
-            elif not self.action_filter.allows(action):
+            elif isinstance(metadata, dict) and metadata.get("mutation") is True and not self.action_filter.allows(action):
                 rejected[action] = "denied_by_dev_action_filter"
         return rejected
 
@@ -397,12 +436,16 @@ class HouseMechanicClient:
             raise HouseMechanicClientError(
                 f"Unknown House Mechanic action: {canonical}"
             )
-        eligible, reason = self._projectable_mutation(metadata)
+        eligible, reason = self._projectable_call(metadata)
         if not eligible:
+            if reason == "not_mutation":
+                raise HouseMechanicClientError(
+                    f"House Mechanic action is not a projected mutation: {reason}"
+                )
             raise HouseMechanicClientError(
-                f"House Mechanic action is not a projected mutation: {reason}"
+                f"House Mechanic action is not a projected dev.call operation: {reason}"
             )
-        if not self.action_filter.allows(canonical):
+        if metadata.get("mutation") is True and not self.action_filter.allows(canonical):
             raise HouseMechanicClientError(
                 f"House Mechanic action is not allowed by VESTIGIA_MCP_DEV_ACTIONS: {canonical}"
             )

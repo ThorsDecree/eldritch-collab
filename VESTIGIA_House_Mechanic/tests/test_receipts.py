@@ -93,3 +93,30 @@ def test_receipt_store_persists_lifecycle_evidence(tmp_path: Path) -> None:
     assert record["evidence"]["action"] == "start"
     assert record["evidence"]["verified"] is True
     assert store.recent(limit=5, kind="service_lifecycle")[0]["receipt_id"] == record["receipt_id"]
+
+
+def test_receipt_store_persists_bounded_source_operation_evidence(tmp_path: Path) -> None:
+    store = ReceiptStore(tmp_path / "receipts.jsonl")
+    record = store.append_source_operation(
+        request_id="mcp_req_source",
+        operation="task.patch",
+        evidence={
+            "task_id": "hm_task_fixture",
+            "proposal_id": "hm_patch_fixture",
+            "proposal_digest": "a" * 64,
+            "mutations": [
+                {
+                    "op": "modify",
+                    "path": "hello.txt",
+                    "pre_sha256": "b" * 64,
+                    "post_sha256": "c" * 64,
+                }
+            ],
+        },
+    )
+
+    assert record["kind"] == "dev_source_operation"
+    assert record["request_id"] == "mcp_req_source"
+    assert record["evidence"]["operation"] == "task.patch"
+    assert record["evidence"]["mutations"][0]["path"] == "hello.txt"
+    assert store.recent(limit=5, kind="dev_source_operation")[0]["receipt_id"] == record["receipt_id"]

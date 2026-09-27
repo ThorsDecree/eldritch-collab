@@ -138,7 +138,7 @@ class Settings:
     house_mechanic_port: int = 8770
     house_mechanic_token_path: Path | None = None
     house_mechanic_timeout_seconds: int = 120
-    house_mechanic_max_response_bytes: int = 262_144
+    house_mechanic_max_response_bytes: int = 32 * 1024 * 1024
     dev_actions: DevActionFilter = field(
         default_factory=lambda: DevActionFilter(mode="wildcard", actions=())
     )
@@ -241,7 +241,7 @@ class Settings:
                 "VESTIGIA_MCP_HOUSE_MECHANIC_TIMEOUT_SECONDS", 120
             ),
             house_mechanic_max_response_bytes=_positive_int_env(
-                "VESTIGIA_MCP_HOUSE_MECHANIC_MAX_RESPONSE_BYTES", 262_144
+                "VESTIGIA_MCP_HOUSE_MECHANIC_MAX_RESPONSE_BYTES", 32 * 1024 * 1024
             ),
             dev_actions=parse_dev_actions(
                 os.environ.get("VESTIGIA_MCP_DEV_ACTIONS")

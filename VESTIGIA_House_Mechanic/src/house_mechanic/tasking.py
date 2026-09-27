@@ -424,6 +424,30 @@ class TaskSupervisor:
             self.ledger.save(record)
             raise TaskError("lease_expired", "task lease expired before action admission")
 
+    def authorized_worktree(
+        self,
+        *,
+        task_id: str,
+        holder_id: str,
+        authority_generation: int,
+        iteration_id: str | None = None,
+        require_open_iteration: bool = False,
+    ) -> tuple[TaskRecord, Path]:
+        """Resolve one task's issued worktree after current authority checks."""
+        with self._lock:
+            record = self.ledger.get(task_id)
+            self._authorize(record, holder_id, authority_generation)
+            if require_open_iteration:
+                if record.current_iteration_id is None:
+                    raise TaskError("iteration_required", "source mutation requires an open iteration")
+                if not iteration_id or record.current_iteration_id != iteration_id:
+                    raise TaskError("iteration_mismatch", "iteration_id is not current")
+            worktree = Path(record.worktree_path)
+            snapshot = self.worktrees.snapshot(worktree)
+            if snapshot.branch != record.branch_name:
+                raise TaskError("branch_mismatch", "worktree branch does not match task record")
+            return record, worktree
+
     def acquire(
         self, *, repository_id: str, holder_id: str, purpose: str,
         base_ref: str | None = None, lease_seconds: int | None = None,

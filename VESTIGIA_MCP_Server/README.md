@@ -234,7 +234,7 @@ protect against the local machine operator who can read the server's SQLite stat
 principal/Keyring layer can replace this binding without changing the GameTable event model. See
 `docs/GAMETABLE.md`.
 
-### House Mechanic dev projection: one mutation door
+### House Mechanic dev projection: one bounded call door
 
 Optional tools:
 
@@ -243,22 +243,42 @@ Optional tools:
 - `dev.process`
 - `dev.logs`
 
-Phase 5 projects the independent local House Mechanic supervisor through a deliberately small MCP
-surface. `dev.call` is the **only** House Mechanic mutation descriptor; it uses House Mechanic's
-canonical operation IDs verbatim and re-reads the live `/v1/capabilities` contract before every
-mutation. `dev.process` and `dev.logs` are observation-only.
+The independent local House Mechanic supervisor remains behind a deliberately small MCP surface.
+`dev.call` uses House Mechanic's canonical operation IDs verbatim and re-reads the live
+`/v1/capabilities` contract before every dispatch. It may dispatch fixed safe reads such as
+`task.read` as well as mutations; `dev.process` and `dev.logs` remain observation-only.
 
-House Mechanic publishes each projectable operation with a fixed method/path and closed
-`input_schema`. MCP accepts only safe loopback `/v1/` routes, applies
-`VESTIGIA_MCP_DEV_ACTIONS`, forwards the arguments unchanged, and leaves House Mechanic's own
-lease/generation/service/repository/schema checks authoritative.
+House Mechanic publishes each projectable operation with a fixed method/path, explicit
+`mutation` flag, and closed `input_schema`. MCP accepts only safe loopback `/v1/` routes,
+forwards arguments unchanged, and leaves House Mechanic's lease/generation/iteration,
+repository/service binding, proposal, and schema checks authoritative. No caller can supply an
+HTTP route, shell command, argv, cwd, environment, worktree path, or arbitrary host path.
 
-`VESTIGIA_MCP_DEV_ACTIONS` defaults to wildcard behavior when **unset** or set to `*`: every
-eligible mutation currently advertised by that configured House Mechanic instance is projected.
-An explicitly empty value denies all mutations; a comma-separated list admits only those exact
-canonical operation IDs. Wildcard is not arbitrary host authority: caller-defined HTTP routes,
-shell/argv/cwd/environment, unconfigured repositories/services, and House Mechanic policy bypasses
-remain absent.
+`VESTIGIA_MCP_DEV_ACTIONS` is a **mutation allowlist**. When unset or set to `*`, every eligible
+mutation currently advertised by that House Mechanic instance is projected. An explicitly empty
+value denies all mutations; a comma-separated value admits only those exact mutation operation
+IDs. Fixed safe reads that satisfy the projection contract remain callable regardless of mutation
+allowlist mode, so inspection does not need write authority.
+
+House Mechanic v0.12 / API protocol v0.10 adds the task-scoped source loop:
+
+```text
+task.read
+  -> iteration.begin
+  -> task.diff
+  -> task.patch
+  -> compile/test
+  -> iteration.checkpoint
+```
+
+`task.diff` creates an immutable multi-file proposal; `task.patch` can only apply that exact
+proposal after revalidating task authority and source pre-state, and applies it all-or-nothing.
+The initial mutation grammar supports modifying existing UTF-8 text and creating new UTF-8 files
+inside the issued task worktree. The rendered diff preview is bounded to 5 MiB, the dedicated
+`task.diff` request envelope is bounded to 32 MiB to accommodate escaped JSON for a 4 MiB patch,
+and MCP defaults its House Mechanic response ceiling to 32 MiB. All ceilings remain bounded and
+operator-overridable where already configured. Delete, rename, binary mutation,
+symlink/junction traversal, hard-link aliasing, and supervisor self-deployment are not projected by this slice.
 
 Every `dev.call` creates one `mcp_req_...` request ID, records it in the MCP audit layer, and
 passes it as `X-Request-ID` to House Mechanic. House Mechanic receipts remain an independent
@@ -580,6 +600,15 @@ in the launching shell. An alternate tunnel profile may be supplied as the first
 
 See `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md`, `docs/RUNTIME_PROJECTION.md`, and
 `docs/CANONICAL_ARCHIVE_WRITES.md`.
+
+### Phase 6 source-workbench extension
+
+The stable Dev Door now projects House Mechanic v0.12 task-scoped source operations without adding
+another top-level MCP descriptor. `dev.capabilities` exposes both `projected_calls` and the
+backward-compatible mutation-only `projected_mutations`; `dev.call` admits fixed safe reads and
+keeps mutations behind `VESTIGIA_MCP_DEV_ACTIONS`. A real cross-package integration test proves
+`task.acquire -> task.read -> iteration.begin -> task.diff -> task.patch -> iteration.checkpoint`,
+including new-file Git history and independent receipt correlation.
 
 ## v0.10 - Stable Dev Door
 

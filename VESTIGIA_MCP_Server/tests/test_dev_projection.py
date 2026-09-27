@@ -15,7 +15,7 @@ from vestigia_mcp.server import create_server
 
 
 TOKEN = "phase5-projection-token"
-PROTOCOL = "vestigia.house-mechanic-api.v0.9"
+PROTOCOL = "vestigia.house-mechanic-api.v0.10"
 
 
 class _MechanicHandler(BaseHTTPRequestHandler):
@@ -103,6 +103,18 @@ class _MechanicHandler(BaseHTTPRequestHandler):
         payload = json.loads(raw.decode("utf-8"))
         self.fixture.hits.append(("POST", self.path, payload, request_id))
 
+        if self.path == "/v1/task-read":
+            self._send(
+                200,
+                {
+                    "protocol": PROTOCOL,
+                    "request_id": request_id,
+                    "action_occurred": False,
+                    "receipt_persisted": True,
+                    "items": [{"path": value} for value in payload["paths"]],
+                },
+            )
+            return
         if self.path == "/v1/task-acquire":
             if payload.get("purpose") == "reject":
                 self._send(
@@ -221,6 +233,18 @@ class _MechanicHandler(BaseHTTPRequestHandler):
 def _start_mechanic() -> tuple[ThreadingHTTPServer, threading.Thread]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _MechanicHandler)
     server.operations = {  # type: ignore[attr-defined]
+        "task.read": {
+            "effect": "bounded_worktree_read",
+            "mutation": False,
+            "method": "POST",
+            "path": "/v1/task-read",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"paths": {"type": "array"}},
+                "required": ["paths"],
+            },
+        },
         "task.acquire": {
             "effect": "worktree_mutation",
             "mutation": True,
@@ -318,6 +342,7 @@ def test_dev_surface_projects_one_mutation_tool_and_preserves_receipt_join(
             assert projected["configured"] is True
             assert projected["available"] is True
             assert projected["action_filter"]["mode"] == "wildcard"
+            assert set(projected["projected_calls"]) == {"task.read", "task.acquire"}
             assert set(projected["projected_mutations"]) == {"task.acquire"}
             assert (
                 projected["projected_mutations"]["task.acquire"]["input_schema"]["type"]
@@ -530,6 +555,52 @@ def test_dev_call_rejects_house_mechanic_request_id_mismatch(tmp_path: Path) -> 
             assert result.is_error is True
             assert "request_id" in str(result.content)
 
+    try:
+        asyncio.run(exercise())
+    finally:
+        mechanic.shutdown()
+        mechanic.server_close()
+        thread.join(timeout=2)
+
+
+def test_dev_call_allows_task_read_when_mutations_are_denied(tmp_path: Path) -> None:
+    mechanic, thread = _start_mechanic()
+
+    async def exercise() -> None:
+        server = create_server(
+            _settings(
+                tmp_path,
+                mechanic,
+                action_filter=DevActionFilter(mode="deny_all", actions=()),
+            )
+        )
+        async with Client(server) as client:
+            caps = await client.call_tool("dev.capabilities", {})
+            assert caps.is_error is False
+            assert caps.structured_content is not None
+            assert set(caps.structured_content["projected_calls"]) == {"task.read"}
+            assert caps.structured_content["projected_mutations"] == {}
+
+            read = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.read",
+                    "arguments": {"paths": ["hello.txt"]},
+                },
+            )
+            assert read.is_error is False
+            assert read.structured_content is not None
+            assert read.structured_content["result"]["items"] == [{"path": "hello.txt"}]
+
+            denied = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.acquire",
+                    "arguments": {"purpose": "blocked"},
+                },
+            )
+            assert denied.is_error is True
+            assert "not allowed" in str(denied.content)
     try:
         asyncio.run(exercise())
     finally:
