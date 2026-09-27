@@ -597,7 +597,7 @@ def test_diff_refuses_rendered_preview_above_configured_limit(tmp_path: Path) ->
         holder_id="vestigia",
         purpose="bounded diff preview",
     )
-    _, PatchProposalStore, TaskSourceWorkspace = _source_ops()
+    SourceOpError, PatchProposalStore, TaskSourceWorkspace = _source_ops()
     workspace = TaskSourceWorkspace(
         tasks=supervisor,
         proposal_store=PatchProposalStore(tmp_path / "proposals"),
