@@ -12,7 +12,7 @@ import pytest
 
 
 TOKEN = "house-mechanic-client-test-token"
-PROTOCOL = "vestigia.house-mechanic-api.v0.9"
+PROTOCOL = "vestigia.house-mechanic-api.v0.10"
 
 
 class _FakeMechanicHandler(BaseHTTPRequestHandler):
