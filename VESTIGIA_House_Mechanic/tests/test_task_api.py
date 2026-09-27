@@ -476,7 +476,7 @@ def test_task_source_operations_are_fixed_typed_routes_with_receipts(tmp_path: P
         assert status == 200
         assert read["receipt_persisted"] is True
         assert read["items"][0]["path"] == "hello.txt"
-        assert read["items"][0]["text"] == (worktree / "hello.txt").read_text(encoding="utf-8")
+        assert read["items"][0]["text"] == (worktree / "hello.txt").read_bytes().decode("utf-8")
 
         status, begun = _request(
             port,
