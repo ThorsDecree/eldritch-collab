@@ -21,7 +21,7 @@ from .source_ops import PatchProposalStore, SourceOpError, TaskSourceWorkspace
 from .tasking import RepositoryManifest, TaskError, TaskLedger, TaskSupervisor, WorktreeManager
 
 
-PROTOCOL = "vestigia.house-mechanic-api.v0.9"
+PROTOCOL = "vestigia.house-mechanic-api.v0.10"
 MAX_REQUEST_BYTES = 16_384
 MAX_SOURCE_DIFF_REQUEST_BYTES = 5 * 1024 * 1024
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
