@@ -45,6 +45,25 @@ def _request(port: int, method: str, path: str, payload: dict | None = None):
         conn.close()
 
 
+def _request_headers_only(port: int, method: str, path: str, *, content_length: int):
+    headers = {
+        "Authorization": f"Bearer {TOKEN}",
+        "Connection": "close",
+        "Content-Type": "application/json",
+        "Content-Length": str(content_length),
+    }
+    conn = HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        conn.putrequest(method, path)
+        for key, value in headers.items():
+            conn.putheader(key, value)
+        conn.endheaders()
+        response = conn.getresponse()
+        return response.status, json.loads(response.read().decode("utf-8"))
+    finally:
+        conn.close()
+
+
 def _server(tmp_path: Path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -623,18 +642,11 @@ def test_task_diff_has_larger_route_specific_request_ceiling(tmp_path: Path) -> 
         assert status == 413
         assert ordinary["error"]["code"] == "request_too_large"
 
-        status, oversized = _request(
+        status, oversized = _request_headers_only(
             port,
             "POST",
             "/v1/task-diff",
-            {
-                "task_id": task["task_id"],
-                "holder_id": "vestigia",
-                "authority_generation": 1,
-                "iteration_id": iteration_id,
-                "mutations": [],
-                "padding": "x" * (5 * 1024 * 1024),
-            },
+            content_length=(5 * 1024 * 1024) + 1,
         )
         assert status == 413
         assert oversized["error"]["code"] == "request_too_large"
