@@ -1,6 +1,6 @@
 # VESTIGIA House Mechanic
 
-Status: v0.11 machine-dispatch capability contract; Phase 5 MCP projection complete.
+Status: v0.12 task-scoped source workbench; Phase 6 self-maintenance substrate.
 
 House Mechanic is the small host-side execution plane for VESTIGIA development work. It remains deliberately separate from the MCP Server and Runtime Workshop.
 
@@ -8,19 +8,44 @@ The governing rule is:
 
 > Development autonomy may expand faster than consequential authority.
 
-House Mechanic exposes named, operator-authored recipes and typed service lifecycle actions. It still does not expose arbitrary command text, caller-supplied argv/cwd/environment, credentials, or a caller-selectable bind address.
+House Mechanic exposes named, operator-authored recipes, typed service lifecycle actions, and task-scoped source operations. It still does not expose arbitrary command text, caller-supplied argv/cwd/environment, credentials, caller-selected host paths, or a caller-selectable bind address.
 
-## Current v0.11 slice
+## Current v0.12 slice
 
-v0.11 completes House Mechanic's side of the Phase 5 stable MCP projection by making the authenticated capability catalog machine-dispatchable without moving authority out of House Mechanic:
+v0.12 gives an active task enough bounded source authority to inspect and build inside its own issued Git worktree without granting general filesystem or shell access:
+
+- `task.read` reads bounded UTF-8 text during an active leased task and returns normalized relative paths plus exact hashes;
+- `task.diff` requires the current task holder, authority generation, and open iteration, validates an ordered multi-file mutation set, and persists an immutable proposal without changing source files;
+- `task.patch` accepts only the exact prior `proposal_id + proposal_digest`, revalidates every precondition, then applies the whole set or none of it;
+- proposals may modify existing UTF-8 text files or create new UTF-8 files and parent directories inside the issued worktree;
+- delete, rename, binary mutation, symlink/junction traversal, special-file mutation, arbitrary host paths, and supervisor self-deployment remain out of scope;
+- patch proposals are bounded to 32 files, 1 MiB per resulting text file, and 4 MiB total patch payload by default;
+- reads, proposals, patches, pre/post hashes, and proposal consumption leave durable source-operation evidence joined to MCP audit evidence by request ID;
+- `iteration.checkpoint` remains the Git-history boundary, so newly created files become normal tracked history through the existing `git add -A` checkpoint;
+- API protocol v0.10 carries the task-source contract consumed by MCP's stable `dev.*` projection.
+
+The stable MCP layer still exposes only `dev.capabilities`, `dev.call`, `dev.process`, and `dev.logs`. `dev.call` dispatches fixed safe task reads plus allowlisted mutations; it never accepts caller-defined HTTP routes, shell commands, argv, cwd, or environment.
+
+The normal task-source lifecycle is:
+
+```text
+task.read
+  -> iteration.begin
+  -> task.diff
+  -> task.patch
+  -> compile/test
+  -> iteration.checkpoint
+```
+
+## Prior v0.11 machine-dispatch slice
+
+v0.11 completed House Mechanic's side of the Phase 5 stable MCP projection by making the authenticated capability catalog machine-dispatchable without moving authority out of House Mechanic:
 
 - every projectable operation advertises its canonical operation ID with explicit `mutation`, fixed HTTP `method`, fixed `/v1/` `path`, and closed object `input_schema`;
 - the operation catalog remains descriptive discovery, while the existing typed endpoint handlers remain authoritative for leases, authority generations, repository/service bindings, health checks, lifecycle ownership, deployment state, and receipt semantics;
 - read operations are explicitly marked `mutation=false`, so a wildcard MCP projection cannot turn observation into mutation;
-- mutation routes still accept no caller-defined HTTP route, shell command, argv, cwd, or environment;
-- API protocol v0.9 carries the enriched capability contract consumed by the MCP Server's stable `dev.*` projection.
-
-The stable MCP layer now exposes `dev.capabilities`, `dev.call`, `dev.process`, and `dev.logs`; `dev.call` is the only MCP mutation surface and uses these House Mechanic operation IDs verbatim.
+- mutation routes accept no caller-defined HTTP route, shell command, argv, cwd, or environment;
+- API protocol v0.9 carried the enriched capability contract consumed by the original stable `dev.*` projection.
 
 ## Prior v0.10 reconciliation/cleanup slice
 
