@@ -223,3 +223,266 @@ def test_authorized_worktree_refuses_wrong_holder_stale_generation_and_expired_l
             authority_generation=1,
         )
     assert expired.value.code == "lease_expired"
+
+
+def _begin_iteration(supervisor: TaskSupervisor, task) -> str:
+    record, _ = supervisor.begin_iteration(
+        task_id=task.task_id,
+        holder_id="vestigia",
+        authority_generation=task.authority_generation,
+    )
+    assert record.current_iteration_id is not None
+    return record.current_iteration_id
+
+
+def test_diff_creates_durable_proposal_without_mutating_worktree(tmp_path: Path) -> None:
+    task, supervisor, workspace, _ = _workspace(tmp_path)
+    worktree = Path(task.worktree_path)
+    before = (worktree / "hello.txt").read_bytes()
+    text = before.decode("utf-8")
+    iteration_id = _begin_iteration(supervisor, task)
+
+    result = workspace.diff(
+        task_id=task.task_id,
+        holder_id="vestigia",
+        authority_generation=1,
+        iteration_id=iteration_id,
+        mutations=[
+            {
+                "op": "modify",
+                "path": "hello.txt",
+                "expected_sha256": hashlib.sha256(before).hexdigest(),
+                "old": text,
+                "new": text.replace("one", "ONE", 1),
+            }
+        ],
+    )
+
+    assert (worktree / "hello.txt").read_bytes() == before
+    assert result["state"] == "ready"
+    assert result["proposal_id"].startswith("hm_patch_")
+    assert len(result["proposal_digest"]) == 64
+    stored = workspace.proposal_store.get(result["proposal_id"]).to_dict()
+    assert stored["proposal_digest"] == result["proposal_digest"]
+    assert stored["task_id"] == task.task_id
+    assert stored["iteration_id"] == iteration_id
+    assert stored["mutations"][0]["pre_state"]["sha256"] == hashlib.sha256(before).hexdigest()
+    assert "--- a/hello.txt" in stored["unified_diff"]
+    assert "+++ b/hello.txt" in stored["unified_diff"]
+
+
+def test_diff_accepts_atomic_modify_and_create_set(tmp_path: Path) -> None:
+    task, supervisor, workspace, _ = _workspace(tmp_path)
+    worktree = Path(task.worktree_path)
+    before = (worktree / "hello.txt").read_bytes()
+    text = before.decode("utf-8")
+    iteration_id = _begin_iteration(supervisor, task)
+
+    result = workspace.diff(
+        task_id=task.task_id,
+        holder_id="vestigia",
+        authority_generation=1,
+        iteration_id=iteration_id,
+        mutations=[
+            {
+                "op": "modify",
+                "path": "hello.txt",
+                "expected_sha256": hashlib.sha256(before).hexdigest(),
+                "old": text,
+                "new": text.replace("one", "ONE", 1),
+            },
+            {
+                "op": "create",
+                "path": "Vesti/new_machine.py",
+                "expected_state": "absent",
+                "content": "print('hello from the workbench')\n",
+            },
+        ],
+    )
+
+    assert not (worktree / "Vesti" / "new_machine.py").exists()
+    proposal = workspace.proposal_store.get(result["proposal_id"]).to_dict()
+    assert [item["op"] for item in proposal["mutations"]] == ["modify", "create"]
+    assert proposal["mutations"][1]["pre_state"] == {"state": "absent"}
+
+
+def test_diff_refuses_duplicate_paths(tmp_path: Path) -> None:
+    task, supervisor, workspace, SourceOpError = _workspace(tmp_path)
+    worktree = Path(task.worktree_path)
+    before = (worktree / "hello.txt").read_bytes()
+    text = before.decode("utf-8")
+    iteration_id = _begin_iteration(supervisor, task)
+
+    with pytest.raises(SourceOpError) as exc:
+        workspace.diff(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id=iteration_id,
+            mutations=[
+                {
+                    "op": "modify",
+                    "path": "hello.txt",
+                    "expected_sha256": hashlib.sha256(before).hexdigest(),
+                    "old": text,
+                    "new": text,
+                },
+                {
+                    "op": "create",
+                    "path": "hello.txt",
+                    "expected_state": "absent",
+                    "content": "collision\n",
+                },
+            ],
+        )
+    assert exc.value.code == "duplicate_path"
+
+
+def test_diff_refuses_stale_modify_hash(tmp_path: Path) -> None:
+    task, supervisor, workspace, SourceOpError = _workspace(tmp_path)
+    worktree = Path(task.worktree_path)
+    text = (worktree / "hello.txt").read_text(encoding="utf-8")
+    iteration_id = _begin_iteration(supervisor, task)
+
+    with pytest.raises(SourceOpError) as exc:
+        workspace.diff(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id=iteration_id,
+            mutations=[
+                {
+                    "op": "modify",
+                    "path": "hello.txt",
+                    "expected_sha256": "0" * 64,
+                    "old": text,
+                    "new": text,
+                }
+            ],
+        )
+    assert exc.value.code == "expected_hash_mismatch"
+
+
+def test_diff_refuses_create_when_target_exists(tmp_path: Path) -> None:
+    task, supervisor, workspace, SourceOpError = _workspace(tmp_path)
+    iteration_id = _begin_iteration(supervisor, task)
+
+    with pytest.raises(SourceOpError) as exc:
+        workspace.diff(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id=iteration_id,
+            mutations=[
+                {
+                    "op": "create",
+                    "path": "hello.txt",
+                    "expected_state": "absent",
+                    "content": "nope\n",
+                }
+            ],
+        )
+    assert exc.value.code == "expected_absent_exists"
+
+
+def test_diff_requires_current_iteration(tmp_path: Path) -> None:
+    task, supervisor, workspace, _ = _workspace(tmp_path)
+    worktree = Path(task.worktree_path)
+    before = (worktree / "hello.txt").read_bytes()
+    text = before.decode("utf-8")
+    mutation = {
+        "op": "modify",
+        "path": "hello.txt",
+        "expected_sha256": hashlib.sha256(before).hexdigest(),
+        "old": text,
+        "new": text,
+    }
+
+    with pytest.raises(TaskError) as missing:
+        workspace.diff(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id="hm_iter_missing",
+            mutations=[mutation],
+        )
+    assert missing.value.code == "iteration_required"
+
+    current = _begin_iteration(supervisor, task)
+    with pytest.raises(TaskError) as wrong:
+        workspace.diff(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id=current + "-stale",
+            mutations=[mutation],
+        )
+    assert wrong.value.code == "iteration_mismatch"
+
+
+def test_diff_enforces_file_count_file_size_and_total_payload_limits(tmp_path: Path) -> None:
+    task, supervisor, workspace, SourceOpError = _workspace(tmp_path)
+    _, _, TaskSourceWorkspace = _source_ops()
+    iteration_id = _begin_iteration(supervisor, task)
+
+    count_limited = TaskSourceWorkspace(
+        tasks=supervisor,
+        proposal_store=workspace.proposal_store,
+        max_files=1,
+    )
+    with pytest.raises(SourceOpError) as too_many:
+        count_limited.diff(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id=iteration_id,
+            mutations=[
+                {"op": "create", "path": "a.txt", "expected_state": "absent", "content": "a"},
+                {"op": "create", "path": "b.txt", "expected_state": "absent", "content": "b"},
+            ],
+        )
+    assert too_many.value.code == "too_many_files"
+
+    file_limited = TaskSourceWorkspace(
+        tasks=supervisor,
+        proposal_store=workspace.proposal_store,
+        max_file_bytes=4,
+    )
+    with pytest.raises(SourceOpError) as file_big:
+        file_limited.diff(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id=iteration_id,
+            mutations=[
+                {
+                    "op": "create",
+                    "path": "large.txt",
+                    "expected_state": "absent",
+                    "content": "12345",
+                }
+            ],
+        )
+    assert file_big.value.code == "file_too_large"
+
+    patch_limited = TaskSourceWorkspace(
+        tasks=supervisor,
+        proposal_store=workspace.proposal_store,
+        max_patch_bytes=5,
+    )
+    with pytest.raises(SourceOpError) as patch_big:
+        patch_limited.diff(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            iteration_id=iteration_id,
+            mutations=[
+                {
+                    "op": "create",
+                    "path": "payload.txt",
+                    "expected_state": "absent",
+                    "content": "abcdef",
+                }
+            ],
+        )
+    assert patch_big.value.code == "patch_too_large"
