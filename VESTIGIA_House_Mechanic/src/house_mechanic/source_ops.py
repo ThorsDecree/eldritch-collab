@@ -117,7 +117,7 @@ class TaskSourceWorkspace:
     def _relative_parts(raw: str) -> tuple[str, ...]:
         if not isinstance(raw, str):
             raise SourceOpError("unsafe_path", "source path must be text")
-        value = raw.strip().replace("\\", "/")
+        value = raw.replace("\\", "/")
         if (
             not value
             or "\x00" in value
@@ -129,6 +129,20 @@ class TaskSourceWorkspace:
         parts = PurePosixPath(value).parts
         if not parts or any(part in {"", ".", ".."} for part in parts):
             raise SourceOpError("unsafe_path", "source path must stay beneath the task worktree")
+
+        reserved = {"con", "prn", "aux", "nul", "conin$", "conout$"}
+        reserved.update(f"com{index}" for index in range(1, 10))
+        reserved.update(f"lpt{index}" for index in range(1, 10))
+        for part in parts:
+            if (
+                part.endswith((".", " "))
+                or any(ord(char) < 32 or char in '<>:"|?*' for char in part)
+                or part.split(".", 1)[0].casefold() in reserved
+            ):
+                raise SourceOpError(
+                    "unsafe_path",
+                    "source path contains a Windows-special or reserved component",
+                )
         return tuple(parts)
 
     @staticmethod
