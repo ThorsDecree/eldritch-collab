@@ -104,12 +104,14 @@ class TaskSourceWorkspace:
         proposal_store: PatchProposalStore,
         max_file_bytes: int = 1_048_576,
         max_patch_bytes: int = 4_194_304,
+        max_diff_bytes: int = 5 * 1024 * 1024,
         max_files: int = 32,
     ):
         self.tasks = tasks
         self.proposal_store = proposal_store
         self.max_file_bytes = int(max_file_bytes)
         self.max_patch_bytes = int(max_patch_bytes)
+        self.max_diff_bytes = int(max_diff_bytes)
         self.max_files = int(max_files)
         self._lock = threading.RLock()
 
@@ -343,6 +345,11 @@ class TaskSourceWorkspace:
         proposal_id = f"hm_patch_{uuid.uuid4().hex}"
         created_at = datetime.now(UTC).isoformat()
         unified = "".join(diff_chunks)
+        if len(unified.encode("utf-8")) > self.max_diff_bytes:
+            raise SourceOpError(
+                "diff_too_large",
+                "rendered patch preview exceeds the configured byte ceiling",
+            )
         digest_basis = {
             "schema_version": PATCH_PROPOSAL_SCHEMA,
             "proposal_id": proposal_id,
