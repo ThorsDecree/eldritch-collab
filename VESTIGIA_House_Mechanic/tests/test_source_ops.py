@@ -141,6 +141,27 @@ def test_read_refuses_parent_escape_and_absolute_path(tmp_path: Path) -> None:
         assert exc.value.code == "unsafe_path"
 
 
+def test_read_refuses_windows_special_path_components(tmp_path: Path) -> None:
+    task, _, workspace, SourceOpError = _workspace(tmp_path)
+
+    for path in [
+        "hello.txt:secret",
+        "NUL",
+        "folder/COM1.txt",
+        "trailing.",
+        "trailing ",
+        "bad?.txt",
+    ]:
+        with pytest.raises(SourceOpError) as exc:
+            workspace.read(
+                task_id=task.task_id,
+                holder_id="vestigia",
+                authority_generation=1,
+                paths=[path],
+            )
+        assert exc.value.code == "unsafe_path"
+
+
 def test_read_refuses_symlink_escape(tmp_path: Path) -> None:
     task, _, workspace, SourceOpError = _workspace(tmp_path)
     outside = tmp_path / "outside.txt"
