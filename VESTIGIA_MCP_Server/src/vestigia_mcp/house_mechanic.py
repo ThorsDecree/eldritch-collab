@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 
-PROTOCOL = "vestigia.house-mechanic-api.v0.9"
+PROTOCOL = "vestigia.house-mechanic-api.v0.10"
 _TOKEN_MAX_BYTES = 4_096
 _SUPPORTED_METHODS = {"GET", "POST"}
 
