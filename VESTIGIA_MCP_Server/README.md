@@ -278,7 +278,7 @@ inside the issued task worktree. The rendered diff preview is bounded to 5 MiB, 
 `task.diff` request envelope is bounded to 32 MiB to accommodate escaped JSON for a 4 MiB patch,
 and MCP defaults its House Mechanic response ceiling to 32 MiB. All ceilings remain bounded and
 operator-overridable where already configured. Delete, rename, binary mutation,
-symlink/junction traversal, and supervisor self-deployment are not projected by this slice.
+symlink/junction traversal, hard-link aliasing, and supervisor self-deployment are not projected by this slice.
 
 Every `dev.call` creates one `mcp_req_...` request ID, records it in the MCP audit layer, and
 passes it as `X-Request-ID` to House Mechanic. House Mechanic receipts remain an independent
