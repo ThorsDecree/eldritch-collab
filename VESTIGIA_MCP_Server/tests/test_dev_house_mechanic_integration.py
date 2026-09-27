@@ -42,7 +42,7 @@ def _start_house_mechanic(tmp_path: Path):
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.name", "Fixture")
     _git(repo, "config", "user.email", "fixture@example.invalid")
-    (repo / "hello.txt").write_text("one\n", encoding="utf-8")
+    (repo / "hello.txt").write_bytes(b"one\n")
     _git(repo, "add", "hello.txt")
     _git(repo, "commit", "-m", "initial")
     recipes_path = tmp_path / "recipes.json"
