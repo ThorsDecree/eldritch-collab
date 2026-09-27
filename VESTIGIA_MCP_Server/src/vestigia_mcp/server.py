@@ -1944,8 +1944,8 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         title="Inspect House Mechanic dev capabilities",
         description=(
             "Inspect the live House Mechanic operation contract and this MCP deployment's "
-            "current mutation projection. This is read-only; dev.call is the only House "
-            "Mechanic mutation surface exposed by MCP."
+            "current bounded call projection. This is read-only; dev.call dispatches fixed "
+            "safe task reads plus allowlisted mutations."
         ),
         annotations=READ_ONLY_ANNOTATIONS,
     )
@@ -1969,6 +1969,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     **status,
                     "action_filter": filter_view,
                     "operations": {},
+                    "projected_calls": {},
                     "projected_mutations": {},
                     "rejections": {},
                 }
@@ -1978,6 +1979,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                 **status,
                 "action_filter": filter_view,
                 "operations": capabilities["operations"],
+                "projected_calls": house_mechanic.projected_calls(capabilities),
                 "projected_mutations": house_mechanic.projected_mutations(
                     capabilities
                 ),
@@ -1993,10 +1995,11 @@ def create_server(settings: Settings | None = None) -> MCPServer:
 
     @server.tool(
         name="dev.call",
-        title="Call one House Mechanic mutation",
+        title="Call one House Mechanic dev operation",
         description=(
-            "Dispatch one mutation advertised by the live House Mechanic capability contract "
-            "and allowed by this deployment's VESTIGIA_MCP_DEV_ACTIONS filter. Operation IDs "
+            "Dispatch one fixed safe task read or mutation advertised by the live House "
+            "Mechanic capability contract. Mutations remain gated by this deployment's "
+            "VESTIGIA_MCP_DEV_ACTIONS filter. Operation IDs "
             "are passed verbatim; MCP never accepts caller-defined HTTP routes, argv, cwd, or "
             "environment."
         ),
