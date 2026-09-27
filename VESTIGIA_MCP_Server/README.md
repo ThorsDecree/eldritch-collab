@@ -22,11 +22,7 @@ The native MCP capability vocabulary is deliberately split into three effect cla
 - **PREPARE** - create a draft, staged action, crop, queue item, or other reversible working state.
 - **ACT** - cause an externally consequential or canonical mutation.
 
-Version `0.9.0.dev0` expands the opt-in GameTable reference module with pending effects,
-seat-filtered hidden-zone operations, bounded randomness receipts, state repair, atomic
-tap bundles, and consented standing yields. It remains an event-sourced, rules-light Magic/Commander table engine: MCP brokers
-bounded shared state without becoming either a generic desktop controller or a second continuity
-runtime. Canonical Archive promotion remains independently staged and prefix-granted.
+Version `0.10.0.dev0` adds the stable House Mechanic development door while preserving MCP as a bounded authority broker. The four stable descriptors are `dev.capabilities`, `dev.call`, `dev.process`, and `dev.logs`; all House Mechanic mutations flow through `dev.call`, while process/log observation remains read-only. The deployment action filter defaults to wildcard over House Mechanic's already-bounded live mutation catalog, with exact-subset and explicit deny-all modes available. Canonical Archive promotion remains independently staged and prefix-granted.
 
 Sensory tools advertise read-only/non-destructive/non-open-world annotations. Staging and
 Runtime workspace writes advertise local non-open-world mutation; `archive.promote` and
@@ -586,6 +582,8 @@ See `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md`, `docs/RUNTIME_PROJECTION.md`
 `docs/CANONICAL_ARCHIVE_WRITES.md`.
 
 ## v0.10 - Stable Dev Door
+
+Phase 5 is complete. The next House Mechanic milestone is the bounded Phase 6 self-maintenance exercise: drive one real defect through inspect -> task/worktree -> reproduce -> patch -> test -> deploy -> verify -> rollback/promote -> receipts -> PR without using Jeff as the command shuttle.
 
 - Added the stable four-tool House Mechanic projection: `dev.capabilities`, `dev.call`,
   `dev.process`, and `dev.logs`.
