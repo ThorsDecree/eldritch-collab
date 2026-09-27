@@ -182,6 +182,57 @@ def test_read_refuses_symlink_escape(tmp_path: Path) -> None:
     assert exc.value.code == "symlink_refused"
 
 
+def test_read_refuses_hardlink_alias_outside_worktree(tmp_path: Path) -> None:
+    task, _, workspace, SourceOpError = _workspace(tmp_path)
+    outside = tmp_path / "outside-hardlink.txt"
+    outside.write_text("outside\n", encoding="utf-8")
+    alias = Path(task.worktree_path) / "alias.txt"
+    try:
+        os.link(outside, alias)
+    except OSError as exc:
+        pytest.skip(f"hardlink creation unavailable: {exc}")
+
+    with pytest.raises(SourceOpError) as error:
+        workspace.read(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            paths=["alias.txt"],
+        )
+    assert error.value.code == "hardlink_refused"
+
+
+def test_read_refuses_windows_junction_component(tmp_path: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows junction semantics are Windows-only")
+
+    task, _, workspace, SourceOpError = _workspace(tmp_path)
+    worktree = Path(task.worktree_path)
+    target = worktree / "junction-target"
+    target.mkdir()
+    (target / "inside.txt").write_text("inside\n", encoding="utf-8")
+    junction = worktree / "junction"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(target)],
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"junction creation unavailable: {result.stderr or result.stdout}")
+
+    with pytest.raises(SourceOpError) as error:
+        workspace.read(
+            task_id=task.task_id,
+            holder_id="vestigia",
+            authority_generation=1,
+            paths=["junction/inside.txt"],
+        )
+    assert error.value.code == "symlink_refused"
+
+
 def test_read_refuses_non_utf8_and_oversize_file(tmp_path: Path) -> None:
     task, _, workspace, SourceOpError = _workspace(tmp_path)
     worktree = Path(task.worktree_path)
