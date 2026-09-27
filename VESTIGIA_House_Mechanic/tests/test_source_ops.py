@@ -605,7 +605,7 @@ def test_diff_refuses_rendered_preview_above_configured_limit(tmp_path: Path) ->
     )
     worktree = Path(task.worktree_path)
     original = "a" * 256 + "z\n"
-    (worktree / "long-line.txt").write_text(original, encoding="utf-8")
+    (worktree / "long-line.txt").write_bytes(original.encode("utf-8"))
     iteration = _begin_iteration(supervisor, task)
 
     with pytest.raises(SourceOpError) as exc:
