@@ -162,6 +162,42 @@ def _start_fake_mechanic() -> tuple[ThreadingHTTPServer, threading.Thread]:
                 "required": ["service_id"],
             },
         },
+        "unsafe.read.route": {
+            "effect": "bounded_worktree_read",
+            "mutation": False,
+            "method": "POST",
+            "path": "/v1/do?surprise=yes",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {},
+                "required": [],
+            },
+        },
+        "unsafe.read.schema": {
+            "effect": "bounded_worktree_read",
+            "mutation": False,
+            "method": "POST",
+            "path": "/v1/do",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": True,
+                "properties": {},
+                "required": [],
+            },
+        },
+        "unsafe.read.method": {
+            "effect": "bounded_worktree_read",
+            "mutation": False,
+            "method": "GET",
+            "path": "/v1/do",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {},
+                "required": [],
+            },
+        },
         "unsafe.route": {
             "effect": "mutation",
             "mutation": True,
@@ -399,6 +435,10 @@ def test_client_projects_safe_task_reads_without_mutation_allowlist(tmp_path: Pa
         response = wildcard.capabilities(request_id="mcp_req_calls")
         assert set(wildcard.projected_calls(response)) == {"task.read", "task.acquire"}
         assert set(wildcard.projected_mutations(response)) == {"task.acquire"}
+        rejections = wildcard.projection_rejections(response)
+        assert rejections["unsafe.read.route"] == "unsafe_route"
+        assert rejections["unsafe.read.schema"] == "input_schema_not_closed"
+        assert rejections["unsafe.read.method"] == "unsupported_call_method"
 
         denied = _client(
             tmp_path,
