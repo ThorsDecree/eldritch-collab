@@ -23,7 +23,7 @@ from .tasking import RepositoryManifest, TaskError, TaskLedger, TaskSupervisor, 
 
 PROTOCOL = "vestigia.house-mechanic-api.v0.10"
 MAX_REQUEST_BYTES = 16_384
-MAX_SOURCE_DIFF_REQUEST_BYTES = 5 * 1024 * 1024
+MAX_SOURCE_DIFF_REQUEST_BYTES = 32 * 1024 * 1024
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _GENERATION_ID = re.compile(r"^hm_proc_[0-9a-f]{32}$")
 
