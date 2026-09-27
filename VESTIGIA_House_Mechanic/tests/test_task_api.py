@@ -584,6 +584,12 @@ def test_task_source_operations_are_fixed_typed_routes_with_receipts(tmp_path: P
         thread.join(timeout=2)
 
 
+def test_task_diff_request_ceiling_covers_escaped_patch_payload() -> None:
+    from house_mechanic.api import MAX_SOURCE_DIFF_REQUEST_BYTES
+
+    assert MAX_SOURCE_DIFF_REQUEST_BYTES >= (6 * 4_194_304) + 1_048_576
+
+
 def test_task_diff_has_larger_route_specific_request_ceiling(tmp_path: Path) -> None:
     server, thread, _ = _server(tmp_path)
     port = server.server_address[1]
@@ -646,7 +652,7 @@ def test_task_diff_has_larger_route_specific_request_ceiling(tmp_path: Path) -> 
             port,
             "POST",
             "/v1/task-diff",
-            content_length=(5 * 1024 * 1024) + 1,
+            content_length=(32 * 1024 * 1024) + 1,
         )
         assert status == 413
         assert oversized["error"]["code"] == "request_too_large"
