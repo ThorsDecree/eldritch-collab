@@ -6,6 +6,7 @@ from pathlib import Path
 from mcp import Client
 from PIL import Image
 
+from vestigia_mcp import __version__
 from vestigia_mcp.config import Settings
 from vestigia_mcp.policy import DEFAULT_CAPABILITIES, Decision, EffectClass
 from vestigia_mcp.porchlight import build_snapshot
@@ -401,7 +402,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             status_result = await client.call_tool("vestigia.status", {})
             assert status_result.is_error is False
             assert status_result.structured_content is not None
-            assert status_result.structured_content["server"]["version"] == "0.9.0.dev0"
+            assert status_result.structured_content["server"]["version"] == __version__
             assert status_result.structured_content["policy"]["capability_count"] == 54
             assert status_result.structured_content["runtime"]["configured"] is False
             assert status_result.structured_content["archive"]["promotion_configured"] is True
