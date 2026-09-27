@@ -163,6 +163,19 @@ def test_house_mechanic_dev_actions_distinguish_unset_wildcard_empty_and_exact(
     assert exact.actions == ("deployment.candidate", "task.acquire")
 
 
+def test_house_mechanic_default_response_budget_covers_source_proposal_preview(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv(
+        "VESTIGIA_MCP_HOUSE_MECHANIC_MAX_RESPONSE_BYTES",
+        raising=False,
+    )
+
+    settings = Settings.from_env()
+
+    assert settings.house_mechanic_max_response_bytes == 16 * 1024 * 1024
+
+
 def test_house_mechanic_settings_are_loopback_and_explicit(monkeypatch) -> None:
     monkeypatch.setenv("VESTIGIA_MCP_HOUSE_MECHANIC_ENABLED", "true")
     monkeypatch.setenv("VESTIGIA_MCP_HOUSE_MECHANIC_HOST", "localhost")
