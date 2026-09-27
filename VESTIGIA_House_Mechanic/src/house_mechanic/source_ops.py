@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import threading
 from typing import Any
 import uuid
@@ -104,12 +105,14 @@ class TaskSourceWorkspace:
         proposal_store: PatchProposalStore,
         max_file_bytes: int = 1_048_576,
         max_patch_bytes: int = 4_194_304,
+        max_diff_bytes: int = 5 * 1024 * 1024,
         max_files: int = 32,
     ):
         self.tasks = tasks
         self.proposal_store = proposal_store
         self.max_file_bytes = int(max_file_bytes)
         self.max_patch_bytes = int(max_patch_bytes)
+        self.max_diff_bytes = int(max_diff_bytes)
         self.max_files = int(max_files)
         self._lock = threading.RLock()
 
@@ -150,7 +153,14 @@ class TaskSourceWorkspace:
         if path.is_symlink():
             return True
         is_junction = getattr(path, "is_junction", None)
-        return bool(is_junction and is_junction())
+        if is_junction and is_junction():
+            return True
+        try:
+            attributes = getattr(path.lstat(), "st_file_attributes", 0)
+        except OSError:
+            return False
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        return bool(reparse_flag and attributes & reparse_flag)
 
     def _resolve_candidate(self, worktree: Path, raw: str) -> tuple[str, Path]:
         parts = self._relative_parts(raw)
@@ -158,8 +168,20 @@ class TaskSourceWorkspace:
         current = root
         for part in parts:
             current = current / part
-            if current.exists() and self._component_is_link(current):
-                raise SourceOpError("symlink_refused", "source paths may not traverse symlinks or junctions")
+            if current.exists():
+                if self._component_is_link(current):
+                    raise SourceOpError(
+                        "symlink_refused",
+                        "source paths may not traverse symlinks or junctions",
+                    )
+                if current.is_file() and os.stat(
+                    current,
+                    follow_symlinks=False,
+                ).st_nlink > 1:
+                    raise SourceOpError(
+                        "hardlink_refused",
+                        "source paths may not traverse hard-link aliases",
+                    )
         try:
             current.resolve(strict=False).relative_to(root)
         except ValueError as exc:
@@ -343,6 +365,11 @@ class TaskSourceWorkspace:
         proposal_id = f"hm_patch_{uuid.uuid4().hex}"
         created_at = datetime.now(UTC).isoformat()
         unified = "".join(diff_chunks)
+        if len(unified.encode("utf-8")) > self.max_diff_bytes:
+            raise SourceOpError(
+                "diff_too_large",
+                "rendered patch preview exceeds the configured byte ceiling",
+            )
         digest_basis = {
             "schema_version": PATCH_PROPOSAL_SCHEMA,
             "proposal_id": proposal_id,
