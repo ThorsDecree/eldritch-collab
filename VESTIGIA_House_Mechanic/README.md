@@ -18,7 +18,7 @@ v0.12 gives an active task enough bounded source authority to inspect and build 
 - `task.diff` requires the current task holder, authority generation, and open iteration, validates an ordered multi-file mutation set, and persists an immutable proposal without changing source files;
 - `task.patch` accepts only the exact prior `proposal_id + proposal_digest`, revalidates every precondition, then applies the whole set or none of it;
 - proposals may modify existing UTF-8 text files or create new UTF-8 files and parent directories inside the issued worktree;
-- delete, rename, binary mutation, symlink/junction traversal, special-file mutation, arbitrary host paths, and supervisor self-deployment remain out of scope;
+- delete, rename, binary mutation, symlink/junction traversal, hard-link aliasing, special-file mutation, arbitrary host paths, and supervisor self-deployment remain out of scope;
 - patch proposals are bounded to 32 files, 1 MiB per resulting text file, 4 MiB total patch payload, and a 5 MiB rendered unified-diff preview by default;
 - reads, proposals, patches, pre/post hashes, and proposal consumption leave durable source-operation evidence joined to MCP audit evidence by request ID;
 - `iteration.checkpoint` remains the Git-history boundary, so newly created files become normal tracked history through the existing `git add -A` checkpoint;
