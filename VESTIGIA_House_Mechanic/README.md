@@ -1,6 +1,6 @@
 # VESTIGIA House Mechanic
 
-Status: v0.10 restart reconciliation and disposable-checkout cleanup evidence boundary.
+Status: v0.11 machine-dispatch capability contract; Phase 5 MCP projection complete.
 
 House Mechanic is the small host-side execution plane for VESTIGIA development work. It remains deliberately separate from the MCP Server and Runtime Workshop.
 
@@ -10,7 +10,19 @@ The governing rule is:
 
 House Mechanic exposes named, operator-authored recipes and typed service lifecycle actions. It still does not expose arbitrary command text, caller-supplied argv/cwd/environment, credentials, or a caller-selectable bind address.
 
-## Current v0.10 slice
+## Current v0.11 slice
+
+v0.11 completes House Mechanic's side of the Phase 5 stable MCP projection by making the authenticated capability catalog machine-dispatchable without moving authority out of House Mechanic:
+
+- every projectable operation advertises its canonical operation ID with explicit `mutation`, fixed HTTP `method`, fixed `/v1/` `path`, and closed object `input_schema`;
+- the operation catalog remains descriptive discovery, while the existing typed endpoint handlers remain authoritative for leases, authority generations, repository/service bindings, health checks, lifecycle ownership, deployment state, and receipt semantics;
+- read operations are explicitly marked `mutation=false`, so a wildcard MCP projection cannot turn observation into mutation;
+- mutation routes still accept no caller-defined HTTP route, shell command, argv, cwd, or environment;
+- API protocol v0.9 carries the enriched capability contract consumed by the MCP Server's stable `dev.*` projection.
+
+The stable MCP layer now exposes `dev.capabilities`, `dev.call`, `dev.process`, and `dev.logs`; `dev.call` is the only MCP mutation surface and uses these House Mechanic operation IDs verbatim.
+
+## Prior v0.10 reconciliation/cleanup slice
 
 v0.10 hardens the Phase 4B failure/restart seam without granting process reattachment authority:
 
@@ -304,7 +316,7 @@ Both are bounded at startup.
 
 ## Still out of scope
 
-v0.10 still does not add:
+v0.11 still does not add:
 
 - durable process reattachment;
 - arbitrary commands;
@@ -312,16 +324,22 @@ v0.10 still does not add:
 - credential creation/rotation;
 - non-loopback listeners;
 - public deployment;
-- MCP dev projection;
 - supervisor self-update.
 
 ## Next bounded slice
 
-After the v0.10 reconciliation/cleanup surface is green:
+Phase 5 is complete. The next load-bearing milestone is the Phase 6 end-to-end self-maintenance exercise:
 
-1. expose the small stable MCP dev surface;
-2. project task + deployment operations behind that stable descriptor set;
-3. exercise the complete inspect -> patch -> test -> deploy -> verify -> rollback/promote loop end-to-end without requiring Jeff to carry commands between systems;
-4. keep operator boundaries explicit for restart reconciliation that would require asserting an unowned process is truly gone.
+1. observe one real but bounded defect or opportunity;
+2. inspect source/evidence through the normal MCP-facing surface;
+3. acquire a task lease and isolated worktree;
+4. reproduce, patch, compile, and test within the configured iteration budget;
+5. deploy the designated development service candidate;
+6. verify health/version/capabilities;
+7. roll back if unhealthy or explicitly promote if healthy;
+8. inspect joined MCP + House Mechanic receipts;
+9. open/update a PR or stop at an operator boundary.
+
+Keep operator boundaries explicit anywhere the loop would require supervisor self-modification, new host authority, public release, credentials, destructive migration, or assertion that an unowned post-restart process is safe to adopt or destroy.
 
 🏮🔧
