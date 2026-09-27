@@ -604,7 +604,7 @@ def test_diff_refuses_rendered_preview_above_configured_limit(tmp_path: Path) ->
         max_diff_bytes=64,
     )
     worktree = Path(task.worktree_path)
-    original = "a" * 256 + "\n"
+    original = "a" * 256 + "z\n"
     (worktree / "long-line.txt").write_text(original, encoding="utf-8")
     iteration = _begin_iteration(supervisor, task)
 
@@ -621,8 +621,8 @@ def test_diff_refuses_rendered_preview_above_configured_limit(tmp_path: Path) ->
                     "expected_sha256": hashlib.sha256(
                         original.encode("utf-8")
                     ).hexdigest(),
-                    "old": "a",
-                    "new": "b",
+                    "old": "z",
+                    "new": "Z",
                 }
             ],
         )
