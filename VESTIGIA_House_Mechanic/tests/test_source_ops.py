@@ -97,6 +97,7 @@ def test_read_returns_utf8_text_hash_and_relative_path(tmp_path: Path) -> None:
     worktree = Path(task.worktree_path)
     (worktree / "second.txt").write_bytes(b"two\n")
 
+    expected = (worktree / "hello.txt").read_bytes()
     result = workspace.read(
         task_id=task.task_id,
         holder_id="vestigia",
@@ -105,9 +106,9 @@ def test_read_returns_utf8_text_hash_and_relative_path(tmp_path: Path) -> None:
     )
 
     assert [item["path"] for item in result["items"]] == ["hello.txt", "second.txt"]
-    assert result["items"][0]["text"] == "one\n"
-    assert result["items"][0]["sha256"] == hashlib.sha256(b"one\n").hexdigest()
-    assert result["items"][0]["size_bytes"] == 4
+    assert result["items"][0]["text"] == expected.decode("utf-8")
+    assert result["items"][0]["sha256"] == hashlib.sha256(expected).hexdigest()
+    assert result["items"][0]["size_bytes"] == len(expected)
     assert result["items"][0]["encoding"] == "utf-8"
     assert result["items"][0]["truncated"] is False
 
