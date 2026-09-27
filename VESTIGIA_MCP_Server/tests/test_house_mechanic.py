@@ -126,6 +126,18 @@ class _FakeMechanicHandler(BaseHTTPRequestHandler):
 def _start_fake_mechanic() -> tuple[ThreadingHTTPServer, threading.Thread]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeMechanicHandler)
     server.operations = {  # type: ignore[attr-defined]
+        "task.read": {
+            "effect": "bounded_worktree_read",
+            "mutation": False,
+            "method": "POST",
+            "path": "/v1/do",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"paths": {"type": "array"}},
+                "required": ["paths"],
+            },
+        },
         "task.acquire": {
             "effect": "worktree_mutation",
             "mutation": True,
@@ -373,3 +385,50 @@ def test_client_reports_transport_failure(tmp_path: Path) -> None:
     )
     with pytest.raises(HouseMechanicClientError, match="loopback request failed"):
         client.capabilities(request_id="mcp_req_transport")
+
+
+def test_client_projects_safe_task_reads_without_mutation_allowlist(tmp_path: Path) -> None:
+    DevActionFilter, _, HouseMechanicClientError = _load_contract()
+    server, thread = _start_fake_mechanic()
+    try:
+        wildcard = _client(
+            tmp_path,
+            server,
+            DevActionFilter(mode="wildcard", actions=()),
+        )
+        response = wildcard.capabilities(request_id="mcp_req_calls")
+        assert set(wildcard.projected_calls(response)) == {"task.read", "task.acquire"}
+        assert set(wildcard.projected_mutations(response)) == {"task.acquire"}
+
+        denied = _client(
+            tmp_path,
+            server,
+            DevActionFilter(mode="deny_all", actions=()),
+        )
+        assert set(denied.projected_calls(response)) == {"task.read"}
+        assert denied.projected_mutations(response) == {}
+        result = denied.call(
+            "task.read",
+            {"paths": ["hello.txt"]},
+            request_id="mcp_req_read",
+        )
+        assert result["request_id"] == "mcp_req_read"
+        assert server.last_payload == {"paths": ["hello.txt"]}  # type: ignore[attr-defined]
+
+        exact = _client(
+            tmp_path,
+            server,
+            DevActionFilter(mode="exact", actions=("task.acquire",)),
+        )
+        assert set(exact.projected_calls(response)) == {"task.read", "task.acquire"}
+
+        with pytest.raises(HouseMechanicClientError, match="not a projected"):
+            denied.call(
+                "service.process_status",
+                {"service_id": "fixture"},
+                request_id="mcp_req_other_read",
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
