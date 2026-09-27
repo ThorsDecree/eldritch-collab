@@ -238,6 +238,37 @@ protect against the local machine operator who can read the server's SQLite stat
 principal/Keyring layer can replace this binding without changing the GameTable event model. See
 `docs/GAMETABLE.md`.
 
+### House Mechanic dev projection: one mutation door
+
+Optional tools:
+
+- `dev.capabilities`
+- `dev.call`
+- `dev.process`
+- `dev.logs`
+
+Phase 5 projects the independent local House Mechanic supervisor through a deliberately small MCP
+surface. `dev.call` is the **only** House Mechanic mutation descriptor; it uses House Mechanic's
+canonical operation IDs verbatim and re-reads the live `/v1/capabilities` contract before every
+mutation. `dev.process` and `dev.logs` are observation-only.
+
+House Mechanic publishes each projectable operation with a fixed method/path and closed
+`input_schema`. MCP accepts only safe loopback `/v1/` routes, applies
+`VESTIGIA_MCP_DEV_ACTIONS`, forwards the arguments unchanged, and leaves House Mechanic's own
+lease/generation/service/repository/schema checks authoritative.
+
+`VESTIGIA_MCP_DEV_ACTIONS` defaults to wildcard behavior when **unset** or set to `*`: every
+eligible mutation currently advertised by that configured House Mechanic instance is projected.
+An explicitly empty value denies all mutations; a comma-separated list admits only those exact
+canonical operation IDs. Wildcard is not arbitrary host authority: caller-defined HTTP routes,
+shell/argv/cwd/environment, unconfigured repositories/services, and House Mechanic policy bypasses
+remain absent.
+
+Every `dev.call` creates one `mcp_req_...` request ID, records it in the MCP audit layer, and
+passes it as `X-Request-ID` to House Mechanic. House Mechanic receipts remain an independent
+evidence layer; the shared request ID is a join key rather than a claim that either receipt proves
+the other.
+
 ### Runtime projection: one authority, multiple routes
 
 Optional tools:
@@ -374,6 +405,23 @@ The catalog path must remain inside the source prefix and end in `.json`. To sta
 grant the source prefix in `VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES`; the first
 `lanternslide.stage_catalog` call proposes the missing `Lanternslide/` directory when needed.
 Promote that directory explicitly, then call the tool again to stage the catalog text.
+
+### Optional House Mechanic linkage
+
+Run House Mechanic independently on loopback with its bearer token, then configure MCP:
+
+```text
+VESTIGIA_MCP_HOUSE_MECHANIC_ENABLED=true
+VESTIGIA_MCP_HOUSE_MECHANIC_HOST=127.0.0.1
+VESTIGIA_MCP_HOUSE_MECHANIC_PORT=8770
+VESTIGIA_MCP_HOUSE_MECHANIC_TOKEN_PATH=C:\\path\\to\\house-mechanic-token
+VESTIGIA_MCP_DEV_ACTIONS=*
+```
+
+For a compartmentalized deployment, replace `*` with exact canonical IDs such as
+`task.acquire,iteration.begin,iteration.checkpoint,deployment.candidate`. Set the variable to an
+explicit empty value to expose no House Mechanic mutations at all. Restart MCP after changing the
+link or projection policy.
 
 ### Optional Runtime linkage
 
@@ -536,6 +584,18 @@ in the launching shell. An alternate tunnel profile may be supplied as the first
 
 See `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md`, `docs/RUNTIME_PROJECTION.md`, and
 `docs/CANONICAL_ARCHIVE_WRITES.md`.
+
+## v0.10 - Stable Dev Door
+
+- Added the stable four-tool House Mechanic projection: `dev.capabilities`, `dev.call`,
+  `dev.process`, and `dev.logs`.
+- Kept all House Mechanic mutation authority behind `dev.call`; observation tools remain
+  read-only.
+- Added loopback-only House Mechanic client transport, protocol/request-ID checks, response
+  ceilings, safe-route projection, and independent receipt correlation.
+- Added wildcard-by-default `VESTIGIA_MCP_DEV_ACTIONS` with exact-subset and deny-all modes.
+- Added a real cross-package integration test proving MCP -> House Mechanic mutation and receipt
+  correlation without making House Mechanic a production MCP dependency.
 
 ## v0.5 - More Rooms, Longer Shelves
 

@@ -101,6 +101,17 @@ def test_authenticated_task_api_acquire_iterate_checkpoint_and_receipt(tmp_path:
         assert caps["protocol"] == PROTOCOL
         assert caps["operations"]["task.acquire"]["enabled"] is True
         assert caps["operations"]["task.acquire"]["caller_supplies_worktree_path"] is False
+        acquire_meta = caps["operations"]["task.acquire"]
+        assert acquire_meta["mutation"] is True
+        assert acquire_meta["method"] == "POST"
+        assert acquire_meta["path"] == "/v1/task-acquire"
+        assert acquire_meta["input_schema"]["type"] == "object"
+        assert acquire_meta["input_schema"]["additionalProperties"] is False
+        assert set(acquire_meta["input_schema"]["required"]) == {
+            "repository_id",
+            "holder_id",
+            "purpose",
+        }
 
         status, acquired = _request(
             port,

@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - "VESTIGIA_MCP_Server/**"
+      - "VESTIGIA_House_Mechanic/pyproject.toml"
+      - "VESTIGIA_House_Mechanic/src/house_mechanic/api.py"
       - "VESTIGIA_Runtime/pyproject.toml"
       - "VESTIGIA_Runtime/src/vestigia/bootstrap.py"
       - "VESTIGIA_Runtime/src/vestigia/config.py"
@@ -19,6 +21,8 @@ on:
   pull_request:
     paths:
       - "VESTIGIA_MCP_Server/**"
+      - "VESTIGIA_House_Mechanic/pyproject.toml"
+      - "VESTIGIA_House_Mechanic/src/house_mechanic/api.py"
       - "VESTIGIA_Runtime/pyproject.toml"
       - "VESTIGIA_Runtime/src/vestigia/bootstrap.py"
       - "VESTIGIA_Runtime/src/vestigia/config.py"
@@ -53,11 +57,13 @@ jobs:
           cache: pip
           cache-dependency-path: |
             VESTIGIA_MCP_Server/pyproject.toml
+            VESTIGIA_House_Mechanic/pyproject.toml
             VESTIGIA_Runtime/pyproject.toml
 
       - name: Install Runtime and MCP development packages
         run: |
           python -m pip install -e "..\VESTIGIA_Runtime[dev,discord,tokens,mcp-context]"
+          python -m pip install -e "..\VESTIGIA_House_Mechanic[dev]"
           python -m pip install -e ".[dev]"
           python -m pip check
 

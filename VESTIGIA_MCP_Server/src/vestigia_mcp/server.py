@@ -21,6 +21,7 @@ from .audit import AuditError, AuditLedger
 from .browse import BrowseSessionStore
 from .config import Settings
 from .daemon_bridge import DaemonBridgeClient, DaemonBridgeError
+from .house_mechanic import HouseMechanicClient, HouseMechanicClientError
 from .health import (
     archive_health as inspect_archive_health,
     registry_status as inspect_registry_status,
@@ -63,6 +64,14 @@ CANONICAL_WRITE_ANNOTATIONS = ToolAnnotations(
     open_world_hint=False,
     idempotent_hint=True,
 )
+
+
+def _tail_utf8_bytes(value: object, limit: int) -> str:
+    text = value if isinstance(value, str) else ""
+    raw = text.encode("utf-8")
+    if len(raw) <= limit:
+        return text
+    return raw[-limit:].decode("utf-8", errors="ignore")
 
 
 def _live_archive_exclusions(settings: Settings) -> tuple[str, ...]:
@@ -114,6 +123,15 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         deployment_id=settings.deployment_id,
         timeout_seconds=settings.daemon_bridge_timeout_seconds,
         max_response_bytes=settings.daemon_bridge_max_response_bytes,
+    )
+    house_mechanic = HouseMechanicClient(
+        enabled=settings.house_mechanic_enabled,
+        host=settings.house_mechanic_host,
+        port=settings.house_mechanic_port,
+        token_path=settings.house_mechanic_token_path,
+        timeout_seconds=settings.house_mechanic_timeout_seconds,
+        max_response_bytes=settings.house_mechanic_max_response_bytes,
+        action_filter=settings.dev_actions,
     )
     archive_mutations = ArchiveMutationStore(
         settings.live_archive_root,
@@ -217,6 +235,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             AuditError,
             RuntimeBridgeError,
             DaemonBridgeError,
+            HouseMechanicClientError,
             GameTableError,
         ) as exc:
             event = ledger.record(
@@ -1915,6 +1934,253 @@ def create_server(settings: Settings | None = None) -> MCPServer:
 
         return guarded(
             "lanternslide.stage_catalog",
+            arguments,
+            operation,
+            request_id=request_id,
+        )
+
+    @server.tool(
+        name="dev.capabilities",
+        title="Inspect House Mechanic dev capabilities",
+        description=(
+            "Inspect the live House Mechanic operation contract and this MCP deployment's "
+            "current mutation projection. This is read-only; dev.call is the only House "
+            "Mechanic mutation surface exposed by MCP."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def dev_capabilities() -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        arguments: dict[str, Any] = {}
+
+        def operation() -> dict[str, object]:
+            status = house_mechanic.status()
+            filter_view = {
+                "mode": settings.dev_actions.mode,
+                "actions": (
+                    list(settings.dev_actions.actions)
+                    if settings.dev_actions.mode == "exact"
+                    else []
+                ),
+            }
+            if not status.get("configured"):
+                return {
+                    "request_id": request_id,
+                    **status,
+                    "action_filter": filter_view,
+                    "operations": {},
+                    "projected_mutations": {},
+                    "rejections": {},
+                }
+            capabilities = house_mechanic.capabilities(request_id=request_id)
+            return {
+                "request_id": request_id,
+                **status,
+                "action_filter": filter_view,
+                "operations": capabilities["operations"],
+                "projected_mutations": house_mechanic.projected_mutations(
+                    capabilities
+                ),
+                "rejections": house_mechanic.projection_rejections(capabilities),
+            }
+
+        return guarded(
+            "dev.capabilities",
+            arguments,
+            operation,
+            request_id=request_id,
+        )
+
+    @server.tool(
+        name="dev.call",
+        title="Call one House Mechanic mutation",
+        description=(
+            "Dispatch one mutation advertised by the live House Mechanic capability contract "
+            "and allowed by this deployment's VESTIGIA_MCP_DEV_ACTIONS filter. Operation IDs "
+            "are passed verbatim; MCP never accepts caller-defined HTTP routes, argv, cwd, or "
+            "environment."
+        ),
+        annotations=LOCAL_WRITE_ANNOTATIONS,
+    )
+    def dev_call(
+        action: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        supplied = arguments if arguments is not None else {}
+        audit_arguments = {"action": action, "arguments": supplied}
+
+        def operation() -> dict[str, object]:
+            result = house_mechanic.call(
+                action,
+                supplied,
+                request_id=request_id,
+            )
+            return {
+                "request_id": request_id,
+                "action": action,
+                "projection": {
+                    "allowed": True,
+                    "allowlist_mode": settings.dev_actions.mode,
+                },
+                "result": result,
+            }
+
+        return guarded(
+            "dev.call",
+            audit_arguments,
+            operation,
+            request_id=request_id,
+        )
+
+    @server.tool(
+        name="dev.process",
+        title="Inspect House Mechanic process state",
+        description=(
+            "Read House Mechanic supervisor-instance process state for one declared service, "
+            "optionally with a health observation. This tool cannot start, stop, restart, "
+            "deploy, adopt, or reconcile a process."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def dev_process(
+        service_id: str,
+        include_health: bool = True,
+    ) -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        arguments = {
+            "service_id": service_id,
+            "include_health": include_health,
+        }
+
+        def operation() -> dict[str, object]:
+            process = house_mechanic.process_status(
+                service_id,
+                request_id=request_id,
+            )
+            health = (
+                house_mechanic.health(service_id, request_id=request_id)
+                if include_health
+                else None
+            )
+            return {
+                "request_id": request_id,
+                "service_id": service_id,
+                "process": process,
+                "health": health,
+            }
+
+        return guarded(
+            "dev.process",
+            arguments,
+            operation,
+            request_id=request_id,
+        )
+
+    @server.tool(
+        name="dev.logs",
+        title="Read bounded House Mechanic logs or receipts",
+        description=(
+            "Read bounded development evidence from House Mechanic. source=process tails the "
+            "declared service's stdout/stderr; source=receipts returns recent durable receipts "
+            "or one exact receipt. This tool never mutates process or receipt state."
+        ),
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def dev_logs(
+        source: str,
+        service_id: str | None = None,
+        receipt_id: str | None = None,
+        tail_bytes: int = 16_384,
+        limit: int = 50,
+    ) -> dict[str, object]:
+        request_id = f"mcp_req_{uuid.uuid4()}"
+        arguments = {
+            "source": source,
+            "service_id": service_id,
+            "receipt_id": receipt_id,
+            "tail_bytes": tail_bytes,
+            "limit": limit,
+        }
+
+        def operation() -> dict[str, object]:
+            if source == "process":
+                if not isinstance(service_id, str) or not service_id.strip():
+                    raise HouseMechanicClientError(
+                        "dev.logs process source requires service_id"
+                    )
+                if receipt_id is not None:
+                    raise HouseMechanicClientError(
+                        "dev.logs process source does not accept receipt_id"
+                    )
+                if not 1 <= int(tail_bytes) <= 16_384:
+                    raise HouseMechanicClientError(
+                        "dev.logs tail_bytes must be between 1 and 16384"
+                    )
+                response = house_mechanic.process_logs(
+                    service_id,
+                    request_id=request_id,
+                )
+                raw_logs = response.get("logs")
+                if not isinstance(raw_logs, dict):
+                    raise HouseMechanicClientError(
+                        "House Mechanic process log response is missing logs"
+                    )
+                logs = dict(raw_logs)
+                logs["stdout_tail"] = _tail_utf8_bytes(
+                    logs.get("stdout_tail"),
+                    int(tail_bytes),
+                )
+                logs["stderr_tail"] = _tail_utf8_bytes(
+                    logs.get("stderr_tail"),
+                    int(tail_bytes),
+                )
+                return {
+                    "request_id": request_id,
+                    "source": "process",
+                    "service_id": service_id,
+                    "logs": logs,
+                }
+
+            if source == "receipts":
+                if service_id is not None:
+                    raise HouseMechanicClientError(
+                        "dev.logs receipts source does not accept service_id"
+                    )
+                if not 1 <= int(limit) <= 50:
+                    raise HouseMechanicClientError(
+                        "dev.logs limit must be between 1 and 50"
+                    )
+                if receipt_id is not None:
+                    response = house_mechanic.inspect_receipt(
+                        receipt_id,
+                        request_id=request_id,
+                    )
+                    return {
+                        "request_id": request_id,
+                        "source": "receipts",
+                        "receipt": response.get("receipt"),
+                    }
+                response = house_mechanic.recent_receipts(
+                    request_id=request_id,
+                )
+                rows = response.get("receipts")
+                if not isinstance(rows, list):
+                    raise HouseMechanicClientError(
+                        "House Mechanic receipt response is missing receipts"
+                    )
+                return {
+                    "request_id": request_id,
+                    "source": "receipts",
+                    "receipts": rows[: int(limit)],
+                }
+
+            raise HouseMechanicClientError(
+                "dev.logs source must be 'process' or 'receipts'"
+            )
+
+        return guarded(
+            "dev.logs",
             arguments,
             operation,
             request_id=request_id,
