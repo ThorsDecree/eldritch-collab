@@ -245,7 +245,23 @@ class LanternslideService:
                 raise LanternslideError("Lanternslide scan ID does not match the active scan")
 
             if state.get("candidate_manifest_sha256") != current_manifest:
-                raise LanternslideError("Lanternslide candidate manifest changed during scan")
+                previous_paths = tuple(str(path) for path in state.get("candidate_paths", []))
+                previous_set = set(previous_paths)
+                current_set = set(current_paths)
+                if not previous_set.issubset(current_set):
+                    raise LanternslideError(
+                        "Lanternslide candidate manifest changed incompatibly during scan"
+                    )
+                additions = tuple(path for path in current_paths if path not in previous_set)
+                if not additions:
+                    raise LanternslideError(
+                        "Lanternslide candidate manifest changed incompatibly during scan"
+                    )
+                state["candidate_paths"] = [*previous_paths, *additions]
+                state["candidate_manifest_sha256"] = current_manifest
+                state["complete"] = False
+                state["catalog_sha256"] = self._catalog_digest(state)
+                self._write_state(state)
             if state.get("complete"):
                 return self._public_scan(state).public()
 
