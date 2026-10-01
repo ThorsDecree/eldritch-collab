@@ -66,15 +66,38 @@ def test_scan_excludes_derived_catalog_and_records_omissions(tmp_path: Path) -> 
     }
 
 
-def test_scan_rejects_wrong_active_id_and_source_change(tmp_path: Path) -> None:
+def test_scan_rejects_wrong_active_id_and_tolerates_added_candidates(tmp_path: Path) -> None:
     root, service = _service(tmp_path, batch=1)
     _write_image(root / "pics/a.png", (1, 2, 3))
     _write_image(root / "pics/b.png", (4, 5, 6))
     first = service.scan()
     with pytest.raises(LanternslideError, match="scan ID"):
         service.scan(scan_id="lanternslide_scan_wrong")
-    _write_image(root / "pics/new.png", (4, 5, 6))
-    with pytest.raises(LanternslideError, match="candidate manifest"):
+
+    _write_image(root / "pics/new.png", (7, 8, 9))
+    second = service.scan(scan_id=first["scan_id"])
+    assert second["complete"] is False
+    assert second["candidate_total"] == 3
+    assert second["next_offset"] == 2
+
+    third = service.scan(scan_id=first["scan_id"])
+    assert third["complete"] is True
+    assert third["indexed_total"] == 3
+    assert {entry["path"] for entry in third["entries"]} == {
+        "pics/a.png",
+        "pics/b.png",
+        "pics/new.png",
+    }
+
+
+def test_scan_rejects_candidate_removal_during_resume(tmp_path: Path) -> None:
+    root, service = _service(tmp_path, batch=1)
+    _write_image(root / "pics/a.png", (1, 2, 3))
+    _write_image(root / "pics/b.png", (4, 5, 6))
+    first = service.scan()
+
+    (root / "pics/b.png").unlink()
+    with pytest.raises(LanternslideError, match="changed incompatibly"):
         service.scan(scan_id=first["scan_id"])
 
 
