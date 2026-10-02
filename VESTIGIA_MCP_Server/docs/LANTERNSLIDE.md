@@ -31,8 +31,10 @@ inclusion into evidence that an image caused a later response.
 | `lanternslide.stage_catalog` | PREPARE | Stage the complete JSONL catalog through Archive mutation controls. |
 
 `lanternslide.scan` accepts an optional `scan_id`. A new scan creates a durable scan ID. If the
-scan is incomplete, the same ID must be supplied to continue; a changed candidate manifest
-causes the continuation to fail rather than mixing two inventories.
+scan is incomplete, the same ID must be supplied to continue. Additive source growth is tolerated:
+newly discovered candidates are appended to the saved scan inventory and indexed after the
+original candidates. Candidate removal or other incompatible manifest drift still causes the
+continuation to fail rather than silently rewriting the inventory under an active scan.
 
 ## Source and state boundaries
 
