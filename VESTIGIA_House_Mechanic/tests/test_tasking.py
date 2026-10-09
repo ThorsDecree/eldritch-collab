@@ -455,3 +455,21 @@ def test_legacy_task_record_loads_current_base_from_original_base(tmp_path: Path
     loaded = ledger.get(task.task_id)
     assert loaded.current_base_commit == loaded.base_commit
     assert loaded.pending_base_commit is None
+
+
+def test_repository_relative_path_rebases_declared_cwd_into_task_repo(tmp_path: Path) -> None:
+    _, _, worktrees, _ = _setup(tmp_path)
+
+    assert worktrees.repository_relative_path("fixture", "repo") == "."
+    assert (
+        worktrees.repository_relative_path("fixture", "repo/VESTIGIA_Runtime")
+        == "VESTIGIA_Runtime"
+    )
+
+
+def test_repository_relative_path_refuses_path_outside_task_repo(tmp_path: Path) -> None:
+    _, _, worktrees, _ = _setup(tmp_path)
+
+    with pytest.raises(TaskError) as exc:
+        worktrees.repository_relative_path("fixture", "outside")
+    assert exc.value.code == "path_outside_repository"

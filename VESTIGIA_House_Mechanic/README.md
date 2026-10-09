@@ -1,6 +1,6 @@
 # VESTIGIA House Mechanic
 
-Status: v0.12 task-scoped source workbench; Phase 6 self-maintenance substrate.
+Status: v0.13 task-bound recipe verification; Phase 6 self-maintenance substrate.
 
 House Mechanic is the small host-side execution plane for VESTIGIA development work. It remains deliberately separate from the MCP Server and Runtime Workshop.
 
@@ -10,21 +10,23 @@ The governing rule is:
 
 House Mechanic exposes named, operator-authored recipes, typed service lifecycle actions, and task-scoped source operations. It still does not expose arbitrary command text, caller-supplied argv/cwd/environment, credentials, caller-selected host paths, or a caller-selectable bind address.
 
-## Current v0.12 slice
+## Current v0.13 slice
 
-v0.12 gives an active task enough bounded source authority to inspect and build inside its own issued Git worktree without granting general filesystem or shell access:
+v0.13 closes the verification seam in the task workbench: a declared operator recipe can now run against the exact Git worktree issued to an active task without widening House Mechanic into a general command runner.
 
 - `task.read` reads bounded UTF-8 text during an active leased task and returns normalized relative paths plus exact hashes;
 - `task.diff` requires the current task holder, authority generation, and open iteration, validates an ordered multi-file mutation set, and persists an immutable proposal without changing source files;
 - `task.patch` accepts only the exact prior `proposal_id + proposal_digest`, revalidates every precondition, then applies the whole set or none of it;
+- `task.run_recipe` requires the active task authority tuple plus an operator-declared `recipe_id`, resolves the issued worktree internally, and executes the fixed recipe there;
+- task-bound recipes do not require an open iteration; dirty worktrees are expected during RED/GREEN work, and an open iteration ID is recorded as provenance rather than used as an admission gate;
+- generic `recipe.run` remains rooted at the operator checkout, so operator-root diagnostics and task-local verification stay separate auditable intents;
+- task recipe receipts use the distinct `task_recipe_run` kind and bind task/repository/generation/iteration provenance to the runner's exact Git branch/commit/dirty/status evidence without persisting an absolute worktree path;
 - proposals may modify existing UTF-8 text files or create new UTF-8 files and parent directories inside the issued worktree;
-- delete, rename, binary mutation, symlink/junction traversal, hard-link aliasing, special-file mutation, arbitrary host paths, and supervisor self-deployment remain out of scope;
-- patch proposals are bounded to 32 files, 1 MiB per resulting text file, 4 MiB total patch payload, and a 5 MiB rendered unified-diff preview by default;
-- reads, proposals, patches, pre/post hashes, and proposal consumption leave durable source-operation evidence joined to MCP audit evidence by request ID;
+- delete, rename, binary mutation, symlink/junction traversal, hard-link aliasing, special-file mutation, arbitrary host paths, caller-selected execution parameters, and supervisor self-deployment remain out of scope;
 - `iteration.checkpoint` remains the Git-history boundary, so newly created files become normal tracked history through the existing `git add -A` checkpoint;
-- API protocol v0.10 carries the task-source contract consumed by MCP's stable `dev.*` projection.
+- API protocol v0.10 remains the stable capability contract consumed by MCP's `dev.*` projection.
 
-The stable MCP layer still exposes only `dev.capabilities`, `dev.call`, `dev.process`, and `dev.logs`. `dev.call` dispatches fixed safe task reads plus allowlisted mutations; it never accepts caller-defined HTTP routes, shell commands, argv, cwd, or environment.
+The stable MCP layer still exposes only `dev.capabilities`, `dev.call`, `dev.process`, and `dev.logs`. `dev.call` dispatches fixed safe task reads plus allowlisted mutations such as `task.run_recipe`; it never accepts caller-defined HTTP routes, shell commands, argv, cwd, environment, or worktree paths.
 
 The normal task-source lifecycle is:
 
@@ -33,9 +35,38 @@ task.read
   -> iteration.begin
   -> task.diff
   -> task.patch
-  -> compile/test
+  -> task.run_recipe
   -> iteration.checkpoint
+  -> task.run_recipe
 ```
+
+The example operator recipe manifest includes two fixed Runtime verification recipes:
+
+- `runtime.test.mcp_context_source`: focused `tests/test_mcp_context_source.py` loop;
+- `runtime.test`: complete Runtime pytest suite.
+
+Both are ordinary operator-authored recipes. A caller selects only the recipe ID.
+
+The Runtime examples pass pytest `-o pythonpath=src` so imports use the selected
+worktree's source, even when the interpreter has an editable Runtime installation
+pointing at the operator checkout. The operator must still supply an interpreter
+with pytest and the Runtime's dependencies installed.
+
+For these longer synchronous recipes, set MCP's
+`VESTIGIA_MCP_HOUSE_MECHANIC_TIMEOUT_SECONDS` above the recipe timeout plus transport
+and receipt overhead (for example, `1860` for the 1800-second full-suite recipe).
+The MCP default is 120 seconds. A transport timeout does not prove that execution
+stopped; inspect durable receipts before retrying.
+
+### Execution evidence limits
+
+Task authority is checked at admission. Lease expiry or a later handoff does not
+cancel an admitted process. The holder/generation in its receipt describes that
+admission. Task edits, checkpoints, refreshes, and handoffs are not serialized with
+the recipe run, and Git evidence is sampled before process launch. It proves the
+observed pre-run state, not that source remained immutable during testing. Keep the
+task worktree unchanged until verification completes when using a run as evidence
+for a particular candidate commit.
 
 ## Prior v0.11 machine-dispatch slice
 

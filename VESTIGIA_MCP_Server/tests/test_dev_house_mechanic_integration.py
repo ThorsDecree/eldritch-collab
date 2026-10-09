@@ -66,6 +66,21 @@ def _start_house_mechanic(tmp_path: Path):
                         "expected_exit_codes": [0],
                         "max_stdout_bytes": 4096,
                         "max_stderr_bytes": 4096,
+                    },
+                    {
+                        "id": "phase5.read",
+                        "description": "Read task-local hello for task recipe integration",
+                        "argv": [
+                            sys.executable,
+                            "-c",
+                            "from pathlib import Path; print(Path('hello.txt').read_text().strip())",
+                        ],
+                        "cwd": ".",
+                        "timeout_seconds": 5,
+                        "env_profile": "python",
+                        "expected_exit_codes": [0],
+                        "max_stdout_bytes": 4096,
+                        "max_stderr_bytes": 4096,
                     }
                 ],
             }
@@ -286,10 +301,11 @@ def test_real_task_source_edit_loop_is_joined_and_allowlist_preserves_reads(
             assert caps.is_error is False
             assert caps.structured_content is not None
             assert caps.structured_content["protocol"] == "vestigia.house-mechanic-api.v0.10"
-            assert house_mechanic.__version__ == "0.12.0.dev0"
+            assert house_mechanic.__version__ == "0.13.0.dev0"
             assert "task.read" in caps.structured_content["projected_calls"]
             assert "task.diff" in caps.structured_content["projected_mutations"]
             assert "task.patch" in caps.structured_content["projected_mutations"]
+            assert "task.run_recipe" in caps.structured_content["projected_mutations"]
 
             acquired = await client.call_tool(
                 "dev.call",
@@ -400,6 +416,63 @@ def test_real_task_source_edit_loop_is_joined_and_allowlist_preserves_reads(
             assert (worktree / "Vesti" / "new-machine.txt").read_text(
                 encoding="utf-8"
             ) == "built by the house\n"
+            task_run = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.run_recipe",
+                    "arguments": {
+                        "task_id": task_id,
+                        "holder_id": "vestigia",
+                        "authority_generation": 1,
+                        "recipe_id": "phase5.read",
+                    },
+                },
+            )
+            assert task_run.is_error is False
+            assert task_run.structured_content is not None
+            task_run_body = task_run.structured_content
+            task_run_request_id = task_run_body["request_id"]
+            task_run_result = task_run_body["result"]
+            assert task_run_result["request_id"] == task_run_request_id
+            assert task_run_result["iteration_id"] == iteration_id
+            assert task_run_result["receipt"]["stdout"].strip() == "two"
+            assert task_run_result["receipt"]["source_dirty"] is True
+
+            task_run_receipt = await client.call_tool(
+                "dev.logs",
+                {
+                    "source": "receipts",
+                    "receipt_id": task_run_result["durable_receipt_id"],
+                },
+            )
+            assert task_run_receipt.is_error is False
+            assert task_run_receipt.structured_content is not None
+            task_run_hm_receipt = task_run_receipt.structured_content["receipt"]
+            assert task_run_hm_receipt["kind"] == "task_recipe_run"
+            assert task_run_hm_receipt["request_id"] == task_run_request_id
+            assert task_run_hm_receipt["evidence"]["iteration_id"] == iteration_id
+
+            task_run_mcp_receipt = await client.call_tool(
+                "receipts.recent",
+                {
+                    "capability": "dev.call",
+                    "request_id": task_run_request_id,
+                },
+            )
+            assert task_run_mcp_receipt.is_error is False
+            assert task_run_mcp_receipt.structured_content is not None
+            assert task_run_mcp_receipt.structured_content["matched_total"] == 1
+
+            generic_run = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "recipe.run",
+                    "arguments": {"recipe_id": "phase5.read"},
+                },
+            )
+            assert generic_run.is_error is False
+            assert generic_run.structured_content is not None
+            assert generic_run.structured_content["result"]["receipt"]["stdout"].strip() == "one"
 
             mechanic_receipt = await client.call_tool(
                 "dev.logs",
@@ -450,6 +523,26 @@ def test_real_task_source_edit_loop_is_joined_and_allowlist_preserves_reads(
                 worktree, "ls-tree", "-r", "--name-only", checkpoint_commit
             ).splitlines()
 
+            clean_task_run = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.run_recipe",
+                    "arguments": {
+                        "task_id": task_id,
+                        "holder_id": "vestigia",
+                        "authority_generation": 1,
+                        "recipe_id": "phase5.read",
+                    },
+                },
+            )
+            assert clean_task_run.is_error is False
+            assert clean_task_run.structured_content is not None
+            clean_result = clean_task_run.structured_content["result"]
+            assert clean_result["iteration_id"] is None
+            assert clean_result["receipt"]["source_dirty"] is False
+            assert clean_result["receipt"]["source_commit"] == checkpoint_commit
+            assert clean_result["receipt"]["stdout"].strip() == "two"
+
             state.update(
                 task_id=task_id,
                 worktree=worktree,
@@ -483,6 +576,21 @@ def test_real_task_source_edit_loop_is_joined_and_allowlist_preserves_reads(
             )
             assert safe_read.is_error is False
 
+            denied_task_run = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.run_recipe",
+                    "arguments": {
+                        "task_id": state["task_id"],
+                        "holder_id": "vestigia",
+                        "authority_generation": state["authority_generation"],
+                        "recipe_id": "phase5.read",
+                    },
+                },
+            )
+            assert denied_task_run.is_error is True
+            assert "not allowed" in str(denied_task_run.content)
+
             denied_patch = await client.call_tool(
                 "dev.call",
                 {
@@ -499,6 +607,35 @@ def test_real_task_source_edit_loop_is_joined_and_allowlist_preserves_reads(
             )
             assert denied_patch.is_error is True
             assert "not allowed" in str(denied_patch.content)
+
+        exact_run = create_server(
+            _mcp_settings(
+                tmp_path,
+                port=mechanic.server_address[1],
+                token_path=token_path,
+                action_filter=DevActionFilter(
+                    mode="exact",
+                    actions=("task.run_recipe",),
+                ),
+                suffix="task-run-filter",
+            )
+        )
+        async with Client(exact_run) as client:
+            allowed_task_run = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.run_recipe",
+                    "arguments": {
+                        "task_id": state["task_id"],
+                        "holder_id": "vestigia",
+                        "authority_generation": state["authority_generation"],
+                        "recipe_id": "phase5.read",
+                    },
+                },
+            )
+            assert allowed_task_run.is_error is False
+            assert allowed_task_run.structured_content is not None
+            assert allowed_task_run.structured_content["result"]["receipt"]["stdout"].strip() == "two"
 
     try:
         asyncio.run(exercise())

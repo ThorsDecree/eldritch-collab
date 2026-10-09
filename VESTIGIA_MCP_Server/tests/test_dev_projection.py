@@ -115,6 +115,22 @@ class _MechanicHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if self.path == "/v1/task-run-recipe":
+            self._send(
+                200,
+                {
+                    "protocol": PROTOCOL,
+                    "request_id": request_id,
+                    "execution_occurred": True,
+                    "receipt_persisted": True,
+                    "durable_receipt_id": "hm_receipt_task_run",
+                    "task_id": payload["task_id"],
+                    "authority_generation": payload["authority_generation"],
+                    "iteration_id": None,
+                    "receipt": {"exit_code": 0, "stdout": "task-ok\n"},
+                },
+            )
+            return
         if self.path == "/v1/task-acquire":
             if payload.get("purpose") == "reject":
                 self._send(
@@ -245,6 +261,23 @@ def _start_mechanic() -> tuple[ThreadingHTTPServer, threading.Thread]:
                 "required": ["paths"],
             },
         },
+        "task.run_recipe": {
+            "effect": "bounded_task_local_process",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/task-run-recipe",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "holder_id": {"type": "string"},
+                    "authority_generation": {"type": "integer"},
+                    "recipe_id": {"type": "string"},
+                },
+                "required": ["task_id", "holder_id", "authority_generation", "recipe_id"],
+            },
+        },
         "task.acquire": {
             "effect": "worktree_mutation",
             "mutation": True,
@@ -342,8 +375,8 @@ def test_dev_surface_projects_one_mutation_tool_and_preserves_receipt_join(
             assert projected["configured"] is True
             assert projected["available"] is True
             assert projected["action_filter"]["mode"] == "wildcard"
-            assert set(projected["projected_calls"]) == {"task.read", "task.acquire"}
-            assert set(projected["projected_mutations"]) == {"task.acquire"}
+            assert set(projected["projected_calls"]) == {"task.read", "task.acquire", "task.run_recipe"}
+            assert set(projected["projected_mutations"]) == {"task.acquire", "task.run_recipe"}
             assert (
                 projected["projected_mutations"]["task.acquire"]["input_schema"]["type"]
                 == "object"
@@ -601,6 +634,75 @@ def test_dev_call_allows_task_read_when_mutations_are_denied(tmp_path: Path) -> 
             )
             assert denied.is_error is True
             assert "not allowed" in str(denied.content)
+    try:
+        asyncio.run(exercise())
+    finally:
+        mechanic.shutdown()
+        mechanic.server_close()
+        thread.join(timeout=2)
+
+
+def test_task_run_recipe_projection_respects_exact_and_deny_all_filters(tmp_path: Path) -> None:
+    mechanic, thread = _start_mechanic()
+
+    async def exercise() -> None:
+        exact = create_server(
+            _settings(
+                tmp_path,
+                mechanic,
+                action_filter=DevActionFilter(mode="exact", actions=("task.run_recipe",)),
+            )
+        )
+        async with Client(exact) as client:
+            caps = await client.call_tool("dev.capabilities", {})
+            assert caps.is_error is False
+            assert caps.structured_content is not None
+            assert "task.run_recipe" in caps.structured_content["projected_calls"]
+            assert "task.run_recipe" in caps.structured_content["projected_mutations"]
+            result = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.run_recipe",
+                    "arguments": {
+                        "task_id": "hm_task_fixture",
+                        "holder_id": "vestigia",
+                        "authority_generation": 1,
+                        "recipe_id": "runtime.test",
+                    },
+                },
+            )
+            assert result.is_error is False
+            assert result.structured_content is not None
+            assert result.structured_content["result"]["receipt"]["stdout"] == "task-ok\n"
+
+        denied = create_server(
+            _settings(
+                tmp_path,
+                mechanic,
+                action_filter=DevActionFilter(mode="deny_all", actions=()),
+            )
+        )
+        async with Client(denied) as client:
+            caps = await client.call_tool("dev.capabilities", {})
+            assert caps.is_error is False
+            assert caps.structured_content is not None
+            assert "task.run_recipe" not in caps.structured_content["projected_calls"]
+            assert "task.run_recipe" not in caps.structured_content["projected_mutations"]
+            result = await client.call_tool(
+                "dev.call",
+                {
+                    "action": "task.run_recipe",
+                    "arguments": {
+                        "task_id": "hm_task_fixture",
+                        "holder_id": "vestigia",
+                        "authority_generation": 1,
+                        "recipe_id": "runtime.test",
+                    },
+                },
+            )
+            assert result.is_error is True
+            assert "not allowed" in str(result.content)
+
     try:
         asyncio.run(exercise())
     finally:

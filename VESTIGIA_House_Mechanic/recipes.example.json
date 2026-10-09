@@ -22,6 +22,28 @@
       "expected_exit_codes": [0],
       "max_stdout_bytes": 65536,
       "max_stderr_bytes": 32768
+    },
+    {
+      "id": "runtime.test.mcp_context_source",
+      "description": "Run the focused Runtime Archive-MCP context-source tests.",
+      "argv": ["python", "-m", "pytest", "-o", "pythonpath=src", "-q", "tests/test_mcp_context_source.py"],
+      "cwd": "VESTIGIA_Runtime",
+      "timeout_seconds": 300,
+      "env_profile": "python",
+      "expected_exit_codes": [0],
+      "max_stdout_bytes": 65536,
+      "max_stderr_bytes": 65536
+    },
+    {
+      "id": "runtime.test",
+      "description": "Run the complete VESTIGIA Runtime test suite.",
+      "argv": ["python", "-m", "pytest", "-o", "pythonpath=src", "-q"],
+      "cwd": "VESTIGIA_Runtime",
+      "timeout_seconds": 1800,
+      "env_profile": "python",
+      "expected_exit_codes": [0],
+      "max_stdout_bytes": 262144,
+      "max_stderr_bytes": 131072
     }
   ]
 }

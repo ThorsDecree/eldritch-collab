@@ -287,6 +287,30 @@ def operation_capabilities(api: "HouseMechanicServer") -> dict[str, dict[str, An
             "durable_receipt": True,
             "atomic": True,
         },
+        "task.run_recipe": {
+            "effect": "bounded_task_local_process",
+            "mutation": True,
+            "method": "POST",
+            "path": "/v1/task-run-recipe",
+            "input_schema": _object_schema(
+                {
+                    "task_id": _STRING,
+                    "holder_id": _STRING,
+                    "authority_generation": _INTEGER,
+                    "recipe_id": _STRING,
+                },
+                required=("task_id", "holder_id", "authority_generation", "recipe_id"),
+            ),
+            "enabled": task_enabled,
+            "authority_tuple": ["task_id", "holder_id", "authority_generation"],
+            "requires_open_iteration": False,
+            "caller_supplies_argv": False,
+            "caller_supplies_cwd": False,
+            "caller_supplies_env": False,
+            "caller_supplies_worktree_path": False,
+            "durable_receipt": True,
+            "max_parallel": api.max_parallel,
+        },
         "task.list": {
             "effect": "read",
             "mutation": False,
@@ -797,6 +821,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "/v1/task-read": self._task_read,
                 "/v1/task-diff": self._task_diff,
                 "/v1/task-patch": self._task_patch,
+                "/v1/task-run-recipe": self._task_run_recipe,
                 "/v1/task-show": self._task_show,
                 "/v1/task-acquire": self._task_acquire,
                 "/v1/task-resume": self._task_resume,
@@ -1543,6 +1568,131 @@ class _Handler(BaseHTTPRequestHandler):
             operation="task.patch",
             evidence=evidence,
             response=result,
+        )
+
+    def _task_run_recipe(self, request_id: str) -> None:
+        tasks = self._require_tasks()
+        payload = self._json_body()
+        self._require_exact_fields(
+            payload,
+            {"task_id", "holder_id", "authority_generation", "recipe_id"},
+        )
+        recipe_id = payload.get("recipe_id")
+        if not isinstance(recipe_id, str) or not recipe_id.strip():
+            raise HouseMechanicAPIError(
+                400,
+                "invalid_request",
+                "recipe_id must be a non-empty string",
+            )
+        try:
+            record, worktree = tasks.authorized_worktree(
+                task_id=str(payload.get("task_id") or ""),
+                holder_id=str(payload.get("holder_id") or ""),
+                authority_generation=int(payload.get("authority_generation")),
+                require_open_iteration=False,
+                allow_handoff=False,
+            )
+        except (TaskError, TypeError, ValueError) as exc:
+            if isinstance(exc, TaskError):
+                self._raise_task(exc)
+            raise HouseMechanicAPIError(
+                400,
+                "invalid_request",
+                "task.run_recipe request fields are invalid",
+            )
+
+        recipe_id = recipe_id.strip()
+        recipe = self.api.recipes.recipes.get(recipe_id)
+        if recipe is None:
+            raise HouseMechanicAPIError(
+                404,
+                "unknown_recipe",
+                "recipe is not present in the operator manifest",
+            )
+        if recipe_id in self.api.lifecycle_recipe_ids:
+            raise HouseMechanicAPIError(
+                403,
+                "lifecycle_recipe_reserved",
+                (
+                    "recipe is reserved for a typed service lifecycle action "
+                    "and cannot run through the task recipe endpoint"
+                ),
+            )
+        try:
+            effective_cwd = tasks.worktrees.repository_relative_path(
+                record.repository_id,
+                recipe.cwd,
+            )
+        except TaskError as exc:
+            self._raise_task(exc)
+
+        if not self.api.run_slots.acquire(blocking=False):
+            raise HouseMechanicAPIError(
+                409,
+                "busy",
+                "House Mechanic has no free recipe execution slot",
+            )
+
+        try:
+            receipt = run_recipe(
+                recipe,
+                worktree,
+                request_id=request_id,
+                cwd_override=effective_cwd,
+            )
+        finally:
+            self.api.run_slots.release()
+
+        iteration_id = record.current_iteration_id
+        current_base = record.current_base_commit or record.base_commit
+        try:
+            durable = self.api.receipts.append_task_run(
+                receipt,
+                task_id=record.task_id,
+                repository_id=record.repository_id,
+                holder_id=record.holder_id,
+                authority_generation=record.authority_generation,
+                task_branch=record.branch_name,
+                task_current_base_commit=current_base,
+                iteration_id=iteration_id,
+                recipe_declared_cwd=recipe.cwd,
+            )
+        except Exception:
+            self._send(
+                500,
+                {
+                    "protocol": PROTOCOL,
+                    "request_id": request_id,
+                    "execution_occurred": True,
+                    "receipt_persisted": False,
+                    "task_id": record.task_id,
+                    "authority_generation": record.authority_generation,
+                    "iteration_id": iteration_id,
+                    "receipt": receipt.to_dict(),
+                    "error": {
+                        "code": "receipt_persistence_failed",
+                        "message": (
+                            "task recipe execution completed but durable receipt "
+                            "persistence failed"
+                        ),
+                    },
+                },
+            )
+            return
+
+        self._send(
+            200,
+            {
+                "protocol": PROTOCOL,
+                "request_id": request_id,
+                "execution_occurred": True,
+                "receipt_persisted": True,
+                "durable_receipt_id": durable["receipt_id"],
+                "task_id": record.task_id,
+                "authority_generation": record.authority_generation,
+                "iteration_id": iteration_id,
+                "receipt": receipt.to_dict(),
+            },
         )
 
     def _require_tasks(self) -> TaskSupervisor:
