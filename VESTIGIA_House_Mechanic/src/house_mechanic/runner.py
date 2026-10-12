@@ -97,7 +97,7 @@ def _git_identity(repo_root: Path) -> tuple[str | None, str | None, bool | None,
     if commit is None:
         return None, None, None, None
     branch = _git_output(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
-    status = _git_output(repo_root, "status", "--porcelain=v1", "-uno")
+    status = _git_output(repo_root, "status", "--porcelain=v1", "--untracked-files=all")
     if status is None:
         return commit, branch, None, None
     return (
@@ -124,10 +124,21 @@ def _terminate_tree(proc: subprocess.Popen[bytes]) -> bool:
     return True
 
 
-def run_recipe(recipe: Recipe, repo_root: Path, request_id: str | None = None) -> RunReceipt:
+def run_recipe(
+    recipe: Recipe,
+    repo_root: Path,
+    request_id: str | None = None,
+    *,
+    cwd_override: str | None = None,
+) -> RunReceipt:
     request_id = request_id or str(uuid.uuid4())
     root = repo_root.resolve()
-    cwd = (root / recipe.cwd).resolve()
+    effective_cwd = recipe.cwd if cwd_override is None else cwd_override
+    cwd = (root / effective_cwd).resolve()
+    try:
+        cwd.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("recipe cwd escapes execution root") from exc
     source_commit, source_branch, source_dirty, source_status_sha256 = _git_identity(root)
     started = datetime.now(timezone.utc)
     t0 = time.monotonic()
@@ -185,7 +196,7 @@ def run_recipe(recipe: Recipe, repo_root: Path, request_id: str | None = None) -
         request_id=request_id,
         recipe_id=recipe.id,
         recipe_sha256=recipe.digest(),
-        cwd=recipe.cwd,
+        cwd=effective_cwd,
         env_profile=recipe.env_profile,
         source_commit=source_commit,
         source_branch=source_branch,

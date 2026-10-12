@@ -260,19 +260,26 @@ value denies all mutations; a comma-separated value admits only those exact muta
 IDs. Fixed safe reads that satisfy the projection contract remain callable regardless of mutation
 allowlist mode, so inspection does not need write authority.
 
-House Mechanic v0.12 / API protocol v0.10 adds the task-scoped source loop:
+House Mechanic v0.13 / API protocol v0.10 extends the task-scoped source loop with task-local verification:
 
 ```text
 task.read
   -> iteration.begin
   -> task.diff
   -> task.patch
-  -> compile/test
+  -> task.run_recipe
   -> iteration.checkpoint
+  -> task.run_recipe
 ```
 
 `task.diff` creates an immutable multi-file proposal; `task.patch` can only apply that exact
 proposal after revalidating task authority and source pre-state, and applies it all-or-nothing.
+`task.run_recipe` is an allowlisted mutation-capable `dev.call` operation that accepts only the
+task authority tuple plus an operator-declared recipe ID. House Mechanic resolves the issued
+worktree and rebases the fixed recipe cwd internally; callers still cannot supply command text,
+argv, cwd, environment, or worktree paths. Dirty worktrees are allowed for RED/GREEN verification,
+while generic `recipe.run` continues to execute against the operator checkout.
+
 The initial mutation grammar supports modifying existing UTF-8 text and creating new UTF-8 files
 inside the issued task worktree. The rendered diff preview is bounded to 5 MiB, the dedicated
 `task.diff` request envelope is bounded to 32 MiB to accommodate escaped JSON for a 4 MiB patch,
@@ -603,12 +610,13 @@ See `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md`, `docs/RUNTIME_PROJECTION.md`
 
 ### Phase 6 source-workbench extension
 
-The stable Dev Door now projects House Mechanic v0.12 task-scoped source operations without adding
-another top-level MCP descriptor. `dev.capabilities` exposes both `projected_calls` and the
-backward-compatible mutation-only `projected_mutations`; `dev.call` admits fixed safe reads and
-keeps mutations behind `VESTIGIA_MCP_DEV_ACTIONS`. A real cross-package integration test proves
-`task.acquire -> task.read -> iteration.begin -> task.diff -> task.patch -> iteration.checkpoint`,
-including new-file Git history and independent receipt correlation.
+The stable Dev Door now projects House Mechanic v0.13 task-scoped source and verification operations
+without adding another top-level MCP descriptor. `dev.capabilities` exposes both `projected_calls`
+and the backward-compatible mutation-only `projected_mutations`; `dev.call` admits fixed safe reads
+and keeps mutations behind `VESTIGIA_MCP_DEV_ACTIONS`. A real cross-package integration test proves
+`task.acquire -> task.read -> iteration.begin -> task.diff -> task.patch -> task.run_recipe ->
+iteration.checkpoint -> task.run_recipe`, including dirty-vs-clean Git provenance, operator-root
+`recipe.run` isolation, new-file Git history, and independent receipt correlation.
 
 ## v0.10 - Stable Dev Door
 

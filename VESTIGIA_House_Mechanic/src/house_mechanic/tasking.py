@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import threading
@@ -215,6 +215,29 @@ class WorktreeManager:
         if not path.is_dir():
             raise TaskError("repository_missing", "configured repository is missing")
         return spec, path
+    def repository_relative_path(
+        self,
+        repository_id: str,
+        repo_root_relative_path: str,
+    ) -> str:
+        spec, _ = self._repository(repository_id)
+        candidate = PurePosixPath(repo_root_relative_path)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise TaskError(
+                "path_outside_repository",
+                "recipe cwd is outside the configured task repository",
+            )
+        repository_path = PurePosixPath(spec.path)
+        if repository_path.as_posix() == ".":
+            return candidate.as_posix()
+        try:
+            relative = candidate.relative_to(repository_path)
+        except ValueError as exc:
+            raise TaskError(
+                "path_outside_repository",
+                "recipe cwd is outside the configured task repository",
+            ) from exc
+        return relative.as_posix()
 
     @staticmethod
     def _run(cwd: Path, *argv: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -432,11 +455,17 @@ class TaskSupervisor:
         authority_generation: int,
         iteration_id: str | None = None,
         require_open_iteration: bool = False,
+        allow_handoff: bool = True,
     ) -> tuple[TaskRecord, Path]:
         """Resolve one task's issued worktree after current authority checks."""
         with self._lock:
             record = self.ledger.get(task_id)
-            self._authorize(record, holder_id, authority_generation)
+            self._authorize(
+                record,
+                holder_id,
+                authority_generation,
+                allow_handoff=allow_handoff,
+            )
             if require_open_iteration:
                 if record.current_iteration_id is None:
                     raise TaskError("iteration_required", "source mutation requires an open iteration")

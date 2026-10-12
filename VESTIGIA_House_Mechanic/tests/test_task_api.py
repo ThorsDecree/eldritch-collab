@@ -4,10 +4,11 @@ from http.client import HTTPConnection
 import json
 from pathlib import Path
 import subprocess
+import sys
 import threading
 
 from house_mechanic.api import HouseMechanicServer, PROTOCOL
-from house_mechanic.model import Manifest
+from house_mechanic.model import Manifest, Recipe
 from house_mechanic.service_model import ServiceManifest
 from house_mechanic.tasking import load_repository_manifest
 
@@ -286,6 +287,10 @@ def test_task_routes_fail_closed_when_not_configured(tmp_path: Path) -> None:
         status, response = _request(server.server_address[1], "GET", "/v1/tasks")
         assert status == 503
         assert response["error"]["code"] == "tasking_not_configured"
+
+        status, caps = _request(server.server_address[1], "GET", "/v1/capabilities")
+        assert status == 200
+        assert caps["operations"]["task.run_recipe"]["enabled"] is False
     finally:
         server.shutdown()
         server.server_close()
@@ -660,3 +665,482 @@ def test_task_diff_has_larger_route_specific_request_ceiling(tmp_path: Path) -> 
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_task_run_recipe_capability_is_fixed_and_closed(tmp_path: Path) -> None:
+    server, thread, _ = _server(tmp_path)
+    try:
+        status, caps = _request(server.server_address[1], "GET", "/v1/capabilities")
+        assert status == 200
+        meta = caps["operations"]["task.run_recipe"]
+        assert meta["enabled"] is True
+        assert meta["mutation"] is True
+        assert meta["effect"] == "bounded_task_local_process"
+        assert meta["method"] == "POST"
+        assert meta["path"] == "/v1/task-run-recipe"
+        assert meta["input_schema"]["additionalProperties"] is False
+        assert set(meta["input_schema"]["required"]) == {
+            "task_id", "holder_id", "authority_generation", "recipe_id"
+        }
+        assert meta["requires_open_iteration"] is False
+        assert meta["caller_supplies_argv"] is False
+        assert meta["caller_supplies_cwd"] is False
+        assert meta["caller_supplies_env"] is False
+        assert meta["caller_supplies_worktree_path"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_task_run_recipe_uses_task_worktree_without_open_iteration(tmp_path: Path) -> None:
+    server, thread, receipt_file = _server(tmp_path)
+    server.recipes = Manifest(
+        {
+            "fixture.read": Recipe(
+                id="fixture.read",
+                description="read task-local hello",
+                argv=(
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; print(Path('hello.txt').read_text().strip())",
+                ),
+                cwd="repo",
+                timeout_seconds=5,
+                env_profile="python",
+                expected_exit_codes=(0,),
+                max_stdout_bytes=4096,
+                max_stderr_bytes=4096,
+            )
+        }
+    )
+    port = server.server_address[1]
+    try:
+        status, acquired = _request(
+            port,
+            "POST",
+            "/v1/task-acquire",
+            {
+                "repository_id": "fixture",
+                "holder_id": "vestigia",
+                "purpose": "task recipe root isolation",
+            },
+        )
+        assert status == 200
+        task = acquired["task"]
+        worktree = Path(task["worktree_path"])
+        (worktree / "hello.txt").write_bytes(b"two\n")
+
+        status, task_run = _request(
+            port,
+            "POST",
+            "/v1/task-run-recipe",
+            {
+                "task_id": task["task_id"],
+                "holder_id": "vestigia",
+                "authority_generation": 1,
+                "recipe_id": "fixture.read",
+            },
+        )
+        assert status == 200
+        assert task_run["execution_occurred"] is True
+        assert task_run["receipt_persisted"] is True
+        assert task_run["iteration_id"] is None
+        assert task_run["receipt"]["stdout"].strip() == "two"
+
+        status, generic = _request(
+            port, "POST", "/v1/run", {"recipe_id": "fixture.read"}
+        )
+        assert status == 200
+        assert generic["receipt"]["stdout"].strip() == "one"
+
+        rows = [json.loads(line) for line in receipt_file.read_text(encoding="utf-8").splitlines()]
+        task_receipt = next(row for row in reversed(rows) if row["kind"] == "task_recipe_run")
+        assert task_receipt["evidence"]["iteration_id"] is None
+        assert task_receipt["evidence"]["source_dirty"] is True
+        assert "worktree_path" not in task_receipt["evidence"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def _set_task_recipe(server: HouseMechanicServer, *, cwd: str = "repo", recipe_id: str = "fixture.read", code: str | None = None) -> None:
+    command = code or "from pathlib import Path; print(Path('hello.txt').read_text().strip())"
+    server.recipes = Manifest(
+        {
+            recipe_id: Recipe(
+                id=recipe_id,
+                description="task recipe fixture",
+                argv=(sys.executable, "-c", command),
+                cwd=cwd,
+                timeout_seconds=5,
+                env_profile="python",
+                expected_exit_codes=(0,),
+                max_stdout_bytes=4096,
+                max_stderr_bytes=4096,
+            )
+        }
+    )
+
+
+def _acquire_task(port: int, purpose: str = "task recipe fixture") -> dict:
+    status, acquired = _request(
+        port,
+        "POST",
+        "/v1/task-acquire",
+        {
+            "repository_id": "fixture",
+            "holder_id": "vestigia",
+            "purpose": purpose,
+        },
+    )
+    assert status == 200
+    return acquired["task"]
+
+
+def test_task_run_recipe_records_iteration_and_clean_checkpoint_state(tmp_path: Path) -> None:
+    server, thread, receipt_file = _server(tmp_path)
+    _set_task_recipe(server)
+    port = server.server_address[1]
+    try:
+        task = _acquire_task(port, "task recipe checkpoint provenance")
+        worktree = Path(task["worktree_path"])
+        status, begun = _request(
+            port,
+            "POST",
+            "/v1/iteration-begin",
+            {
+                "task_id": task["task_id"],
+                "holder_id": "vestigia",
+                "authority_generation": 1,
+            },
+        )
+        assert status == 200
+        iteration_id = begun["task"]["current_iteration_id"]
+        (worktree / "hello.txt").write_bytes(b"two\n")
+
+        status, dirty_run = _request(
+            port,
+            "POST",
+            "/v1/task-run-recipe",
+            {
+                "task_id": task["task_id"],
+                "holder_id": "vestigia",
+                "authority_generation": 1,
+                "recipe_id": "fixture.read",
+            },
+        )
+        assert status == 200
+        assert dirty_run["iteration_id"] == iteration_id
+        dirty_receipt = next(
+            row
+            for row in reversed([json.loads(line) for line in receipt_file.read_text(encoding="utf-8").splitlines()])
+            if row["receipt_id"] == dirty_run["durable_receipt_id"]
+        )
+        assert dirty_receipt["evidence"]["iteration_id"] == iteration_id
+        assert dirty_receipt["evidence"]["source_dirty"] is True
+
+        status, checkpoint = _request(
+            port,
+            "POST",
+            "/v1/iteration-checkpoint",
+            {
+                "task_id": task["task_id"],
+                "holder_id": "vestigia",
+                "authority_generation": 1,
+                "iteration_id": iteration_id,
+                "outcome": "pass",
+            },
+        )
+        assert status == 200
+        checkpoint_commit = checkpoint["checkpoint_commit"]
+
+        status, clean_run = _request(
+            port,
+            "POST",
+            "/v1/task-run-recipe",
+            {
+                "task_id": task["task_id"],
+                "holder_id": "vestigia",
+                "authority_generation": 1,
+                "recipe_id": "fixture.read",
+            },
+        )
+        assert status == 200
+        assert clean_run["iteration_id"] is None
+        assert clean_run["receipt"]["source_dirty"] is False
+        assert clean_run["receipt"]["source_commit"] == checkpoint_commit
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_task_run_recipe_rejects_wrong_holder_before_execution(tmp_path: Path) -> None:
+    server, thread, _ = _server(tmp_path)
+    _set_task_recipe(
+        server,
+        recipe_id="fixture.write",
+        code="from pathlib import Path; Path('ran.txt').write_text('ran')",
+    )
+    port = server.server_address[1]
+    try:
+        task = _acquire_task(port, "wrong holder")
+        worktree = Path(task["worktree_path"])
+        status, response = _request(
+            port, "POST", "/v1/task-run-recipe",
+            {
+                "task_id": task["task_id"],
+                "holder_id": "anima",
+                "authority_generation": 1,
+                "recipe_id": "fixture.write",
+            },
+        )
+        assert status == 403
+        assert response["error"]["code"] == "wrong_holder"
+        assert not (worktree / "ran.txt").exists()
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_task_run_recipe_rejects_stale_generation_before_execution(tmp_path: Path) -> None:
+    server, thread, _ = _server(tmp_path)
+    _set_task_recipe(server, recipe_id="fixture.write", code="from pathlib import Path; Path('ran.txt').write_text('ran')")
+    port = server.server_address[1]
+    try:
+        task = _acquire_task(port, "stale generation")
+        worktree = Path(task["worktree_path"])
+        status, response = _request(
+            port, "POST", "/v1/task-run-recipe",
+            {
+                "task_id": task["task_id"], "holder_id": "vestigia",
+                "authority_generation": 9, "recipe_id": "fixture.write",
+            },
+        )
+        assert status == 409
+        assert response["error"]["code"] == "stale_authority"
+        assert not (worktree / "ran.txt").exists()
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_task_run_recipe_rejects_expired_lease_before_execution(tmp_path: Path) -> None:
+    server, thread, _ = _server(tmp_path)
+    _set_task_recipe(server, recipe_id="fixture.write", code="from pathlib import Path; Path('ran.txt').write_text('ran')")
+    port = server.server_address[1]
+    try:
+        task = _acquire_task(port, "expired lease")
+        record = server.tasks.ledger.get(task["task_id"])
+        record.lease_expires_at = "2000-01-01T00:00:00+00:00"
+        server.tasks.ledger.save(record)
+        worktree = Path(task["worktree_path"])
+        status, response = _request(
+            port, "POST", "/v1/task-run-recipe",
+            {
+                "task_id": task["task_id"], "holder_id": "vestigia",
+                "authority_generation": 1, "recipe_id": "fixture.write",
+            },
+        )
+        assert status == 409
+        assert response["error"]["code"] == "lease_expired"
+        assert not (worktree / "ran.txt").exists()
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_task_run_recipe_rejects_non_active_task_before_execution(tmp_path: Path) -> None:
+    server, thread, _ = _server(tmp_path)
+    _set_task_recipe(server, recipe_id="fixture.write", code="from pathlib import Path; Path('ran.txt').write_text('ran')")
+    port = server.server_address[1]
+    try:
+        task = _acquire_task(port, "non active")
+        record = server.tasks.ledger.get(task["task_id"])
+        record.state = "succeeded"
+        server.tasks.ledger.save(record)
+        worktree = Path(task["worktree_path"])
+        status, response = _request(
+            port, "POST", "/v1/task-run-recipe",
+            {
+                "task_id": task["task_id"], "holder_id": "vestigia",
+                "authority_generation": 1, "recipe_id": "fixture.write",
+            },
+        )
+        assert status == 409
+        assert response["error"]["code"] == "task_not_active"
+        assert not (worktree / "ran.txt").exists()
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_task_run_recipe_rejects_handoff_pending_before_execution(tmp_path: Path) -> None:
+    server, thread, _ = _server(tmp_path)
+    _set_task_recipe(server, recipe_id="fixture.write", code="from pathlib import Path; Path('ran.txt').write_text('ran')")
+    port = server.server_address[1]
+    try:
+        task = _acquire_task(port, "handoff pending")
+        record = server.tasks.ledger.get(task["task_id"])
+        record.state = "handoff_pending"
+        record.pending_handoff_to = "anima"
+        server.tasks.ledger.save(record)
+        worktree = Path(task["worktree_path"])
+        status, response = _request(
+            port, "POST", "/v1/task-run-recipe",
+            {
+                "task_id": task["task_id"], "holder_id": "vestigia",
+                "authority_generation": 1, "recipe_id": "fixture.write",
+            },
+        )
+        assert status == 409
+        assert response["error"]["code"] == "task_not_active"
+        assert not (worktree / "ran.txt").exists()
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_task_run_recipe_rejects_branch_mismatch_before_execution(tmp_path: Path) -> None:
+    server, thread, _ = _server(tmp_path)
+    _set_task_recipe(server, recipe_id="fixture.write", code="from pathlib import Path; Path('ran.txt').write_text('ran')")
+    port = server.server_address[1]
+    try:
+        task = _acquire_task(port, "branch mismatch")
+        record = server.tasks.ledger.get(task["task_id"])
+        record.branch_name = "hm/not-the-issued-branch"
+        server.tasks.ledger.save(record)
+        worktree = Path(task["worktree_path"])
+        status, response = _request(
+            port, "POST", "/v1/task-run-recipe",
+            {
+                "task_id": task["task_id"], "holder_id": "vestigia",
+                "authority_generation": 1, "recipe_id": "fixture.write",
+            },
+        )
+        assert status == 409
+        assert response["error"]["code"] == "branch_mismatch"
+        assert not (worktree / "ran.txt").exists()
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_task_run_recipe_rejects_unknown_and_lifecycle_recipes(tmp_path: Path) -> None:
+    server, thread, _ = _server(tmp_path)
+    _set_task_recipe(server, recipe_id="fixture.lifecycle")
+    server.lifecycle_recipe_ids.add("fixture.lifecycle")
+    port = server.server_address[1]
+    try:
+        task = _acquire_task(port, "recipe admission")
+        base = {
+            "task_id": task["task_id"], "holder_id": "vestigia", "authority_generation": 1
+        }
+        status, unknown = _request(
+            port, "POST", "/v1/task-run-recipe", {**base, "recipe_id": "missing"}
+        )
+        assert status == 404
+        assert unknown["error"]["code"] == "unknown_recipe"
+        status, lifecycle = _request(
+            port, "POST", "/v1/task-run-recipe", {**base, "recipe_id": "fixture.lifecycle"}
+        )
+        assert status == 403
+        assert lifecycle["error"]["code"] == "lifecycle_recipe_reserved"
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_task_run_recipe_rejects_recipe_cwd_outside_selected_repository(tmp_path: Path) -> None:
+    server, thread, _ = _server(tmp_path)
+    _set_task_recipe(server, cwd=".")
+    port = server.server_address[1]
+    try:
+        task = _acquire_task(port, "cwd boundary")
+        status, response = _request(
+            port, "POST", "/v1/task-run-recipe",
+            {
+                "task_id": task["task_id"], "holder_id": "vestigia",
+                "authority_generation": 1, "recipe_id": "fixture.read",
+            },
+        )
+        assert status == 409
+        assert response["error"]["code"] == "path_outside_repository"
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_task_run_recipe_rejects_busy_slot(tmp_path: Path) -> None:
+    server, thread, _ = _server(tmp_path)
+    _set_task_recipe(server)
+    port = server.server_address[1]
+    try:
+        task = _acquire_task(port, "busy slot")
+        assert server.run_slots.acquire(blocking=False) is True
+        try:
+            status, response = _request(
+                port, "POST", "/v1/task-run-recipe",
+                {
+                    "task_id": task["task_id"], "holder_id": "vestigia",
+                    "authority_generation": 1, "recipe_id": "fixture.read",
+                },
+            )
+        finally:
+            server.run_slots.release()
+        assert status == 409
+        assert response["error"]["code"] == "busy"
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_task_run_recipe_rejects_caller_supplied_execution_fields(tmp_path: Path) -> None:
+    server, thread, _ = _server(tmp_path)
+    _set_task_recipe(server)
+    port = server.server_address[1]
+    try:
+        task = _acquire_task(port, "closed schema")
+        status, response = _request(
+            port, "POST", "/v1/task-run-recipe",
+            {
+                "task_id": task["task_id"], "holder_id": "vestigia",
+                "authority_generation": 1, "recipe_id": "fixture.read",
+                "cwd": ".",
+            },
+        )
+        assert status == 400
+        assert response["error"]["code"] == "invalid_request"
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_task_run_recipe_receipt_failure_reports_completed_execution(tmp_path: Path) -> None:
+    server, thread, _ = _server(tmp_path)
+    _set_task_recipe(
+        server,
+        recipe_id="fixture.count",
+        code=(
+            "from pathlib import Path; "
+            "p=Path('count.txt'); "
+            "n=int(p.read_text()) if p.exists() else 0; "
+            "p.write_text(str(n+1)); print('ok')"
+        ),
+    )
+    port = server.server_address[1]
+    try:
+        task = _acquire_task(port, "receipt failure")
+        worktree = Path(task["worktree_path"])
+
+        def fail_receipt(*args, **kwargs):
+            raise RuntimeError("receipt write failed")
+
+        server.receipts.append_task_run = fail_receipt
+        status, response = _request(
+            port, "POST", "/v1/task-run-recipe",
+            {
+                "task_id": task["task_id"], "holder_id": "vestigia",
+                "authority_generation": 1, "recipe_id": "fixture.count",
+            },
+        )
+        assert status == 500
+        assert response["execution_occurred"] is True
+        assert response["receipt_persisted"] is False
+        assert response["receipt"]["exit_code"] == 0
+        assert response["error"]["code"] == "receipt_persistence_failed"
+        assert (worktree / "count.txt").read_text(encoding="utf-8") == "1"
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)

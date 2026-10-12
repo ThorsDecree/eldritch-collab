@@ -29,6 +29,42 @@ def _tail_excerpt(value: str, limit: int = DEFAULT_EXCERPT_BYTES) -> str:
     return raw[-limit:].decode("utf-8", errors="replace")
 
 
+def _run_evidence(receipt: RunReceipt) -> dict[str, Any]:
+    stdout = receipt.stdout
+    stderr = receipt.stderr
+    return {
+        "recipe_id": receipt.recipe_id,
+        "recipe_sha256": receipt.recipe_sha256,
+        "cwd": receipt.cwd,
+        "env_profile": receipt.env_profile,
+        "source_commit": receipt.source_commit,
+        "source_branch": receipt.source_branch,
+        "source_dirty": receipt.source_dirty,
+        "source_status_sha256": receipt.source_status_sha256,
+        "process_id": receipt.process_id,
+        "started_at": receipt.started_at,
+        "completed_at": receipt.completed_at,
+        "wall_seconds": receipt.wall_seconds,
+        "exit_code": receipt.exit_code,
+        "expected_exit": receipt.expected_exit,
+        "timed_out": receipt.timed_out,
+        "output_limit_exceeded": receipt.output_limit_exceeded,
+        "stdout_bytes": receipt.stdout_bytes,
+        "stderr_bytes": receipt.stderr_bytes,
+        "stdout_sha256": receipt.stdout_sha256,
+        "stderr_sha256": receipt.stderr_sha256,
+        "stdout_excerpt": _tail_excerpt(stdout),
+        "stderr_excerpt": _tail_excerpt(stderr),
+        "stdout_excerpt_truncated": len(stdout.encode("utf-8")) > DEFAULT_EXCERPT_BYTES,
+        "stderr_excerpt_truncated": len(stderr.encode("utf-8")) > DEFAULT_EXCERPT_BYTES,
+        "stdout_truncated": receipt.stdout_truncated,
+        "stderr_truncated": receipt.stderr_truncated,
+        "process_tree_termination_attempted": receipt.process_tree_termination_attempted,
+        "process_tree_containment_proven": receipt.process_tree_containment_proven,
+        "raw_full_output_persisted": False,
+    }
+
+
 class ReceiptStore:
     """Append-only local evidence store for House Mechanic actions."""
 
@@ -68,46 +104,43 @@ class ReceiptStore:
         return record
 
     def append_run(self, receipt: RunReceipt) -> dict[str, Any]:
-        stdout = receipt.stdout
-        stderr = receipt.stderr
         return self._append(
             kind="recipe_run",
             request_id=receipt.request_id,
-            evidence={
-                "recipe_id": receipt.recipe_id,
-                "recipe_sha256": receipt.recipe_sha256,
-                "cwd": receipt.cwd,
-                "env_profile": receipt.env_profile,
-                "source_commit": receipt.source_commit,
-                "source_branch": receipt.source_branch,
-                "source_dirty": receipt.source_dirty,
-                "source_status_sha256": receipt.source_status_sha256,
-                "process_id": receipt.process_id,
-                "started_at": receipt.started_at,
-                "completed_at": receipt.completed_at,
-                "wall_seconds": receipt.wall_seconds,
-                "exit_code": receipt.exit_code,
-                "expected_exit": receipt.expected_exit,
-                "timed_out": receipt.timed_out,
-                "output_limit_exceeded": receipt.output_limit_exceeded,
-                "stdout_bytes": receipt.stdout_bytes,
-                "stderr_bytes": receipt.stderr_bytes,
-                "stdout_sha256": receipt.stdout_sha256,
-                "stderr_sha256": receipt.stderr_sha256,
-                "stdout_excerpt": _tail_excerpt(stdout),
-                "stderr_excerpt": _tail_excerpt(stderr),
-                "stdout_excerpt_truncated": len(stdout.encode("utf-8")) > DEFAULT_EXCERPT_BYTES,
-                "stderr_excerpt_truncated": len(stderr.encode("utf-8")) > DEFAULT_EXCERPT_BYTES,
-                "stdout_truncated": receipt.stdout_truncated,
-                "stderr_truncated": receipt.stderr_truncated,
-                "process_tree_termination_attempted": (
-                    receipt.process_tree_termination_attempted
-                ),
-                "process_tree_containment_proven": (
-                    receipt.process_tree_containment_proven
-                ),
-                "raw_full_output_persisted": False,
-            },
+            evidence=_run_evidence(receipt),
+        )
+
+    def append_task_run(
+        self,
+        receipt: RunReceipt,
+        *,
+        task_id: str,
+        repository_id: str,
+        holder_id: str,
+        authority_generation: int,
+        task_branch: str,
+        task_current_base_commit: str,
+        iteration_id: str | None,
+        recipe_declared_cwd: str,
+    ) -> dict[str, Any]:
+        evidence = _run_evidence(receipt)
+        evidence.update(
+            {
+                "operation": "task.run_recipe",
+                "task_id": task_id,
+                "repository_id": repository_id,
+                "holder_id": holder_id,
+                "authority_generation": authority_generation,
+                "task_branch": task_branch,
+                "task_current_base_commit": task_current_base_commit,
+                "iteration_id": iteration_id,
+                "recipe_declared_cwd": recipe_declared_cwd,
+            }
+        )
+        return self._append(
+            kind="task_recipe_run",
+            request_id=receipt.request_id,
+            evidence=evidence,
         )
 
     def append_health(self, result: HealthResult) -> dict[str, Any]:

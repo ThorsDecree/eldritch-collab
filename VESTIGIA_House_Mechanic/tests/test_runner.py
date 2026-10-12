@@ -1,5 +1,6 @@
 from pathlib import Path
 import hashlib
+import subprocess
 import sys
 
 from house_mechanic.model import Recipe
@@ -73,3 +74,56 @@ def test_python_profile_can_initialize_socket_provider(tmp_path: Path):
     )
     assert r.exit_code == 0, r.stderr
     assert r.stdout.strip() == "socket-ok"
+
+def test_git_identity_includes_untracked_files(tmp_path: Path):
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Fixture"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], cwd=tmp_path, check=True)
+    (tmp_path / "tracked.txt").write_bytes(b"tracked\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / "Vesti").mkdir()
+    (tmp_path / "Vesti" / "new-machine.txt").write_bytes(b"untracked\n")
+
+    expected_status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=tmp_path,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+
+    r = run_recipe(recipe([sys.executable, "-c", "print('ok')"]), tmp_path, "req-untracked")
+
+    assert "?? Vesti/new-machine.txt" in expected_status
+    assert r.source_dirty is True
+    assert r.source_status_sha256 == hashlib.sha256(expected_status.encode("utf-8")).hexdigest()
+
+
+def test_run_recipe_uses_effective_cwd_without_changing_operator_recipe_digest(tmp_path: Path) -> None:
+    (tmp_path / "subdir").mkdir()
+    (tmp_path / "subdir" / "marker.txt").write_bytes(b"task-local\n")
+    declared = Recipe(
+        id="test.override",
+        description="cwd override",
+        argv=(
+            sys.executable,
+            "-c",
+            "from pathlib import Path; print(Path('marker.txt').read_text().strip())",
+        ),
+        cwd="repo/subdir",
+        timeout_seconds=5,
+        env_profile="python",
+        expected_exit_codes=(0,),
+        max_stdout_bytes=4096,
+        max_stderr_bytes=4096,
+    )
+
+    r = run_recipe(declared, tmp_path, "req-cwd", cwd_override="subdir")
+
+    assert r.exit_code == 0, r.stderr
+    assert r.stdout.strip() == "task-local"
+    assert r.cwd == "subdir"
+    assert r.recipe_sha256 == declared.digest()
