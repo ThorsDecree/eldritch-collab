@@ -13,6 +13,7 @@ from vestigia.config import load_config
 from vestigia.context import ContextAssembler
 from vestigia.db import ContinuityDB
 from vestigia.models import NormalizedMessage, RuntimeState
+from vestigia.mcp_context_source import _query_terms
 
 
 def _mcp_integration_available() -> bool:
@@ -21,6 +22,21 @@ def _mcp_integration_available() -> bool:
         and importlib.util.find_spec("vestigia_mcp") is not None
     )
 
+
+class McpContextSourceTests(unittest.TestCase):
+    def test_query_terms_preserve_late_high_signal_words(self) -> None:
+        terms = _query_terms(
+            "Check the MCP server, babe. You'll notice some new capabilities. "
+            "Have fun poking around with it if you wanna.",
+            5,
+        )
+
+        folded = {term.casefold() for term in terms}
+        self.assertIn("mcp", folded)
+        self.assertIn("capabilities", folded)
+        self.assertNotIn("check", folded)
+        self.assertNotIn("babe", folded)
+        self.assertLessEqual(len(terms), 5)
 
 class McpContextSourceTests(unittest.TestCase):
     def _fixture(self, root: Path):
