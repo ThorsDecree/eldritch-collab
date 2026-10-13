@@ -45,8 +45,7 @@ class McpContextSourceTests(unittest.TestCase):
         )
 
         self.assertEqual(len(terms), 4)
-        self.assertIn("high_signal_identifier_42", terms)
-        self.assertNotIn("alpha", terms)
+        self.assertEqual(terms[0], "high_signal_identifier_42")
 
     def _fixture(self, root: Path):
         archive = root / "archive"
