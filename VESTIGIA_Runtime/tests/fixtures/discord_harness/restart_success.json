@@ -1,0 +1,39 @@
+{
+  "name": "successful delivery survives restart",
+  "config": {
+    "allowed_users": ["1001"],
+    "allowed_channels": ["2001"]
+  },
+  "steps": [
+    {
+      "op": "message",
+      "message_id": 200,
+      "user_id": 1001,
+      "channel_id": 2001,
+      "guild_id": 4001,
+      "content": "ping",
+      "mention_bot": true,
+      "expect": {"accepted": true, "trigger_kind": "direct"}
+    },
+    {
+      "op": "runtime_commit",
+      "message_id": 200,
+      "operation_id": "turn-200",
+      "text": "pong"
+    },
+    {
+      "op": "deliver_text",
+      "message_id": 200,
+      "operation_id": "turn-200",
+      "text": "pong"
+    },
+    {"op": "restart"},
+    {"op": "expect", "path": "epoch", "equals": 2},
+    {
+      "op": "expect",
+      "path": "runtime_commits.turn-200.message_id",
+      "equals": "200"
+    },
+    {"op": "expect", "path": "receipts.0.status", "equals": "succeeded"}
+  ]
+}
