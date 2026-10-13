@@ -93,7 +93,7 @@ def _query_terms(query: str, limit: int) -> tuple[str, ...]:
     if limit <= 0:
         return ()
 
-    words = re.findall(r"[\\w#'-]{3,}", query, flags=re.UNICODE)
+    words = re.findall(r"[\w#'-]{3,}", query, flags=re.UNICODE)
     candidates: dict[str, tuple[int, int, str]] = {}
     for position, raw in enumerate(words):
         term = raw.strip("'-")
@@ -107,6 +107,8 @@ def _query_terms(query: str, limit: int) -> tuple[str, ...]:
         key=lambda candidate: (-candidate[0], candidate[1], candidate[2].casefold()),
     )
     return tuple(candidate[2] for candidate in ranked[:limit])
+
+
 def _run_async_blocking(factory: Callable[[], Awaitable[T]], timeout: float) -> T:
     """Run one bounded async MCP exchange from synchronous Runtime code.
 
