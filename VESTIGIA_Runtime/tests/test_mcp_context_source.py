@@ -38,7 +38,16 @@ class McpContextSourceTests(unittest.TestCase):
         self.assertNotIn("babe", folded)
         self.assertLessEqual(len(terms), 5)
 
-class McpContextSourceTests(unittest.TestCase):
+    def test_query_terms_prioritize_identifiers_and_remain_bounded(self) -> None:
+        terms = _query_terms(
+            "alpha bravo charlie delta epsilon zeta eta theta high_signal_identifier_42",
+            4,
+        )
+
+        self.assertEqual(len(terms), 4)
+        self.assertIn("high_signal_identifier_42", terms)
+        self.assertNotIn("alpha", terms)
+
     def _fixture(self, root: Path):
         archive = root / "archive"
         (archive / "00_Bootloader").mkdir(parents=True)
