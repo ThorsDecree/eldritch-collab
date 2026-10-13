@@ -28,6 +28,9 @@ _STOPWORDS = {
     "after",
     "again",
     "also",
+    "around",
+    "babe",
+    "check",
     "because",
     "been",
     "before",
@@ -35,14 +38,18 @@ _STOPWORDS = {
     "could",
     "does",
     "from",
+    "fun",
     "have",
     "into",
     "just",
     "like",
     "more",
     "much",
+    "new",
+    "notice",
     "should",
     "some",
+    "poking",
     "that",
     "their",
     "them",
@@ -58,26 +65,48 @@ _STOPWORDS = {
     "which",
     "while",
     "with",
+    "wanna",
     "would",
+    "you'll",
     "your",
 }
 
 
+def _query_term_signal(term: str) -> int:
+    """Rank likely identifiers and specific terms ahead of ordinary prose."""
+    folded = term.casefold().strip("'-")
+    signal = min(len(folded), 12)
+    if term.isupper() and len(folded) >= 2:
+        signal += 8
+    if any(character.isdigit() for character in folded):
+        signal += 8
+    if any(character in "_-/." for character in term):
+        signal += 5
+    if any(character.isupper() for character in term[1:]) and any(
+        character.islower() for character in term
+    ):
+        signal += 4
+    return signal
+
+
 def _query_terms(query: str, limit: int) -> tuple[str, ...]:
-    words = re.findall(r"[\w#'-]{3,}", query, flags=re.UNICODE)
-    seen: set[str] = set()
-    terms: list[str] = []
-    for raw in words:
-        folded = raw.casefold().strip("'-")
-        if len(folded) < 3 or folded in _STOPWORDS or folded in seen:
+    if limit <= 0:
+        return ()
+
+    words = re.findall(r"[\\w#'-]{3,}", query, flags=re.UNICODE)
+    candidates: dict[str, tuple[int, int, str]] = {}
+    for position, raw in enumerate(words):
+        term = raw.strip("'-")
+        folded = term.casefold()
+        if len(folded) < 3 or folded in _STOPWORDS or folded in candidates:
             continue
-        seen.add(folded)
-        terms.append(raw.strip("'-"))
-        if len(terms) >= limit:
-            break
-    return tuple(term for term in terms if term)
+        candidates[folded] = (_query_term_signal(term), position, term)
 
-
+    ranked = sorted(
+        candidates.values(),
+        key=lambda candidate: (-candidate[0], candidate[1], candidate[2].casefold()),
+    )
+    return tuple(candidate[2] for candidate in ranked[:limit])
 def _run_async_blocking(factory: Callable[[], Awaitable[T]], timeout: float) -> T:
     """Run one bounded async MCP exchange from synchronous Runtime code.
 
