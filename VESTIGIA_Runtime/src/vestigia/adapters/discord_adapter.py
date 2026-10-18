@@ -12,6 +12,7 @@ from ..config import load_config
 from ..context_controls import load_context_controls
 from ..images import ImageService
 from ..models import NormalizedMessage, RuntimeState
+from ..private_messages import PrivateMessageService
 from ..resident_controls import (
     find_listening_match,
     listening_consequence,
@@ -328,6 +329,75 @@ def build_bell_runtime_message(
     )
 
 
+async def deliver_private_message_once(
+    service: PrivateMessageService,
+    client: Any,
+    *,
+    allowed_mentions: Any,
+) -> dict[str, Any] | None:
+    """Deliver at most one queued private message, with one platform attempt."""
+    item = await asyncio.to_thread(service.peek_next)
+    if item is None:
+        return None
+    destination_id = int(item["destination_id"])
+    try:
+        if item["destination_kind"] == "discord_channel":
+            destination = client.get_channel(destination_id)
+            if destination is None:
+                destination = await client.fetch_channel(destination_id)
+        elif item["destination_kind"] == "discord_dm":
+            recipient = client.get_user(destination_id)
+            if recipient is None:
+                recipient = await client.fetch_user(destination_id)
+            destination = getattr(recipient, "dm_channel", None)
+            if destination is None:
+                destination = await recipient.create_dm()
+        else:
+            return {"id": item["id"], "status": "queued"}
+    except Exception:
+        # Destination lookup precedes claim; transient lookup failures are safe to retry.
+        return {"id": item["id"], "status": "queued"}
+
+    claimed = await asyncio.to_thread(service.claim, str(item["id"]))
+    if claimed is None:
+        return None
+    try:
+        sent = await destination.send(
+            claimed["body"],
+            allowed_mentions=allowed_mentions,
+            suppress_embeds=True,
+        )
+    except asyncio.CancelledError:
+        # Leave `attempting`; startup recovery will record honest uncertainty.
+        raise
+    except Exception as exc:
+        status = getattr(exc, "status", None)
+        if isinstance(status, int) and 400 <= status < 500:
+            outcome, code = "failed", f"discord_rejected_{status}"
+        else:
+            outcome, code = "delivery_uncertain", "delivery_exception"
+        return await asyncio.to_thread(
+            service.finish_delivery,
+            str(claimed["id"]),
+            outcome,
+            safe_error_code=code,
+        )
+    message_id = str(getattr(sent, "id", "") or "").strip()
+    if not message_id:
+        return await asyncio.to_thread(
+            service.finish_delivery,
+            str(claimed["id"]),
+            "delivery_uncertain",
+            safe_error_code="missing_platform_receipt",
+        )
+    return await asyncio.to_thread(
+        service.finish_delivery,
+        str(claimed["id"]),
+        "delivered",
+        discord_message_id=message_id,
+    )
+
+
 def run_discord(
     home: str | Path,
     *,
@@ -356,6 +426,9 @@ def run_discord(
     )
     runtime = CoreRuntime(config, fake=fake)
     bell_service = BellService(runtime.db, runtime.resident_id, runtime.room_id)
+    private_message_service = PrivateMessageService(runtime.db, runtime.resident_id)
+    # Interrupted attempts can never be safely retried after process startup.
+    private_message_service.recover_attempting()
     limiter = SlidingWindowLimiter(
         int(config.get("discord.rate_limit_user_calls", 6)),
         float(config.get("discord.rate_limit_user_window", 60)),
@@ -367,6 +440,7 @@ def run_discord(
     image_service: ImageService | None = None
     bell_task: asyncio.Task[Any] | None = None
     image_job_task: asyncio.Task[Any] | None = None
+    private_message_task: asyncio.Task[Any] | None = None
 
     def bell_summary(bell: Any) -> str:
         return (
@@ -597,6 +671,24 @@ def run_discord(
                 print(f"VESTIGIA image job worker error: {type(exc).__name__}")
             await asyncio.sleep(poll)
 
+    async def private_message_loop() -> None:
+        poll = max(1, int(config.get("messages.outbox_poll_seconds", 3)))
+        while not client.is_closed():
+            try:
+                await deliver_private_message_once(
+                    private_message_service,
+                    client,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(
+                    "VESTIGIA private message worker error: "
+                    f"{type(exc).__name__}"
+                )
+            await asyncio.sleep(poll)
+
     async def recent_context_wrapper(message: Any) -> tuple[str, list[int]]:
         return await discord_recent_context(
             message,
@@ -706,7 +798,7 @@ def run_discord(
 
     @client.event
     async def on_ready() -> None:
-        nonlocal bell_task, image_job_task
+        nonlocal bell_task, image_job_task, private_message_task
         print(f"VESTIGIA Discord door ready as {client.user}")
         if bell_task is None or bell_task.done():
             bell_task = asyncio.create_task(bell_loop(), name="vestigia-bells")
@@ -714,6 +806,11 @@ def run_discord(
             image_job_task = asyncio.create_task(
                 image_job_loop(),
                 name="vestigia-image-jobs",
+            )
+        if private_message_task is None or private_message_task.done():
+            private_message_task = asyncio.create_task(
+                private_message_loop(),
+                name="vestigia-private-messages",
             )
 
     @client.event

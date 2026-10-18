@@ -42,6 +42,7 @@ def test_runtime_bootstrap_plan_is_explicit_and_unique() -> None:
         ("mcp_archive_tools", "register_composition"),
         ("context_introspection", "register_composition"),
         ("workspace_patch_staging", "register_composition"),
+        ("private_message_capabilities", "register_composition"),
     )
     assert len(plan) == len(set(plan))
 
@@ -94,6 +95,7 @@ def test_production_feature_modules_do_not_assign_private_runtime_methods() -> N
         "navigation_hardening.py",
         "navigation_bookmark_compat.py",
         "mcp_archive_tools.py",
+            "private_message_capabilities.py",
     )
     forbidden = (
         "HousePort._install_capabilities =",

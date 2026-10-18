@@ -26,6 +26,7 @@ from .memory import MemoryService
 from .models import NormalizedMessage, RuntimeState
 from .onboarding import onboard
 from .packing import pack_home, restore_home
+from .private_messages import PrivateMessageService
 from .providers.fake import FakeProvider
 from .research_maintenance import (
     DEFAULT_MIN_AGE_HOURS,
@@ -615,6 +616,66 @@ def command_bell_ack(args: argparse.Namespace) -> int:
     return 0
 
 
+def _private_message_service(home: str | Path, env_file: str | None = None):
+    config, db = _config_db(home, env_file)
+    return config, PrivateMessageService(db, str(config.get("resident.id")))
+
+
+def command_message_grant_create(args: argparse.Namespace) -> int:
+    _, service = _private_message_service(args.home, args.env_file)
+    _json(service.create_grant(
+        destination_kind=args.destination_kind,
+        destination_id=args.destination_id,
+        active_from=args.active_from,
+        expires_at=args.expires_at,
+        message_quota=args.message_quota,
+        max_length=args.max_length,
+    ))
+    return 0
+
+
+def command_message_grant_list(args: argparse.Namespace) -> int:
+    _, service = _private_message_service(args.home, args.env_file)
+    _json(service.list_grants())
+    return 0
+
+
+def command_message_grant_show(args: argparse.Namespace) -> int:
+    _, service = _private_message_service(args.home, args.env_file)
+    _json(service.get_grant(args.grant_id))
+    return 0
+
+
+def command_message_grant_revoke(args: argparse.Namespace) -> int:
+    _, service = _private_message_service(args.home, args.env_file)
+    _json(service.revoke_grant(args.grant_id, actor=args.actor))
+    return 0
+
+
+def command_message_outbox_show(args: argparse.Namespace) -> int:
+    _, service = _private_message_service(args.home, args.env_file)
+    _json(service.inspect_outbox(args.outbox_id, include_body=args.include_body))
+    return 0
+
+
+def command_message_outbox_cancel(args: argparse.Namespace) -> int:
+    _, service = _private_message_service(args.home, args.env_file)
+    result = service.cancel(args.outbox_id, actor=args.actor)
+    _json(result)
+    return 0
+
+
+def command_message_outbox_reconcile(args: argparse.Namespace) -> int:
+    _, service = _private_message_service(args.home, args.env_file)
+    _json(service.reconcile(
+        args.outbox_id,
+        args.outcome,
+        actor=args.actor,
+        reason=args.reason,
+    ))
+    return 0
+
+
 def _add_home_env(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("home")
     parser.add_argument("--env-file")
@@ -943,6 +1004,59 @@ def build_parser() -> argparse.ArgumentParser:
     bell_ack.add_argument("--actor", default="human")
     bell_ack.add_argument("--note", default="")
     bell_ack.set_defaults(func=command_bell_ack)
+
+    message = sub.add_parser("message", help="Manage bounded private outbound messages")
+    message_sub = message.add_subparsers(dest="message_action", required=True)
+    message_grant = message_sub.add_parser("grant", help="Manage operator-created message grants")
+    message_grant_sub = message_grant.add_subparsers(dest="message_grant_action", required=True)
+
+    message_grant_create = message_grant_sub.add_parser("create")
+    _add_home_env(message_grant_create)
+    message_grant_create.add_argument("--destination-kind", choices=["discord_channel", "discord_dm"], required=True)
+    message_grant_create.add_argument("--destination-id", required=True)
+    message_grant_create.add_argument("--active-from", required=True)
+    message_grant_create.add_argument("--expires-at", required=True)
+    message_grant_create.add_argument("--message-quota", type=int, required=True)
+    message_grant_create.add_argument("--max-length", type=int, default=1800)
+    message_grant_create.set_defaults(func=command_message_grant_create)
+
+    message_grant_list = message_grant_sub.add_parser("list")
+    _add_home_env(message_grant_list)
+    message_grant_list.set_defaults(func=command_message_grant_list)
+
+    message_grant_show = message_grant_sub.add_parser("show")
+    _add_home_env(message_grant_show)
+    message_grant_show.add_argument("grant_id")
+    message_grant_show.set_defaults(func=command_message_grant_show)
+
+    message_grant_revoke = message_grant_sub.add_parser("revoke")
+    _add_home_env(message_grant_revoke)
+    message_grant_revoke.add_argument("grant_id")
+    message_grant_revoke.add_argument("--actor", default="operator")
+    message_grant_revoke.set_defaults(func=command_message_grant_revoke)
+
+    message_outbox = message_sub.add_parser("outbox", help="Inspect and resolve queued message delivery")
+    message_outbox_sub = message_outbox.add_subparsers(dest="message_outbox_action", required=True)
+
+    message_outbox_show = message_outbox_sub.add_parser("show")
+    _add_home_env(message_outbox_show)
+    message_outbox_show.add_argument("outbox_id")
+    message_outbox_show.add_argument("--include-body", action="store_true")
+    message_outbox_show.set_defaults(func=command_message_outbox_show)
+
+    message_outbox_cancel = message_outbox_sub.add_parser("cancel")
+    _add_home_env(message_outbox_cancel)
+    message_outbox_cancel.add_argument("outbox_id")
+    message_outbox_cancel.add_argument("--actor", default="operator")
+    message_outbox_cancel.set_defaults(func=command_message_outbox_cancel)
+
+    message_outbox_reconcile = message_outbox_sub.add_parser("reconcile")
+    _add_home_env(message_outbox_reconcile)
+    message_outbox_reconcile.add_argument("outbox_id")
+    message_outbox_reconcile.add_argument("--outcome", choices=["delivered", "not-delivered"], required=True)
+    message_outbox_reconcile.add_argument("--reason", required=True)
+    message_outbox_reconcile.add_argument("--actor", default="operator")
+    message_outbox_reconcile.set_defaults(func=command_message_outbox_reconcile)
     return parser
 
 

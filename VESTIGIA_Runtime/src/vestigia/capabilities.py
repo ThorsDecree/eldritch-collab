@@ -86,6 +86,7 @@ class CapabilityPolicyEngine:
             "later_resident_hash_bound_claim",
             "hash_bound_for_claim",
             "resident_authenticated_doorway",
+            "resident_private_curation_submission",
         }
 
     def authorize(
@@ -99,11 +100,24 @@ class CapabilityPolicyEngine:
                 f"Capability {spec.name} specifies unrecognized confirmation policy: {spec.confirmation}"
             )
         if spec.outward_facing:
-            interface = context.get("interface")
-            if not interface or interface not in {"discord", "bell"}:
-                raise PermissionError(
-                    f"Outward facing capability {spec.name} must be executed from an authorized Discord/Bell interface, got: {interface or '(none)'}"
-                )
+            if spec.confirmation == "resident_private_curation_submission":
+                if spec.name != "message.submit":
+                    raise PermissionError(
+                        "private-curation submission policy is reserved for message.submit"
+                    )
+                if (
+                    context.get("interface") != "curation"
+                    or context.get("invocation") != "private_curation"
+                ):
+                    raise PermissionError(
+                        "message submission is available only in private curation"
+                    )
+            else:
+                interface = context.get("interface")
+                if not interface or interface not in {"discord", "bell"}:
+                    raise PermissionError(
+                        f"Outward facing capability {spec.name} must be executed from an authorized Discord/Bell interface, got: {interface or '(none)'}"
+                    )
 
 
 PolicyAuthorizer = Callable[[CapabilitySpec, dict[str, Any], dict[str, Any]], None]
