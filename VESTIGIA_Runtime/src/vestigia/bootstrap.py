@@ -26,6 +26,7 @@ _INSTALLATION_PLAN: Final[tuple[tuple[str, str], ...]] = (
     ("mcp_archive_tools", "register_composition"),
     ("context_introspection", "register_composition"),
     ("workspace_patch_staging", "register_composition"),
+    ("private_message_capabilities", "register_composition"),
 )
 
 _lock = RLock()

@@ -62,6 +62,7 @@
 - Create: `VESTIGIA_Runtime/src/vestigia/private_message_capabilities.py`
 - Modify: `VESTIGIA_Runtime/src/vestigia/bootstrap.py` — register the capability contribution through the established ordered composition plan.
 - Modify: `VESTIGIA_Runtime/src/vestigia/capabilities.py` — add the named confirmation policy and narrowly scoped authorization rule.
+- Modify: `VESTIGIA_Runtime/src/vestigia/runtime.py` — pass the current `house_tool_round` into action dispatch context.
 - Modify: `VESTIGIA_Runtime/src/vestigia/cli.py` — add `vestigia message grant create|list|show|revoke`.
 - Modify: `VESTIGIA_Runtime/src/vestigia/private_messages.py` — transactional submit/outbox/quota/cancel/reconcile operations.
 - Test: `VESTIGIA_Runtime/tests/test_private_message_capabilities.py`
@@ -89,16 +90,17 @@
 
 **Interfaces:**
 - Consumes Task 2's outbox service operations.
-- Produces `claim_next(now: str | None = None) -> dict[str, Any] | None`, which atomically changes one eligible `queued` item to `attempting` after revalidating grant, reservation, expiry, destination, and payload hash.
+- Produces `peek_next() -> dict[str, Any] | None`, a read-only metadata-only view used to resolve the grant-bound Discord destination before claiming.
+- Produces `claim(outbox_id: str, now: str | None = None) -> dict[str, Any] | None`, which atomically changes that eligible `queued` item to `attempting` after revalidating grant, reservation, expiry, destination, and payload hash.
 - Produces `finish_delivery(outbox_id: str, outcome: str, *, discord_message_id: str | None = None, safe_error_code: str | None = None) -> dict[str, Any]`; outcomes are `delivered|failed|delivery_uncertain`.
 - Produces `recover_attempting() -> int`, which converts unresolved `attempting` items to `delivery_uncertain`, consumes their reservations, and never requeues them.
 
-- [ ] **Step 1: Write failing lifecycle tests** for queued cancellation, revocation, expiration before claim, atomic claim, cancellation-vs-claim serialization, quota refund on definite failure, quota consumption on delivered/uncertain, and stale-attempt recovery.
-- [ ] **Step 2: Write failing adapter tests** using a fake Discord client/destination: verify exact grant destination, one `send` call with the original body, `AllowedMentions.none()`, `suppress_embeds=True`, no attachment/chunk code path, no delivery when revoked/expired/unavailable before claim, and no automatic retry after timeout or restart.
-- [ ] **Step 3: Run focused tests** with `cd VESTIGIA_Runtime && python -m pytest tests/test_private_message_delivery.py -q`. Expected: the new lifecycle and worker tests fail before implementation.
-- [ ] **Step 4: Implement state transitions** as serialized database operations. Cancellation and revocation change only queued items and release reservations. A worker claim winning the race makes cancellation return `too_late`. Confirmed delivery consumes the reservation and stores Discord message ID; definite rejection releases it; ambiguous outcomes consume it and mark uncertainty. Keep body until delivered/failed/cancelled or operator reconciliation, then purge body while retaining its hash.
-- [ ] **Step 5: Integrate one Discord outbox loop.** On startup call `recover_attempting()`; poll eligible queued work; resolve only the grant's stored channel/DM ID; claim before network I/O; send one message with mentions disabled and embeds suppressed; classify known rejection separately from ambiguity; persist the result. If the Discord client or destination is unavailable before claim, leave the item queued while its grant remains valid. Do not retry after a claim with an ambiguous result.
-- [ ] **Step 6: Run focused and regression tests** with `cd VESTIGIA_Runtime && python -m pytest tests/test_private_message_delivery.py tests/test_vestigia.py -q`. Expected: delivery semantics and existing Discord behavior pass.
+- [x] **Step 1: Write failing lifecycle tests** for queued cancellation, revocation, expiration before claim, atomic claim, cancellation-vs-claim serialization, quota refund on definite failure, quota consumption on delivered/uncertain, and stale-attempt recovery.
+- [x] **Step 2: Write failing adapter tests** using a fake Discord client/destination: verify exact grant destination, one `send` call with the original body, `AllowedMentions.none()`, `suppress_embeds=True`, no attachment/chunk code path, no delivery when revoked/expired/unavailable before claim, and no automatic retry after timeout or restart.
+- [x] **Step 3: Run focused tests** with `cd VESTIGIA_Runtime && python -m pytest tests/test_private_message_delivery.py -q`. Initial collection failed because the worker was absent; after implementation, 11 tests passed.
+- [x] **Step 4: Implement state transitions** as serialized database operations. Cancellation and revocation change only queued items and release reservations. A worker claim winning the race makes cancellation return `too_late`. Confirmed delivery consumes the reservation and stores Discord message ID; definite rejection releases it; ambiguous outcomes consume it and mark uncertainty. Submitted draft copies are purged; queued/uncertain outbox content remains only as required for delivery/reconciliation and is purged after terminal resolution.
+- [x] **Step 5: Integrate one Discord outbox loop.** On startup call `recover_attempting()`; poll eligible queued work; resolve only the grant's stored channel/DM ID; claim before network I/O; send one message with mentions disabled and embeds suppressed; classify known rejection separately from ambiguity; persist the result. Destination unavailability before claim leaves queued. No retry follows an ambiguous claimed attempt.
+- [x] **Step 6: Run focused and regression tests**: `tests/test_private_message_delivery.py` → 11 passed; full suite → 349 passed, 2 skipped, 4 subtests passed; compileall and `git diff --check` passed.
 - [ ] **Step 7: Commit** as `feat: deliver private messages through discord outbox`.
 
 ### Task 4: Operator outbox controls, documentation, and full verification
@@ -116,16 +118,16 @@
 - `vestigia message outbox cancel HOME OUTBOX_ID` distinguishes cancelled from too-late.
 - `vestigia message outbox reconcile HOME OUTBOX_ID --outcome delivered|not-delivered --reason TEXT` records a separate operator receipt and never retries.
 
-- [ ] **Step 1: Add failing CLI tests** for show without body, explicit bounded body inspection, cancellation results, reconciliation as a separate receipt, and rejection of unsupported outcomes.
-- [ ] **Step 2: Run focused CLI tests** with `cd VESTIGIA_Runtime && python -m pytest tests/test_private_message_cli.py -q`. Expected: outbox commands are missing.
-- [ ] **Step 3: Implement operator outbox commands** with distinct exit/result states for `queued`, `delivered`, `failed`, `delivery_uncertain`, `cancelled`, and `too_late_to_cancel`. Reconciliation may record only operator-verified delivered/not-delivered; it must not rewrite the original attempt.
-- [ ] **Step 4: Write operator and daemon-facing documentation** covering grant creation and resident acceptance, exact draft then later-round submit, lifecycle and quota rules, safe errors, revocation/cancellation race, uncertainty/reconciliation, message limits, and the distinction between Discord ingress allowlists and outbound grants. State that `delivered` means Discord returned a created message ID, not that a person read it.
-- [ ] **Step 5: Run focused, full, and static checks**:
+- [x] **Step 1: Add failing CLI tests** for show without body, explicit bounded body inspection, cancellation results, reconciliation as a separate receipt, and rejection of unsupported outcomes. They failed before the service and commands were implemented.
+- [x] **Step 2: Run focused CLI tests** with `cd VESTIGIA_Runtime && python -m pytest tests/test_private_message_cli.py -q`; 4 passed.
+- [x] **Step 3: Implement operator outbox commands** with distinct result states for `queued`, `delivered`, `failed`, `delivery_uncertain`, `cancelled`, and `too_late_to_cancel`. Reconciliation records one operator-verified delivered/not-delivered event without rewriting the original attempt.
+- [x] **Step 4: Write operator and daemon-facing documentation** covering grant creation and resident acceptance, exact draft then later-round submit, lifecycle and quota rules, safe errors, revocation/cancellation race, uncertainty/reconciliation, message limits, and separate ingress allowlists. The docs say `delivered` means Discord returned a created message ID, not that a person read it.
+- [x] **Step 5: Run focused, full, and static checks**:
   - `cd VESTIGIA_Runtime && python -m pytest tests/test_private_messages.py tests/test_private_message_capabilities.py tests/test_private_message_cli.py tests/test_private_message_delivery.py tests/test_runtime_bootstrap.py -q`
   - `cd VESTIGIA_Runtime && python -m pytest -q`
   - `cd VESTIGIA_Runtime && python -m compileall -q src tests`
   Expected: all tests and compilation pass.
-- [ ] **Step 6: Review the diff against all ten acceptance criteria** in the spec, confirm no additional required dependency, no raw body/context in receipts, no normal-turn/job/bell send path, and no retry after ambiguity.
+- [x] **Step 6: Review the diff against all ten acceptance criteria** in the spec: no added dependency; receipts exclude body and private context; only private curation can queue; worker makes one attempt and does not retry ambiguity.
 - [ ] **Step 7: Commit** as `docs: document private outbound messaging operations`.
 
 ---

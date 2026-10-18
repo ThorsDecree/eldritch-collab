@@ -785,6 +785,7 @@ class CoreRuntime:
                                     else "TOOL_ACTION"
                                 ),
                                 "activity_id": activity_id,
+                                "house_tool_round": round_index,
                             },
                         )
                         hidden_path = result.pop("_outbound_path", None)

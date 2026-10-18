@@ -255,6 +255,93 @@ CREATE INDEX IF NOT EXISTS idx_bell_observatory_runs_resident
 ON bell_observatory_runs(resident_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bell_observatory_runs_bell
 ON bell_observatory_runs(bell_id, created_at);
+
+CREATE TABLE IF NOT EXISTS private_message_grants (
+    id TEXT PRIMARY KEY,
+    resident_id TEXT NOT NULL,
+    destination_kind TEXT NOT NULL,
+    destination_id TEXT NOT NULL,
+    active_from TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    message_quota INTEGER NOT NULL,
+    max_length INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    terms_json TEXT NOT NULL,
+    terms_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_private_message_grants_resident
+ON private_message_grants(resident_id, created_at);
+
+CREATE TABLE IF NOT EXISTS private_message_drafts (
+    id TEXT PRIMARY KEY,
+    resident_id TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    body_hash TEXT NOT NULL,
+    length_utf16 INTEGER NOT NULL,
+    created_turn_id TEXT NOT NULL,
+    provider_round INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    FOREIGN KEY (grant_id) REFERENCES private_message_grants(id)
+);
+CREATE INDEX IF NOT EXISTS idx_private_message_drafts_resident
+ON private_message_drafts(resident_id, created_at);
+
+CREATE TABLE IF NOT EXISTS private_message_outbox (
+    id TEXT PRIMARY KEY,
+    resident_id TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    draft_id TEXT NOT NULL UNIQUE,
+    destination_kind TEXT NOT NULL,
+    destination_id TEXT NOT NULL,
+    body TEXT,
+    body_hash TEXT NOT NULL,
+    status TEXT NOT NULL,
+    submitted_turn_id TEXT NOT NULL,
+    source_invocation TEXT NOT NULL,
+    submitted_at TEXT NOT NULL,
+    attempted_at TEXT,
+    resolved_at TEXT,
+    discord_message_id TEXT,
+    safe_error_code TEXT,
+    FOREIGN KEY (grant_id) REFERENCES private_message_grants(id),
+    FOREIGN KEY (draft_id) REFERENCES private_message_drafts(id)
+);
+CREATE INDEX IF NOT EXISTS idx_private_message_outbox_queue
+ON private_message_outbox(status, submitted_at);
+CREATE INDEX IF NOT EXISTS idx_private_message_outbox_resident
+ON private_message_outbox(resident_id, submitted_at);
+
+CREATE TABLE IF NOT EXISTS private_message_quota_reservations (
+    id TEXT PRIMARY KEY,
+    resident_id TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    outbox_id TEXT NOT NULL UNIQUE,
+    state TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    FOREIGN KEY (grant_id) REFERENCES private_message_grants(id),
+    FOREIGN KEY (outbox_id) REFERENCES private_message_outbox(id)
+);
+CREATE INDEX IF NOT EXISTS idx_private_message_reservations_grant
+ON private_message_quota_reservations(grant_id, state);
+
+CREATE TABLE IF NOT EXISTS private_message_events (
+    id TEXT PRIMARY KEY,
+    resident_id TEXT NOT NULL,
+    object_kind TEXT NOT NULL,
+    object_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_private_message_events_object
+ON private_message_events(resident_id, object_kind, object_id, created_at);
 """
 
 

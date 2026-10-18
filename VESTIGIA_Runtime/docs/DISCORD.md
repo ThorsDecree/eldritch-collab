@@ -110,6 +110,8 @@ The Discord process also hosts the consent-aware bell scheduler. See [BELLS.md](
 
 It also runs the image-job worker. A queued resident generation/edit survives restart, completes privately, and opens a new resident continuation with the result. Completion does not itself attach the image to Discord. Sharing remains a separate resident action/boundary.
 
+The Discord process also delivers the bounded private-message outbox. Operator grants pin a single channel or DM recipient, finite time window, and quota; the resident separately accepts exact grant terms and submits each exact draft from private curation. Ingress allowlists are independent of outbound grants. See [PRIVATE_OUTBOUND_MESSAGING.md](PRIVATE_OUTBOUND_MESSAGING.md) for the operator and daemon cheatsheets, lifecycle states, cancellation, and uncertainty handling.
+
 ## Intent requirement
 
 The Discord bot must have Message Content Intent enabled to read ordinary message content.
