@@ -78,7 +78,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "prefix": "",
             "resident_key": "",
             "max_items": 8,
-            "max_terms": 5,
+            "max_terms": 8,
             "tokens": 2200,
             "anchor_chars": 12000,
             "timeout_seconds": 30,
