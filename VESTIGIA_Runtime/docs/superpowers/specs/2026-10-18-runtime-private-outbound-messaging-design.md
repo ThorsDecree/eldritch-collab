@@ -80,9 +80,7 @@ The Discord worker does not accept destination data from resident message text. 
 
 Use additive, resident-scoped SQLite tables for grants, drafts, outbox items, and quota reservations. Store message body only in the protected draft/outbox record required for delivery. The legible receipt contains metadata and hashes, not private-turn content.
 
-Grant states:
-
-`pending_resident_acceptance → active → relinquished | revoked | expired | exhausted`
+Stored grant lifecycle states are `pending_resident_acceptance`, `active`, `relinquished`, `revoked`, and `expired`. Quota exhaustion is derived from consumed plus reserved uses rather than persisted as a terminal grant state; releasing a reservation can restore availability while the grant remains within its time window.
 
 Draft states:
 
@@ -138,7 +136,7 @@ A `delivery_uncertain` item is terminal for automatic processing. An operator ma
 - Grant revoked or expired before claim: cancel without network call and release quota.
 - Invalid or modified draft: reject before quota reservation and guarantee no outward action.
 
-Each externally visible result distinguishes `queued` (accepted for delivery), `delivered` (Discord returned a message ID), `failed` (known non-delivery), `delivery_uncertain` (acceptance unknown), `cancelled`, and `too_late_to_cancel`.
+Each externally visible result distinguishes `queued` (accepted by the Runtime for delivery), `delivered` (Discord's API returned a created message and ID; this does not claim the recipient read it), `failed` (known non-delivery), `delivery_uncertain` (platform acceptance unknown), `cancelled`, and `too_late_to_cancel`.
 
 ## Testing and acceptance criteria
 
