@@ -15,7 +15,6 @@ Quick references:
 - [Operator cheatsheet](docs/OPERATOR_CHEATSHEET.md) — state transitions, Discord/CLI controls, diagnostics, and history.
 - [Resident cheatsheet](docs/RESIDENT_CHEATSHEET.md) — lifecycle meanings, live capability discovery, context controls, and provenance.
 
-
 For operator configuration and providers:
 
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
