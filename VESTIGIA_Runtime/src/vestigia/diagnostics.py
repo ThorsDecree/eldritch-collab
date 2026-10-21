@@ -18,7 +18,7 @@ import yaml
 
 from . import __version__
 from .bells import BellService
-from .config import ResolvedConfig
+from .config import ResolvedConfig, provider_secret_name
 from .db import ContinuityDB
 from .home import validate_home
 from .packing import EXCLUDED_NAMES, EXCLUDED_SUFFIXES, inspect_home_pack
@@ -357,6 +357,15 @@ def build_doctor_report(
         or research_cas["status"] == "warning"
     ):
         overall = "warning"
+    provider_kind = str(config.get("provider.kind", "")).strip().lower()
+    provider_secret = provider_secret_name(provider_kind)
+    provider_key_status = (
+        "not_required"
+        if provider_kind == "fake"
+        else "present"
+        if provider_secret and config.secret(provider_secret)
+        else "absent"
+    )
     return {
         "schema_version": "vestigia.doctor.v0.2",
         "generated_at": utc_now_iso(),
@@ -377,7 +386,11 @@ def build_doctor_report(
         "research_cas": research_cas,
         "operations": operations,
         "credentials": {
+            "provider_kind": config.get("provider.kind"),
+            "provider_key": provider_key_status,
             "openai_key": "present" if config.secret("OPENAI_API_KEY") else "absent",
+            "anthropic_key": "present" if config.secret("ANTHROPIC_API_KEY") else "absent",
+            "gemini_key": "present" if config.secret("GEMINI_API_KEY") else "absent",
             "discord_token": "present" if config.secret("DISCORD_BOT_TOKEN") else "absent",
             "values_exported": False,
         },

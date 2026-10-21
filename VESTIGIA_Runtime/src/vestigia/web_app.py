@@ -14,7 +14,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from .bells import BellService
-from .config import load_config
+from .config import load_config, provider_secret_name
 from .curation import Curator
 from .db import ContinuityDB
 from .diagnostics import build_doctor_report
@@ -162,13 +162,16 @@ def _status(home: Path, env_file: str | Path | None) -> dict[str, Any]:
         limit=10000,
     )
     bells = BellService(db, resident_id, room_id).list()
+    provider = config.get("provider.kind")
+    provider_secret = provider_secret_name(provider)
     return {
         "home": config.home_path,
         "resident_name": config.get("resident.name"),
         "glyph": config.get("resident.glyph"),
         "state": db.current_state(resident_id),
-        "provider": config.get("provider.kind"),
-        "credential_ready": bool(config.secret("OPENAI_API_KEY")),
+        "provider": provider,
+        "credential_ready": provider == "fake"
+        or bool(provider_secret and config.secret(provider_secret)),
         "pending_review": len(pending),
         "active_bells": sum(item.status == "active" for item in bells),
         "turns": db.recent_turns(resident_id, room_id, limit=12),

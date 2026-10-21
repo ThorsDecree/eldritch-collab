@@ -33,6 +33,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "kind": "openai",
         "api_style": "responses",
         "base_url": "",
+        "max_output_tokens": 8192,
     },
     "models": {
         "default": "gpt-5-mini",
@@ -66,6 +67,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "external_source_tokens": 2400,
         "external_source_max_items": 8,
         "resident_max_total_tokens": 20000,
+        "resident_max_retrieval_limit": 100,
+        "resident_max_retrieval_tokens": 12000,
         "resident_max_verbatim_turns": 100,
         "resident_max_compression_source_turns": 2000,
         "resident_max_compressed_transcript_tokens": 20000,
@@ -219,6 +222,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
 }
 
+PROVIDER_SECRET_NAMES = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+}
+
+
+def provider_secret_name(kind: Any) -> str | None:
+    return PROVIDER_SECRET_NAMES.get(str(kind or "").strip().lower())
+
 
 def _as_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
@@ -231,6 +244,7 @@ def _as_int(value: str) -> int:
 ENV_MAP: dict[str, tuple[str, Callable[[str], Any]]] = {
     "VESTIGIA_PROVIDER": ("provider.kind", str),
     "VESTIGIA_API_STYLE": ("provider.api_style", str),
+    "VESTIGIA_PROVIDER_MAX_OUTPUT_TOKENS": ("provider.max_output_tokens", _as_int),
     "OPENAI_BASE_URL": ("provider.base_url", str),
     "VESTIGIA_MODEL_DEFAULT": ("models.default", str),
     "VESTIGIA_MODEL_BIG": ("models.big", str),
@@ -260,6 +274,14 @@ ENV_MAP: dict[str, tuple[str, Callable[[str], Any]]] = {
     "VESTIGIA_CONTEXT_EXTERNAL_SOURCE_TOKENS": ("context.external_source_tokens", _as_int),
     "VESTIGIA_CONTEXT_EXTERNAL_SOURCE_MAX_ITEMS": ("context.external_source_max_items", _as_int),
     "VESTIGIA_RESIDENT_MAX_TOTAL_TOKENS": ("context.resident_max_total_tokens", _as_int),
+    "VESTIGIA_RESIDENT_MAX_RETRIEVAL_LIMIT": (
+        "context.resident_max_retrieval_limit",
+        _as_int,
+    ),
+    "VESTIGIA_RESIDENT_MAX_RETRIEVAL_TOKENS": (
+        "context.resident_max_retrieval_tokens",
+        _as_int,
+    ),
     "VESTIGIA_RESIDENT_MAX_VERBATIM_TURNS": ("context.resident_max_verbatim_turns", _as_int),
     "VESTIGIA_RESIDENT_MAX_COMPRESSION_SOURCE_TURNS": ("context.resident_max_compression_source_turns", _as_int),
     "VESTIGIA_RESIDENT_MAX_COMPRESSED_TRANSCRIPT_TOKENS": ("context.resident_max_compressed_transcript_tokens", _as_int),
@@ -475,12 +497,26 @@ def load_config(home_path: str | Path, env_file: str | Path | None = None) -> Re
     if len(active) != 1:
         raise ValueError("v0.1 implements exactly one active resident per turn")
 
+    if str(data["provider"].get("kind", "openai")).strip().lower() not in {
+        "openai",
+        "anthropic",
+        "gemini",
+        "fake",
+    }:
+        raise ValueError("provider.kind must be openai, anthropic, gemini, or fake")
+    if not 1 <= int(data["provider"].get("max_output_tokens", 8192)) <= 100000:
+        raise ValueError("provider.max_output_tokens must be between 1 and 100000")
+
     if int(data["context"]["total_tokens"]) < 1000:
         raise ValueError("context.total_tokens must be at least 1000")
     if int(data["context"].get("external_source_tokens", 2400)) < 0:
         raise ValueError("context.external_source_tokens must not be negative")
     if int(data["context"].get("external_source_max_items", 8)) < 1:
         raise ValueError("context.external_source_max_items must be at least 1")
+    if not 1 <= int(data["context"].get("resident_max_retrieval_limit", 100)) <= 200:
+        raise ValueError("context.resident_max_retrieval_limit must be between 1 and 200")
+    if not 0 <= int(data["context"].get("resident_max_retrieval_tokens", 12000)) <= 12000:
+        raise ValueError("context.resident_max_retrieval_tokens must be between 0 and 12000")
     mcp_context = data.get("context_sources", {}).get("mcp_archive", {})
     if bool(mcp_context.get("enabled", False)):
         if not str(mcp_context.get("live_archive_root", "")).strip():
@@ -509,8 +545,15 @@ def load_config(home_path: str | Path, env_file: str | Path | None = None) -> Re
         raise ValueError("discord.ambient_visibility is invalid")
     secrets = {
         name: str(env_values.get(name, "")).strip()
-        for name in ("OPENAI_API_KEY", "DISCORD_BOT_TOKEN")
+        for name in (
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "DISCORD_BOT_TOKEN",
+        )
     }
+    secrets["GEMINI_API_KEY"] = str(
+        env_values.get("GEMINI_API_KEY") or env_values.get("GOOGLE_API_KEY") or ""
+    ).strip()
     return ResolvedConfig(data=data, sources=sources, home_path=home, secrets=secrets)
 
 

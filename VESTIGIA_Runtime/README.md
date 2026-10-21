@@ -195,6 +195,32 @@ VESTIGIA_MODEL_DEFAULT=your-local-model-name
 
 `OPENAI_API_KEY=ollama` is a placeholder client value when the local server ignores bearer authentication; it is not a paid OpenAI credential.
 
+### Native Claude text provider
+
+Install the optional adapter and set its own API key:
+
+```text
+pip install -e ".[providers-anthropic]"
+ANTHROPIC_API_KEY=YOUR_REAL_KEY
+VESTIGIA_PROVIDER=anthropic
+VESTIGIA_MODEL_DEFAULT=claude-model-name
+VESTIGIA_MODEL_BIG=claude-model-name
+VESTIGIA_MODEL_THINKING=claude-model-name
+```
+
+### Native Gemini text provider
+
+```text
+pip install -e ".[providers-gemini]"
+GEMINI_API_KEY=YOUR_REAL_KEY
+VESTIGIA_PROVIDER=gemini
+VESTIGIA_MODEL_DEFAULT=gemini-model-name
+VESTIGIA_MODEL_BIG=gemini-model-name
+VESTIGIA_MODEL_THINKING=gemini-model-name
+```
+
+`GOOGLE_API_KEY` is also accepted when `GEMINI_API_KEY` is unset. Claude and Gemini use their native text APIs; image generation and vision remain separate OpenAI-backed services. See [docs/PROVIDERS.md](docs/PROVIDERS.md) for scope and setup details.
+
 If the configured local endpoint only supports text chat, disable model image/vision routes for that deployment:
 
 ```text

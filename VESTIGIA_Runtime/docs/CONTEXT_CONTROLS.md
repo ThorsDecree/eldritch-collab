@@ -8,12 +8,20 @@ These controls are private, low-authority, audited, and take effect on the next 
 ```
 
 ```text
-[[TOOL_ACTION {"action":"context.control","mode":"configure","prompt_budget_tokens":20000,"verbatim_turns":12,"compression_source_turns":60,"compressed_token_budget":3500,"after":"continue"}]]
+[[TOOL_ACTION {"action":"context.control","mode":"configure","prompt_budget_tokens":20000,"verbatim_turns":12,"compression_source_turns":60,"compressed_token_budget":3500,"retrieval_limit":18,"retrieval_tokens":3800,"after":"continue"}]]
 ```
 
 - `verbatim_turns` keeps the newest stored turns intact.
 - `compression_source_turns` selects how many earlier turns may enter the older capsule.
 - `compressed_token_budget` bounds that capsule.
+- `retrieval_limit` sets the maximum Runtime-memory candidates considered for a future turn.
+- `retrieval_tokens` sets the token budget for the Runtime-memory retrieval layer.
+- Retrieval settings are reported as requested, operator ceiling, and effective values. An
+  over-ceiling preference is retained, but the effective setting is capped. The operator may
+  set `context.resident_max_retrieval_limit` and
+  `context.resident_max_retrieval_tokens` in `home.yaml` or through
+  `VESTIGIA_RESIDENT_MAX_RETRIEVAL_LIMIT` and `VESTIGIA_RESIDENT_MAX_RETRIEVAL_TOKENS`.
+- `retrieval.inspect` exposes the applied values in the inspected turn's budget receipt.
 - Compression is currently extractive and deterministic. Every excerpt carries its source
   turn ID, speaker, timestamp, and content hash; it is not represented as a canonical memory.
 - `reset` returns to configured defaults. `recompress` reapplies supplied drawer values on the

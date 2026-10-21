@@ -94,10 +94,13 @@ The core configuration loader treats these as secrets:
 
 ```text
 OPENAI_API_KEY
+ANTHROPIC_API_KEY
+GEMINI_API_KEY
+GOOGLE_API_KEY
 DISCORD_BOT_TOKEN
 ```
 
-The current text provider uses the OpenAI Python client for both OpenAI service calls and OpenAI-compatible endpoints. Consequently, live text mode currently requires a nonempty `OPENAI_API_KEY` client value even when the configured endpoint itself does not authenticate that value.
+The configured text provider selects the required credential: OpenAI uses `OPENAI_API_KEY`, Claude uses `ANTHROPIC_API_KEY`, and Gemini uses `GEMINI_API_KEY` or its `GOOGLE_API_KEY` fallback. The native Claude and Gemini SDKs are optional installation extras. Image generation and model vision remain OpenAI-backed and require `OPENAI_API_KEY` when those capabilities are used.
 
 For example, a local Ollama deployment can commonly use:
 

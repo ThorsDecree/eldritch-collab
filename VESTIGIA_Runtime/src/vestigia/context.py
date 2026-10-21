@@ -96,6 +96,8 @@ class ContextAssembler:
             model_route=model_route,
             turn_id=actual_turn_id,
             include_inherited=include_inherited_memories,
+            retrieval_limit=int(controls["retrieval_limit"]),
+            runtime_memory_budget_tokens=int(controls["retrieval_tokens"]),
         )
         source_layers = [
             self._context_source_layer(result)
@@ -298,6 +300,8 @@ class ContextAssembler:
         model_route: str,
         turn_id: str,
         include_inherited: bool,
+        retrieval_limit: int,
+        runtime_memory_budget_tokens: int,
     ) -> list[ContextSourceResult]:
         if retrieval_request.policy_effective == "none" or retrieval_request.deferred:
             return []
@@ -309,9 +313,10 @@ class ContextAssembler:
             state=state,
             model_route=model_route,
             turn_id=turn_id,
-            limit=max(1, int(self.config.get("retrieval.limit", 18))),
+            limit=max(1, retrieval_limit),
             retrieval_request=retrieval_request,
             include_inherited=include_inherited,
+            runtime_memory_budget_tokens=runtime_memory_budget_tokens,
         )
         results: list[ContextSourceResult] = []
         layer_names: set[str] = set()
