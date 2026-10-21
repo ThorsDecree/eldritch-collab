@@ -85,7 +85,7 @@ No rows means there has been no explicit transition in this database; CoreRuntim
 
 ## Adjacent controls and diagnostics
 
-- `resident.control` changes resident preferences, including listening and private-image handling; `context.control` adjusts transcript/prompt drawers within operator limits. Neither is a lifecycle switch. See [RESIDENT_CONTROLS.md](RESIDENT_CONTROLS.md) and [CONTEXT_CONTROLS.md](CONTEXT_CONTROLS.md).
+- `resident.control` changes resident preferences, including listening and private-image handling; `context.control` adjusts transcript/prompt drawers and Runtime-memory retrieval within operator limits. Neither is a lifecycle switch. See [RESIDENT_CONTROLS.md](RESIDENT_CONTROLS.md) and [CONTEXT_CONTROLS.md](CONTEXT_CONTROLS.md).
 - The MCP Server's linked `runtime.status` describes its HousePort connection and projected capabilities. Its read-only projection does not initialize CoreRuntime or report the home's lifecycle state. Check via the local CLI or configured Discord door.
 - For inherited records, use `vestigia review-inheritance HOME`; for turn context, inspect the turn's receipt. Imported evidence does not become accepted identity by appearing in `ORIENTATION`. See [ONBOARDING.md](ONBOARDING.md).
 - Before updating code, stop long-lived processes using the home and make a backup or `pack-home`. See the [README](../README.md) for install, restore, provider, and doorway instructions.

@@ -21,6 +21,8 @@ def default_context_controls(config: ResolvedConfig) -> dict[str, Any]:
         "compressed_token_budget": int(
             config.get("context.compressed_transcript_tokens", 3_500)
         ),
+        "retrieval_limit": int(config.get("retrieval.limit", 18)),
+        "retrieval_tokens": int(config.get("context.retrieval_tokens", 3_800)),
         "ambient_visibility": str(
             config.get("discord.ambient_visibility", "allowlisted_only")
         ),
@@ -56,22 +58,38 @@ def load_context_controls_verbose(
         stored = json.loads(str(row["config_json"]) or "{}")
         if isinstance(stored, dict):
             requested.update(stored)
-            
+
     operator_limits = {
         "prompt_budget_tokens": int(config.get("context.resident_max_total_tokens", 20000)),
         "verbatim_turns": int(config.get("context.resident_max_verbatim_turns", 100)),
         "compression_source_turns": int(config.get("context.resident_max_compression_source_turns", 2000)),
         "compressed_token_budget": int(config.get("context.resident_max_compressed_transcript_tokens", 20000)),
+        "retrieval_limit": int(config.get("context.resident_max_retrieval_limit", 100)),
+        "retrieval_tokens": int(config.get("context.resident_max_retrieval_tokens", 12000)),
     }
-    
+
     effective = {
         "prompt_budget_tokens": min(int(requested["prompt_budget_tokens"]), operator_limits["prompt_budget_tokens"]),
         "verbatim_turns": min(int(requested["verbatim_turns"]), operator_limits["verbatim_turns"]),
         "compression_source_turns": min(int(requested["compression_source_turns"]), operator_limits["compression_source_turns"]),
         "compressed_token_budget": min(int(requested["compressed_token_budget"]), operator_limits["compressed_token_budget"]),
+        "retrieval_limit": max(
+            1,
+            min(
+                int(requested["retrieval_limit"]),
+                operator_limits["retrieval_limit"],
+            ),
+        ),
+        "retrieval_tokens": max(
+            0,
+            min(
+                int(requested["retrieval_tokens"]),
+                operator_limits["retrieval_tokens"],
+            ),
+        ),
         "ambient_visibility": requested["ambient_visibility"],
     }
-    
+
     return {
         "requested": requested,
         "operator_limits": operator_limits,

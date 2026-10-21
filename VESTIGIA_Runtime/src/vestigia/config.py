@@ -67,6 +67,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "external_source_tokens": 2400,
         "external_source_max_items": 8,
         "resident_max_total_tokens": 20000,
+        "resident_max_retrieval_limit": 100,
+        "resident_max_retrieval_tokens": 12000,
         "resident_max_verbatim_turns": 100,
         "resident_max_compression_source_turns": 2000,
         "resident_max_compressed_transcript_tokens": 20000,
@@ -272,6 +274,14 @@ ENV_MAP: dict[str, tuple[str, Callable[[str], Any]]] = {
     "VESTIGIA_CONTEXT_EXTERNAL_SOURCE_TOKENS": ("context.external_source_tokens", _as_int),
     "VESTIGIA_CONTEXT_EXTERNAL_SOURCE_MAX_ITEMS": ("context.external_source_max_items", _as_int),
     "VESTIGIA_RESIDENT_MAX_TOTAL_TOKENS": ("context.resident_max_total_tokens", _as_int),
+    "VESTIGIA_RESIDENT_MAX_RETRIEVAL_LIMIT": (
+        "context.resident_max_retrieval_limit",
+        _as_int,
+    ),
+    "VESTIGIA_RESIDENT_MAX_RETRIEVAL_TOKENS": (
+        "context.resident_max_retrieval_tokens",
+        _as_int,
+    ),
     "VESTIGIA_RESIDENT_MAX_VERBATIM_TURNS": ("context.resident_max_verbatim_turns", _as_int),
     "VESTIGIA_RESIDENT_MAX_COMPRESSION_SOURCE_TURNS": ("context.resident_max_compression_source_turns", _as_int),
     "VESTIGIA_RESIDENT_MAX_COMPRESSED_TRANSCRIPT_TOKENS": ("context.resident_max_compressed_transcript_tokens", _as_int),
@@ -503,6 +513,10 @@ def load_config(home_path: str | Path, env_file: str | Path | None = None) -> Re
         raise ValueError("context.external_source_tokens must not be negative")
     if int(data["context"].get("external_source_max_items", 8)) < 1:
         raise ValueError("context.external_source_max_items must be at least 1")
+    if not 1 <= int(data["context"].get("resident_max_retrieval_limit", 100)) <= 200:
+        raise ValueError("context.resident_max_retrieval_limit must be between 1 and 200")
+    if not 0 <= int(data["context"].get("resident_max_retrieval_tokens", 12000)) <= 12000:
+        raise ValueError("context.resident_max_retrieval_tokens must be between 0 and 12000")
     mcp_context = data.get("context_sources", {}).get("mcp_archive", {})
     if bool(mcp_context.get("enabled", False)):
         if not str(mcp_context.get("live_archive_root", "")).strip():

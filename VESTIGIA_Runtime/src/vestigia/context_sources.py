@@ -40,6 +40,7 @@ class ContextSourceRequest:
     limit: int
     retrieval_request: RetrievalRequest
     include_inherited: bool = False
+    runtime_memory_budget_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -227,7 +228,11 @@ class RuntimeMemoryContextSource:
             layer_name="retrieved_continuity",
             query=request.query,
             items=items,
-            budget_tokens=int(self.config.get("context.retrieval_tokens", 3800)),
+            budget_tokens=(
+                int(self.config.get("context.retrieval_tokens", 3800))
+                if request.runtime_memory_budget_tokens is None
+                else max(0, int(request.runtime_memory_budget_tokens))
+            ),
             required=True,
             authority="record_scoped_runtime_continuity",
             advisory=False,
@@ -240,6 +245,11 @@ class RuntimeMemoryContextSource:
             metadata={
                 "backend": "sqlite_continuity_ledger",
                 "retrieval_limit": limit,
+                "retrieval_budget_tokens": (
+                    int(self.config.get("context.retrieval_tokens", 3800))
+                    if request.runtime_memory_budget_tokens is None
+                    else max(0, int(request.runtime_memory_budget_tokens))
+                ),
                 "retrieval_policy": request.retrieval_request.policy_effective,
                 "returned_before_core_filter": len(retrieved),
                 "returned_to_layer": len(items),

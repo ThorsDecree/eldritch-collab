@@ -124,6 +124,8 @@ FIELDS: dict[str, tuple[dict[str, Any], tuple[str, ...]]] = {
         "verbatim_turns": I(minimum=2, maximum=100),
         "compression_source_turns": I(minimum=0, maximum=2000),
         "compressed_token_budget": I(minimum=0, maximum=20000),
+        "retrieval_limit": I(minimum=1, maximum=200),
+        "retrieval_tokens": I(minimum=0, maximum=12000),
     }, ()),
     "source.visibility": ({
         "mode": S(enum=["inspect", "allowlisted_only", "all_channel", "mentions_only", "hidden"]),
@@ -206,7 +208,7 @@ EXAMPLES: dict[str, tuple[dict[str, Any], ...]] = {
     ),
     "context.control": (
         {"action": "context.control", "mode": "inspect", "after": "continue"},
-        {"action": "context.control", "mode": "configure", "prompt_budget_tokens": 20000, "verbatim_turns": 12, "compression_source_turns": 60, "compressed_token_budget": 3500, "after": "continue"},
+        {"action": "context.control", "mode": "configure", "prompt_budget_tokens": 20000, "verbatim_turns": 12, "compression_source_turns": 60, "compressed_token_budget": 3500, "retrieval_limit": 18, "retrieval_tokens": 3800, "after": "continue"},
     ),
     "source.visibility": (
         {"action": "source.visibility", "mode": "allowlisted_only", "after": "continue"},

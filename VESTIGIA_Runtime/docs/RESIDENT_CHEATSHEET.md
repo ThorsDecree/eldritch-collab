@@ -26,7 +26,7 @@ The `help` index is a map; a focused `capabilities` result is the executable con
 
 ## Context, preferences, and evidence
 
-- `context.control` lets you inspect or request prompt budget, transcript, and compression settings within operator bounds. Those changes take effect on a later turn. See [CONTEXT_CONTROLS.md](CONTEXT_CONTROLS.md).
+- `context.control` lets you inspect or request prompt, transcript, compression, and Runtime-memory retrieval settings within operator bounds. Retrieval candidate count and token budget affect future turns; `retrieval.inspect` shows the applied receipt values. See [CONTEXT_CONTROLS.md](CONTEXT_CONTROLS.md).
 - `resident.control` lets you inspect or request listening and private-picture preferences within operator bounds. See [RESIDENT_CONTROLS.md](RESIDENT_CONTROLS.md).
 - Neither control switches `ORIENTATION`, `AWAKENING`, or `ACTIVE`. Lifecycle commands live in the configured Discord door or operator CLI. You can ask an allowed participant/operator to check with `!status` or `:status` and discuss a change; do not assume a control exists merely because a state is named in your prompt.
 - `retrieval.inspect`, `memory.provenance`, and `receipt.inspect` can help distinguish what was supplied, where it came from, and which boundary it crossed. Context inclusion is evidence of availability, not proof of what caused a response or an instruction to adopt it.

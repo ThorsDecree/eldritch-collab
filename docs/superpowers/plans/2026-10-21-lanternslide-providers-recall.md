@@ -76,14 +76,15 @@
 - Modify: `VESTIGIA_Runtime/src/vestigia/config.py`
 - Modify: `VESTIGIA_Runtime/src/vestigia/capability_contracts.py`
 - Modify: `VESTIGIA_Runtime/src/vestigia/house_tools.py`
-- Test: `VESTIGIA_Runtime/tests/test_context_controls.py` (or focused tests in `test_vestigia.py`) and `VESTIGIA_Runtime/tests/test_context_introspection.py`.
+- Test: `VESTIGIA_Runtime/tests/test_recall_workbench.py`.
+- Modify: `VESTIGIA_Runtime/docs/CONTEXT_CONTROLS.md`, `docs/RESIDENT_CHEATSHEET.md`, and `docs/OPERATOR_CHEATSHEET.md`.
 
 **Interfaces:**
 - Consumes: resident-scoped `context.control`, `ContextSourceRequest`, `RuntimeMemoryContextSource`, and persisted context receipts.
 - Produces: resident-configurable `retrieval_limit` and `retrieval_tokens`; both are reported as requested/operator/effective values and applied to future context assembly.
 
-- [ ] Write tests proving configured retrieval count/budget changes affect assembly and stay under operator ceilings.
-- [ ] Run the focused context-control tests and observe missing field/configuration behavior.
-- [ ] Extend defaults, persisted control loading, schemas, handlers, and source requests; preserve prior settings on partial configuration and reset to defaults on reset.
-- [ ] Verify `retrieval.inspect` continues to expose source provenance and per-item inclusion/omission without claiming causal model use.
-- [ ] Run focused context tests, then the full Runtime suite with `PYTHONPATH=src python -m pytest -q`.
+- [x] Write tests proving configured retrieval count/budget changes affect assembly and stay under operator ceilings.
+- [x] Run the focused context-control tests and observe missing field/configuration behavior.
+- [x] Extend defaults, persisted control loading, schemas, handlers, and source requests; preserve prior settings on partial configuration and reset to defaults on reset.
+- [x] Verify `retrieval.inspect` continues to expose source provenance and per-item inclusion/omission without claiming causal model use.
+- [x] Run focused context tests, then the full Runtime suite with `PYTHONPATH=src python -m pytest -q`.
