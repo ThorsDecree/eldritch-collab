@@ -38,10 +38,10 @@
 - Consumes: `LanternslideService.scan(*, scan_id: str | None = None) -> dict[str, object]` and persisted `candidate_paths`, `progress_offset`, `entries`, `omissions`.
 - Produces: private `_reconcile_candidates(state: dict[str, Any], current_paths: tuple[str, ...]) -> None`; the scan ID remains stable and public counts reflect current candidates.
 
-- [ ] Write failing tests for removal of an unprocessed path and for a rename (remove old/add new) between batches. Assert no exception, same scan ID, no stale indexed/omitted path, and eventual completion.
-- [ ] Run `PYTHONPATH=src python -m pytest tests/test_lanternslide.py -q` in `VESTIGIA_MCP_Server`; observe the expected incompatibility failure.
-- [ ] Implement reconciliation: retain processed paths still present in queue order, remove disappeared paths and their result records, then append newly discovered paths; set progress to the retained processed prefix and refresh the manifest.
-- [ ] Re-run the Lanternslide tests, then the full MCP Server suite with `PYTHONPATH=src python -m pytest -q`.
+- [x] Write failing tests for removal of an unprocessed path and for a rename (remove old/add new) between batches. Assert no exception, same scan ID, no stale indexed/omitted path, and eventual completion.
+- [x] Run `PYTHONPATH=src python -m pytest tests/test_lanternslide.py -q` in `VESTIGIA_MCP_Server`; observe the expected incompatibility failure.
+- [x] Implement reconciliation: retain processed paths still present in queue order, remove disappeared paths and their result records, then append newly discovered paths; set progress to the retained processed prefix and refresh the manifest.
+- [x] Re-run the Lanternslide tests, then the full MCP Server suite with `PYTHONPATH=src python -m pytest -q`.
 
 ### Task 2: Add native Claude and Gemini text providers
 
@@ -52,19 +52,20 @@
 - Modify: `VESTIGIA_Runtime/src/vestigia/runtime.py`
 - Modify: `VESTIGIA_Runtime/src/vestigia/config.py`
 - Modify: `VESTIGIA_Runtime/src/vestigia/diagnostics.py`
+- Modify: `VESTIGIA_Runtime/src/vestigia/web_app.py`
 - Modify: `VESTIGIA_Runtime/pyproject.toml`
 - Create: `VESTIGIA_Runtime/tests/test_native_providers.py`
-- Modify: `VESTIGIA_Runtime/tests/test_config.py` and provider help/config docs as needed.
+- Modify: `VESTIGIA_Runtime/tests/test_resilience.py`, `README.md`, `docs/PROVIDERS.md`, and `docs/CONFIGURATION.md`.
 
 **Interfaces:**
 - Consumes: `Provider.complete(ProviderRequest) -> ProviderReply`, `ResolvedConfig.secret(name)`, and the existing `provider.kind`/model route configuration.
 - Produces: `AnthropicProvider(config)` and `GeminiProvider(config)`, both implementing `complete` and `model_for`; `CoreRuntime` selects these from `provider.kind`.
 
-- [ ] Write deterministic request/response tests for both adapters, including developer/system mapping, route selection, usage/id extraction, and malformed/error responses.
-- [ ] Run `PYTHONPATH=src python -m pytest tests/test_native_providers.py -q`; observe missing adapter/factory failures.
-- [ ] Add the adapters with optional vendor SDK extras, provider-specific credentials, and safe error normalization. Keep network requests mocked at the transport boundary; do not test against live APIs.
-- [ ] Add factory/config/diagnostic tests proving provider selection and credential presence reporting without revealing values.
-- [ ] Run targeted provider/config tests, then the full Runtime suite with `PYTHONPATH=src python -m pytest -q`.
+- [x] Write deterministic request/response tests for both adapters, including developer/system mapping, route selection, usage/id extraction, and malformed/error responses.
+- [x] Run `PYTHONPATH=src python -m pytest tests/test_native_providers.py -q`; observe missing adapter/factory failures.
+- [x] Add the adapters with optional vendor SDK extras, provider-specific credentials, and safe error normalization. Keep network requests mocked at the transport boundary; do not test against live APIs.
+- [x] Add factory/config/diagnostic tests proving provider selection and credential presence reporting without revealing values.
+- [x] Run targeted provider/config tests, then the full Runtime suite with `PYTHONPATH=src python -m pytest -q`.
 
 ### Task 3: Add bounded resident retrieval controls
 

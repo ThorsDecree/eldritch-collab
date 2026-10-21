@@ -33,6 +33,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "kind": "openai",
         "api_style": "responses",
         "base_url": "",
+        "max_output_tokens": 8192,
     },
     "models": {
         "default": "gpt-5-mini",
@@ -219,6 +220,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
 }
 
+PROVIDER_SECRET_NAMES = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+}
+
+
+def provider_secret_name(kind: Any) -> str | None:
+    return PROVIDER_SECRET_NAMES.get(str(kind or "").strip().lower())
+
 
 def _as_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
@@ -231,6 +242,7 @@ def _as_int(value: str) -> int:
 ENV_MAP: dict[str, tuple[str, Callable[[str], Any]]] = {
     "VESTIGIA_PROVIDER": ("provider.kind", str),
     "VESTIGIA_API_STYLE": ("provider.api_style", str),
+    "VESTIGIA_PROVIDER_MAX_OUTPUT_TOKENS": ("provider.max_output_tokens", _as_int),
     "OPENAI_BASE_URL": ("provider.base_url", str),
     "VESTIGIA_MODEL_DEFAULT": ("models.default", str),
     "VESTIGIA_MODEL_BIG": ("models.big", str),
@@ -475,6 +487,16 @@ def load_config(home_path: str | Path, env_file: str | Path | None = None) -> Re
     if len(active) != 1:
         raise ValueError("v0.1 implements exactly one active resident per turn")
 
+    if str(data["provider"].get("kind", "openai")).strip().lower() not in {
+        "openai",
+        "anthropic",
+        "gemini",
+        "fake",
+    }:
+        raise ValueError("provider.kind must be openai, anthropic, gemini, or fake")
+    if not 1 <= int(data["provider"].get("max_output_tokens", 8192)) <= 100000:
+        raise ValueError("provider.max_output_tokens must be between 1 and 100000")
+
     if int(data["context"]["total_tokens"]) < 1000:
         raise ValueError("context.total_tokens must be at least 1000")
     if int(data["context"].get("external_source_tokens", 2400)) < 0:
@@ -509,8 +531,15 @@ def load_config(home_path: str | Path, env_file: str | Path | None = None) -> Re
         raise ValueError("discord.ambient_visibility is invalid")
     secrets = {
         name: str(env_values.get(name, "")).strip()
-        for name in ("OPENAI_API_KEY", "DISCORD_BOT_TOKEN")
+        for name in (
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "DISCORD_BOT_TOKEN",
+        )
     }
+    secrets["GEMINI_API_KEY"] = str(
+        env_values.get("GEMINI_API_KEY") or env_values.get("GOOGLE_API_KEY") or ""
+    ).strip()
     return ResolvedConfig(data=data, sources=sources, home_path=home, secrets=secrets)
 
 

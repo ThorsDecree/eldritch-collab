@@ -33,6 +33,12 @@ dependencies = [
 discord = [
     "discord.py>=2.3.2",
 ]
+providers-anthropic = [
+    "anthropic>=1.0.0",
+]
+providers-gemini = [
+    "google-genai>=2.3.0",
+]
 web-ui = [
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",

@@ -22,8 +22,7 @@ from .models import (
     RuntimeState,
 )
 from .providers.base import Provider
-from .providers.fake import FakeProvider
-from .providers.openai_provider import OpenAIProvider
+from .providers import build_provider
 from .utils import TokenCounter, atomic_write_json, atomic_write_text, new_id, sha256_text, stable_json, utc_now_iso
 
 
@@ -116,10 +115,8 @@ class CoreRuntime:
         self.counter = TokenCounter(str(config.get("models.default")))
         if provider is not None:
             self.provider = provider
-        elif fake or str(config.get("provider.kind")).lower() == "fake":
-            self.provider = FakeProvider()
         else:
-            self.provider = OpenAIProvider(config)
+            self.provider = build_provider(config, fake=fake)
 
     @classmethod
     def from_home(
