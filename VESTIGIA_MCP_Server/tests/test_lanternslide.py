@@ -90,15 +90,40 @@ def test_scan_rejects_wrong_active_id_and_tolerates_added_candidates(tmp_path: P
     }
 
 
-def test_scan_rejects_candidate_removal_during_resume(tmp_path: Path) -> None:
+def test_scan_reconciles_candidate_removal_during_resume(tmp_path: Path) -> None:
     root, service = _service(tmp_path, batch=1)
     _write_image(root / "pics/a.png", (1, 2, 3))
     _write_image(root / "pics/b.png", (4, 5, 6))
     first = service.scan()
 
     (root / "pics/b.png").unlink()
-    with pytest.raises(LanternslideError, match="changed incompatibly"):
-        service.scan(scan_id=first["scan_id"])
+    second = service.scan(scan_id=first["scan_id"])
+
+    assert second["scan_id"] == first["scan_id"]
+    assert second["complete"] is True
+    assert second["candidate_total"] == 1
+    assert second["next_offset"] == 1
+    assert [item["path"] for item in second["entries"]] == ["pics/a.png"]
+    assert second["omissions"] == ()
+
+
+def test_scan_reconciles_rename_during_resume(tmp_path: Path) -> None:
+    root, service = _service(tmp_path, batch=1)
+    _write_image(root / "pics/a.png", (1, 2, 3))
+    _write_image(root / "pics/b.png", (4, 5, 6))
+    first = service.scan()
+
+    (root / "pics/b.png").rename(root / "pics/c.png")
+    result = service.scan(scan_id=first["scan_id"])
+
+    assert result["scan_id"] == first["scan_id"]
+    assert result["complete"] is True
+    assert result["candidate_total"] == 2
+    assert {item["path"] for item in result["entries"]} == {
+        "pics/a.png",
+        "pics/c.png",
+    }
+    assert all(item["path"] != "pics/b.png" for item in result["omissions"])
 
 
 def test_find_is_literal_and_can_collapse_duplicate_content(tmp_path: Path) -> None:
