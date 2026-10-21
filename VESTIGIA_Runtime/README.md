@@ -10,6 +10,11 @@ Current `main` contains additional development work beyond v0.7.0, including the
 
 Never made a bot or opened a terminal on purpose? Start with [ELI5_SETUP.md](ELI5_SETUP.md).
 
+Quick references:
+
+- [Operator cheatsheet](docs/OPERATOR_CHEATSHEET.md) — state transitions, Discord/CLI controls, diagnostics, and history.
+- [Resident cheatsheet](docs/RESIDENT_CHEATSHEET.md) — lifecycle meanings, live capability discovery, context controls, and provenance.
+
 For operator configuration and providers:
 
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
