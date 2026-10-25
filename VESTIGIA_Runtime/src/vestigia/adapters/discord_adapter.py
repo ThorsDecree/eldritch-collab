@@ -818,6 +818,8 @@ def run_discord(
         user_id = str(message.author.id)
         channel_id = str(message.channel.id)
         is_dm = getattr(message, "guild", None) is None
+        dm_recipients = getattr(message.channel, "recipients", ()) or ()
+        is_group_dm = is_dm and len(dm_recipients) > 1
         rejection = discord_platform_rejection_reason(
             author_is_bot=bool(message.author.bot),
             author_is_self=bool(
@@ -1073,6 +1075,7 @@ def run_discord(
                 "channel_id": channel_id,
                 "guild_id": str(message.guild.id) if message.guild else None,
                 "is_dm": is_dm,
+                "is_group_dm": is_group_dm,
                 "jump_url": getattr(message, "jump_url", None),
                 "triggering_message_id": str(message.id),
                 "ambient_message_ids": [str(mid) for mid in ambient_ids],

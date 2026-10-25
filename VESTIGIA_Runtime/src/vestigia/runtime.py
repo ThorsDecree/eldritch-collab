@@ -15,6 +15,7 @@ from .house_tools import HousePort, extract_action_envelopes
 from .images import ImageService
 from .memory import MemoryService
 from .models import (
+    ContextAssembly,
     NormalizedMessage,
     ProviderReply,
     ProviderRequest,
@@ -23,6 +24,7 @@ from .models import (
 )
 from .providers.base import Provider
 from .providers import build_provider
+from .memory_experiments import MemoryExperimentService
 from .utils import TokenCounter, atomic_write_json, atomic_write_text, new_id, sha256_text, stable_json, utc_now_iso
 
 
@@ -117,6 +119,12 @@ class CoreRuntime:
             self.provider = provider
         else:
             self.provider = build_provider(config, fake=fake)
+        self.house.memory_experiments = MemoryExperimentService(
+            self.assembler,
+            self.db,
+            self.provider,
+            self.home,
+        )
 
     @classmethod
     def from_home(
@@ -265,6 +273,7 @@ class CoreRuntime:
             turn_id=turn_id,
             model_route=model_route,
             messages=tuple(messages),
+            context_assembly=assembly,
             metadata={
                 "resident_id": self.resident_id,
                 "room_id": self.room_id,
@@ -288,6 +297,7 @@ class CoreRuntime:
                     and message.metadata.get("channel_id")
                     else {}
                 ),
+                "is_group_dm": bool(message.metadata.get("is_group_dm", False)),
             },
         )
         bell_no_change = message.interface == "bell" and any(
@@ -582,9 +592,11 @@ class CoreRuntime:
         model_route: str,
         messages: tuple[dict[str, str], ...],
         metadata: dict[str, Any],
+        context_assembly: ContextAssembly | None = None,
     ) -> tuple[ProviderReply, list[str], list[Path], list[dict[str, Any]]]:
         """Run a bounded private local-tool loop before final resident speech."""
-        working = list(messages)
+        initial_messages = tuple(dict(item) for item in messages)
+        working = list(initial_messages)
         receipts: list[str] = []
         outbound_attachments: list[Path] = []
         outbound_reactions: list[dict[str, Any]] = []
@@ -771,6 +783,7 @@ class CoreRuntime:
                                 "interface": metadata.get("interface"),
                                 "invocation": metadata.get("invocation"),
                                 "delivery_target": metadata.get("delivery_target"),
+                                "is_group_dm": bool(metadata.get("is_group_dm", False)),
                                 "participant_id": metadata.get("participant_id"),
                                 "trigger_message_id": metadata.get("trigger_message_id"),
                                 "ambient_message_ids": metadata.get("ambient_message_ids"),
@@ -783,6 +796,9 @@ class CoreRuntime:
                                 ),
                                 "activity_id": activity_id,
                                 "house_tool_round": round_index,
+                                "model_route": model_route,
+                                "context_assembly": context_assembly,
+                                "experiment_base_messages": initial_messages,
                             },
                         )
                         hidden_path = result.pop("_outbound_path", None)

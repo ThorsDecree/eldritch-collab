@@ -26,7 +26,7 @@ from .context_controls import (
 from .db import ContinuityDB
 from .images import ImageService
 from .legible import LegibleLedger
-from .models import NormalizedMessage, RuntimeState
+from .models import ContextAssembly, NormalizedMessage, RuntimeState
 from .resident_controls import (
     LISTENING_MODES,
     configure_resident_controls,
@@ -423,6 +423,7 @@ class HousePort:
         self.queue_for_review = queue_for_review
         self.open_curation = open_curation
         self.images = image_service
+        self.memory_experiments: Any | None = None
         self.bell_observatory = BellObservatory(db, self.resident_id, self.room_id)
         self.legible = LegibleLedger(config, db)
         from .bootstrap import bootstrap_runtime
@@ -1227,6 +1228,33 @@ class HousePort:
                     {key: value for key, value in payload.items() if key != "after"}
                 ),
             )
+        experiment_contract = contract_for("memory.experiment")
+        self.registry.register(
+            CapabilitySpec(
+                name="memory.experiment",
+                description=(
+                    "Compare a private turn against one frozen Runtime-memory "
+                    "exclusion or replacement, then inspect or delete its capsule."
+                ),
+                effects=(
+                    "memory:read",
+                    "network:metered",
+                    "filesystem:private_trace",
+                ),
+                cost_class="free_or_metered",
+                confirmation="none",
+                default_after="continue",
+                result_visibility="resident_private",
+                config_key="memory.experiments.enabled",
+                next_step=(
+                    "Review the sensitivity comparison and receipt; the result does not "
+                    "establish causality."
+                ),
+                **experiment_contract,
+            ),
+            lambda payload, context: self._memory_experiment(payload, context),
+            authorizer=self._memory_experiment_authorizer,
+        )
         reaction_contract = contract_for("discord.react")
         self.registry.register(
             CapabilitySpec(
@@ -1522,7 +1550,11 @@ class HousePort:
             receipt_id = self.legible.record_receipt(
                 action=action,
                 status="succeeded",
-                result=response,
+                result=(
+                    self._memory_experiment_audit_projection(response)
+                    if action == "memory.experiment"
+                    else response
+                ),
                 turn_id=turn_id,
                 source_envelope=source_envelope,
                 target=target,
@@ -1538,7 +1570,11 @@ class HousePort:
                 action,
                 str(payload.get("path") or payload.get("memory_id") or ""),
                 "ok",
-                response,
+                (
+                    self._memory_experiment_audit_projection(response)
+                    if action == "memory.experiment"
+                    else response
+                ),
             )
             return response
         except Exception as exc:
@@ -1568,6 +1604,75 @@ class HousePort:
                 pass
             self._event(action, str(target), "failed", {"receipt_id": receipt_id})
             raise
+
+    def _memory_experiment_authorizer(
+        self,
+        spec: CapabilitySpec,
+        payload: dict[str, Any],
+        context: dict[str, Any],
+    ) -> None:
+        del spec
+        if context.get("invocation") != "conversation":
+            raise PermissionError("memory experiments are available only in a private conversation")
+        if str(context.get("source_envelope") or "").upper() not in {
+            "TOOL_ACTION",
+            "HOUSE_TOOL",
+        }:
+            raise PermissionError("memory experiments require a resident tool action")
+        interface = str(context.get("interface") or "").strip().lower()
+        if payload.get("mode", "run") == "run" and not isinstance(
+            context.get("context_assembly"), ContextAssembly
+        ):
+            raise PermissionError("memory experiments require the current private turn context")
+        if interface in {"cli", "web"}:
+            return
+        delivery_target = context.get("delivery_target")
+        if (
+            interface == "discord"
+            and isinstance(delivery_target, dict)
+            and delivery_target.get("kind") == "discord_dm"
+            and not bool(context.get("is_group_dm", False))
+        ):
+            return
+        raise PermissionError("memory experiments are limited to CLI, web, or Discord DM turns")
+
+    def _memory_experiment(
+        self,
+        payload: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        if self.memory_experiments is None:
+            raise RuntimeError("memory experiment service is unavailable")
+        return self.memory_experiments.dispatch(
+            {key: value for key, value in payload.items() if key != "after"},
+            context,
+        )
+
+    @classmethod
+    def _memory_experiment_audit_projection(cls, value: Any) -> Any:
+        private_keys = {
+            "text",
+            "baseline_text",
+            "intervention_text",
+            "messages",
+            "baseline_messages",
+            "variant_messages",
+            "prompt",
+            "full_prompt",
+            "outputs",
+            "content",
+        }
+        if isinstance(value, dict):
+            return {
+                str(key): cls._memory_experiment_audit_projection(child)
+                for key, child in value.items()
+                if str(key) not in private_keys
+            }
+        if isinstance(value, list):
+            return [cls._memory_experiment_audit_projection(item) for item in value]
+        if isinstance(value, tuple):
+            return [cls._memory_experiment_audit_projection(item) for item in value]
+        return value
 
     def _list(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.refresh_index()

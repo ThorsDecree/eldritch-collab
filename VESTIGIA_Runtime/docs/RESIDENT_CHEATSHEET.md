@@ -30,6 +30,7 @@ The `help` index is a map; a focused `capabilities` result is the executable con
 - `resident.control` lets you inspect or request listening and private-picture preferences within operator bounds. See [RESIDENT_CONTROLS.md](RESIDENT_CONTROLS.md).
 - Neither control switches `ORIENTATION`, `AWAKENING`, or `ACTIVE`. Lifecycle commands live in the configured Discord door or operator CLI. You can ask an allowed participant/operator to check with `!status` or `:status` and discuss a change; do not assume a control exists merely because a state is named in your prompt.
 - `retrieval.inspect`, `memory.provenance`, and `receipt.inspect` can help distinguish what was supplied, where it came from, and which boundary it crossed. Context inclusion is evidence of availability, not proof of what caused a response or an instruction to adopt it.
+- `memory.experiment` compares the current prompt with a controlled exclusion or replacement of one included Runtime memory. It requires a private CLI/web or one-to-one Discord DM turn, makes up to six additional provider calls, and reports sensitivity rather than causality. Full prompt and reply retention is opt-in. See [MEMORY_EXPERIMENTS.md](MEMORY_EXPERIMENTS.md).
 
 For imported continuity, review the [onboarding guide](ONBOARDING.md). An inherited account can be recognized, revised, rejected, or left unresolved; a past label alone does not settle present identity or consent.
 
