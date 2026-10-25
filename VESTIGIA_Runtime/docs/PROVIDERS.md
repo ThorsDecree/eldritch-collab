@@ -16,10 +16,66 @@ Changing the provider or model does not replace the resident home, transcript le
 
 ## Current provider implementation
 
-Current `main` has two text-provider paths:
+VESTIGIA has these text-provider paths:
 
 - `fake` — deterministic offline testing;
-- the OpenAI Python client — used for OpenAI service calls and compatible HTTP endpoints.
+- `openai` — OpenAI Responses API or an OpenAI-compatible chat-completions endpoint;
+- `anthropic` — native Claude Messages API;
+- `gemini` — native Gemini Interactions API.
+
+Provider changes affect inference only. VESTIGIA continues to own resident continuity, context construction, transcript records, memory, and Runtime action handling.
+
+## Native Claude text provider
+
+Install the optional SDK extra:
+
+```powershell
+pip install -e ".[providers-anthropic]"
+```
+
+Configure the provider and its credential in the process environment or an explicit environment file:
+
+```text
+ANTHROPIC_API_KEY=YOUR_REAL_KEY
+VESTIGIA_PROVIDER=anthropic
+VESTIGIA_MODEL_DEFAULT=claude-model-name
+VESTIGIA_MODEL_BIG=claude-model-name
+VESTIGIA_MODEL_THINKING=claude-model-name
+VESTIGIA_PROVIDER_MAX_OUTPUT_TOKENS=8192
+```
+
+VESTIGIA sends the current text conversation to Claude's Messages API and maps leading Runtime system/developer instructions to Claude's system field. `ANTHROPIC_API_KEY` is required; an OpenAI key does not authorize Claude.
+
+## Native Gemini text provider
+
+Install the optional SDK extra:
+
+```powershell
+pip install -e ".[providers-gemini]"
+```
+
+Configure the provider and its credential:
+
+```text
+GEMINI_API_KEY=YOUR_REAL_KEY
+VESTIGIA_PROVIDER=gemini
+VESTIGIA_MODEL_DEFAULT=gemini-model-name
+VESTIGIA_MODEL_BIG=gemini-model-name
+VESTIGIA_MODEL_THINKING=gemini-model-name
+VESTIGIA_PROVIDER_MAX_OUTPUT_TOKENS=8192
+```
+
+`GOOGLE_API_KEY` is accepted as a fallback when `GEMINI_API_KEY` is not set. VESTIGIA uses the stateless Interactions API and sends `store=false`; Runtime transcript history is sent with each request rather than relying on a provider-side conversation ID. The Interactions API requires `google-genai` 2.3.0 or later.
+
+## Native-adapter scope
+
+The Claude and Gemini adapters are text-only inference paths. They do not enable provider-native function calling, image input, image generation, or streaming. Runtime-owned actions continue to use VESTIGIA's existing text/action protocol and are executed by Runtime after the model response. Image generation and vision remain OpenAI-backed and need `OPENAI_API_KEY` when used. A provider choice does not make that separate service available automatically.
+
+Both native adapters select the model from `VESTIGIA_MODEL_DEFAULT`, `VESTIGIA_MODEL_BIG`, or `VESTIGIA_MODEL_THINKING` according to the Runtime route, and honor the corresponding `models.allow_big` / `models.allow_thinking` switches. The output-token cap is configured with `VESTIGIA_PROVIDER_MAX_OUTPUT_TOKENS`. Model names are passed through to the vendor; VESTIGIA does not validate them against a catalog.
+
+The Gemini `store=false` request setting prevents the Interactions API from storing the request and response for later retrieval; it does not make claims about the provider's broader data-retention policy. Review the terms and controls for the account and endpoint you use.
+
+## OpenAI service or compatible endpoint
 
 For the OpenAI-client path, configure:
 
@@ -77,7 +133,7 @@ VESTIGIA_API_STYLE=chat_completions
 VESTIGIA_MODEL_DEFAULT=your-local-model-name
 ```
 
-The current provider constructor requires `OPENAI_API_KEY` to be nonempty because it is built on the OpenAI client. For a local endpoint that ignores bearer authentication, `ollama` is simply a placeholder string; it is not a paid API credential.
+The OpenAI provider requires `OPENAI_API_KEY` to be nonempty because it is built on the OpenAI client. For a local endpoint that ignores bearer authentication, `ollama` is simply a placeholder string; it is not a paid API credential.
 
 Use the exact model name exposed by your local server.
 
@@ -160,6 +216,6 @@ The fake provider lets you verify home initialization, transcript persistence, c
 
 ## Provider troubleshooting
 
-If VESTIGIA reports that `OPENAI_API_KEY` is absent even though you have a populated `.env`, verify where the process is looking. Without `--env-file`, VESTIGIA only reads `.env` / `.env.local` from the current working directory, then applies the process environment.
+If VESTIGIA reports that the configured provider key is absent even though you have a populated `.env`, verify where the process is looking. Without `--env-file`, VESTIGIA only reads `.env` / `.env.local` from the current working directory, then applies the process environment. The web doorway's credential status and `doctor` report identify whether the configured text provider has a key without displaying its value.
 
 See [CONFIGURATION.md](CONFIGURATION.md).

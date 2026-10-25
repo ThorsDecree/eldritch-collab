@@ -214,6 +214,35 @@ class LanternslideService:
     def _entry_sort_key(item: dict[str, Any]) -> str:
         return str(item.get("path", ""))
 
+    def _reconcile_candidates(
+        self,
+        state: dict[str, Any],
+        current_paths: tuple[str, ...],
+    ) -> None:
+        """Keep resumable work aligned with the current source path set."""
+        previous_paths = tuple(str(path) for path in state.get("candidate_paths", []))
+        current_set = set(current_paths)
+        previous_set = set(previous_paths)
+        offset = min(max(0, int(state.get("progress_offset", 0))), len(previous_paths))
+
+        processed = [path for path in previous_paths[:offset] if path in current_set]
+        pending = [path for path in previous_paths[offset:] if path in current_set]
+        additions = [path for path in current_paths if path not in previous_set]
+        state["candidate_paths"] = [*processed, *pending, *additions]
+        state["progress_offset"] = len(processed)
+        state["entries"] = [
+            item for item in state.get("entries", [])
+            if str(item.get("path", "")) in current_set
+        ]
+        state["omissions"] = [
+            item for item in state.get("omissions", [])
+            if str(item.get("path", "")) in current_set
+        ]
+        state["candidate_manifest_sha256"] = self._candidate_manifest(current_paths)
+        state["complete"] = state["progress_offset"] >= len(state["candidate_paths"])
+        state["catalog_sha256"] = self._catalog_digest(state)
+        self._write_state(state)
+
     def _public_scan(self, state: dict[str, Any]) -> ScanResult:
         entries = tuple(sorted(state.get("entries", []), key=self._entry_sort_key))
         omissions = tuple(sorted(state.get("omissions", []), key=self._entry_sort_key))
@@ -245,23 +274,7 @@ class LanternslideService:
                 raise LanternslideError("Lanternslide scan ID does not match the active scan")
 
             if state.get("candidate_manifest_sha256") != current_manifest:
-                previous_paths = tuple(str(path) for path in state.get("candidate_paths", []))
-                previous_set = set(previous_paths)
-                current_set = set(current_paths)
-                if not previous_set.issubset(current_set):
-                    raise LanternslideError(
-                        "Lanternslide candidate manifest changed incompatibly during scan"
-                    )
-                additions = tuple(path for path in current_paths if path not in previous_set)
-                if not additions:
-                    raise LanternslideError(
-                        "Lanternslide candidate manifest changed incompatibly during scan"
-                    )
-                state["candidate_paths"] = [*previous_paths, *additions]
-                state["candidate_manifest_sha256"] = current_manifest
-                state["complete"] = False
-                state["catalog_sha256"] = self._catalog_digest(state)
-                self._write_state(state)
+                self._reconcile_candidates(state, current_paths)
             if state.get("complete"):
                 return self._public_scan(state).public()
 

@@ -1187,7 +1187,7 @@ class HousePort:
                 "bell.policy.preview": "Preview effective bell retrieval policy and semantic terms.",
                 "bell.rehearse": "Preview a candidate bell against live local context without persisting a trace or run.",
                 "next_step": "Explain the next safe or required move for one receipt, draft, job, bell, object, or action.",
-                "context.control": "Inspect or arrange the resident's prompt and transcript drawers.",
+                "context.control": "Inspect or arrange prompt, transcript, and Runtime-memory retrieval settings within operator limits.",
                 "source.visibility": "Choose which authorized Discord history is visible as ambient context.",
                 "resident.control": "Inspect or arrange resident-owned friction and doorway preferences within operator limits.",
                 "source.listening": "Choose deterministic Discord name and watch-phrase listening without changing participant authority.",
@@ -2579,6 +2579,7 @@ class HousePort:
             "query_hash": receipt.get("current_message_hash"),
             "retrieved": receipt.get("retrieved_details", []),
             "layers": receipt.get("layers", []),
+            "budget": receipt.get("budget", {}),
             "not_automatically_searched": [
                 "arbitrary archive chunks",
                 "private image pixels",
@@ -3759,6 +3760,8 @@ class HousePort:
                 "verbatim_turns": (2, operator_max_verbatim_turns),
                 "compression_source_turns": (0, operator_max_compression_source_turns),
                 "compressed_token_budget": (0, operator_max_compressed_transcript_tokens),
+                "retrieval_limit": (1, 200),
+                "retrieval_tokens": (0, 12_000),
             }
             for field, (minimum, maximum) in bounds.items():
                 if field not in payload:

@@ -421,7 +421,11 @@ def test_doctor_and_support_bundle_are_private_by_default(tmp_path: Path) -> Non
     assert report["database"]["integrity"] == "ok"
     assert report["database"]["schema_version"] == "4"
     assert report["credentials"] == {
+        "provider_kind": "openai",
+        "provider_key": "present",
         "openai_key": "present",
+        "anthropic_key": "absent",
+        "gemini_key": "absent",
         "discord_token": "present",
         "values_exported": False,
     }
