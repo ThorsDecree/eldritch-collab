@@ -125,6 +125,10 @@ class CoreRuntime:
             self.provider,
             self.home,
         )
+        self.house.bind_runtime_connections(
+            provider=self.provider,
+            context_sources=self.assembler.context_sources,
+        )
 
     @classmethod
     def from_home(

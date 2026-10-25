@@ -80,6 +80,19 @@ Optional sources fail soft:
 - the error type/warning is bounded into the context receipt;
 - no absent result is silently presented as successful retrieval.
 
+## Resident source controls
+
+The read-only `connection.panel` capability lists source instances actually attached to the
+current Runtime, including each source's required/optional status and whether it is enabled for
+future context assembly. The resident may use `connection.control` to disable or re-enable one
+attached optional source. The required `runtime_memory` source cannot be disabled.
+
+These resident-scoped preferences are stored in the existing `resident_jobs` table and applied
+by `ContextAssembler` on later assemblies. They do not change operator configuration or stop the
+source's underlying process or transport. Other retrieval policies continue to apply: an enabled
+source is eligible, not guaranteed to be queried on every turn. If the table does not exist in
+an embedding that only uses `ContextAssembler`, all sources retain their existing behavior.
+
 ## Context receipt v0.2
 
 Turn context receipts now include a source-neutral `context_sources` section in addition to the

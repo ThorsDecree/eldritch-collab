@@ -32,7 +32,7 @@ GROUPS: dict[str, str] = {
     **{name: "attention" for name in ("attention.tray", "retrieval.inspect")},
     **{name: "context" for name in (
         "context.control", "source.visibility", "resident.control",
-        "source.listening", "discord.react",
+        "source.listening", "connection.panel", "connection.control", "discord.react",
     )},
     **{name: "editing" for name in ("file.diff", "file.write", "file.patch")},
     **{name: "evidence" for name in (
@@ -138,6 +138,11 @@ FIELDS: dict[str, tuple[dict[str, Any], tuple[str, ...]]] = {
         "retrieval_limit": I(minimum=1, maximum=200),
         "retrieval_tokens": I(minimum=0, maximum=12000),
     }, ()),
+    "connection.panel": ({}, ()),
+    "connection.control": ({
+        "mode": S(enum=["enable", "disable"]),
+        "source": S(minLength=1, maxLength=100),
+    }, ("mode", "source")),
     "source.visibility": ({
         "mode": S(enum=["inspect", "allowlisted_only", "all_channel", "mentions_only", "hidden"]),
     }, ()),
@@ -234,6 +239,11 @@ EXAMPLES: dict[str, tuple[dict[str, Any], ...]] = {
         {"action": "context.control", "mode": "inspect", "after": "continue"},
         {"action": "context.control", "mode": "configure", "prompt_budget_tokens": 20000, "verbatim_turns": 12, "compression_source_turns": 60, "compressed_token_budget": 3500, "retrieval_limit": 18, "retrieval_tokens": 3800, "after": "continue"},
     ),
+    "connection.panel": ({"action": "connection.panel", "after": "continue"},),
+    "connection.control": (
+        {"action": "connection.control", "mode": "disable", "source": "<source-name-from-panel>", "after": "continue"},
+        {"action": "connection.control", "mode": "enable", "source": "<source-name-from-panel>", "after": "continue"},
+    ),
     "source.visibility": (
         {"action": "source.visibility", "mode": "allowlisted_only", "after": "continue"},
         {"action": "source.visibility", "mode": "all_channel", "after": "continue"},
@@ -312,6 +322,8 @@ RELATED: dict[str, tuple[str, ...]] = {
     "attention.tray": ("search.session", "receipt.inspect"),
     "memory.experiment": ("retrieval.inspect", "memory.provenance", "receipt.inspect"),
     "context.control": ("source.visibility", "source.listening", "retrieval.inspect"),
+    "connection.panel": ("connection.control", "context.control", "source.visibility"),
+    "connection.control": ("connection.panel", "context.control"),
     "source.visibility": ("context.control", "source.listening"),
     "resident.control": ("source.listening", "image.drawer", "image.share"),
     "source.listening": ("resident.control", "source.visibility"),
