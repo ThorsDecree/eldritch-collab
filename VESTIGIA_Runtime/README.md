@@ -14,6 +14,7 @@ Quick references:
 
 - [Operator cheatsheet](docs/OPERATOR_CHEATSHEET.md) — state transitions, Discord/CLI controls, diagnostics, and history.
 - [Resident cheatsheet](docs/RESIDENT_CHEATSHEET.md) — lifecycle meanings, live capability discovery, context controls, and provenance.
+- [Counterfactual Memory Experiments](docs/MEMORY_EXPERIMENTS.md) — frozen-prompt comparisons, private capsules, and retention controls.
 
 For operator configuration and providers:
 

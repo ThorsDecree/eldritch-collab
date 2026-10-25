@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,6 +27,7 @@ from .utils import (
     atomic_write_text,
     new_id,
     sha256_text,
+    stable_json,
     utc_now_iso,
 )
 
@@ -290,6 +292,247 @@ class ContextAssembler:
             receipt_path=receipt_path,
             messages=messages,
             receipt=receipt,
+            source_results=tuple(source_results),
+        )
+
+    def intervene_memory(
+        self,
+        assembly: ContextAssembly,
+        memory_id: str,
+        *,
+        replacement_memory_id: str | None = None,
+    ) -> ContextAssembly:
+        """Build a no-retrieval counterfactual by changing one frozen memory block."""
+
+        target_id = str(memory_id).strip()
+        replacement_id = str(replacement_memory_id or "").strip() or None
+        if not target_id:
+            raise ValueError("memory intervention requires a memory_id")
+        if replacement_id == target_id:
+            raise ValueError("replacement memory must differ from the target")
+        if assembly.resident_id != self.resident_id or assembly.room_id != self.room_id:
+            raise ValueError("context assembly belongs to a different resident or room")
+
+        memory_layer_index = next(
+            (
+                index
+                for index, layer in enumerate(assembly.layers)
+                if layer.name == "retrieved_continuity"
+            ),
+            None,
+        )
+        if memory_layer_index is None:
+            raise ValueError("baseline has no retrieved Runtime memory layer")
+        baseline_layer = assembly.layers[memory_layer_index]
+        if target_id not in baseline_layer.item_ids:
+            raise ValueError("target memory is not fully included in the baseline context")
+        if (
+            f"{target_id}:remainder" in baseline_layer.omitted_item_ids
+            or "retrieved_continuity:total-cap" in baseline_layer.omitted_item_ids
+        ):
+            raise ValueError("target memory is partial or has an unknown context boundary")
+        if any(
+            target_id in layer.item_ids
+            for index, layer in enumerate(assembly.layers)
+            if index != memory_layer_index
+        ):
+            raise ValueError("target memory also appears in another context layer")
+
+        source_index = next(
+            (
+                index
+                for index, result in enumerate(assembly.source_results)
+                if getattr(result, "source_name", None) == "runtime_memory"
+            ),
+            None,
+        )
+        if source_index is None:
+            raise ValueError("baseline has no frozen Runtime memory source result")
+        source_result = assembly.source_results[source_index]
+        original_items = {item.item_id: item for item in source_result.items}
+        if target_id not in original_items:
+            raise ValueError("target memory is missing from the frozen source result")
+
+        replacement_item: ContextSourceItem | None = None
+        if replacement_id is not None:
+            if any(
+                replacement_id in layer.item_ids
+                for layer in assembly.layers
+                if layer.name != "retrieved_continuity"
+            ) or replacement_id in baseline_layer.item_ids:
+                raise ValueError("replacement memory is already present in the baseline context")
+            record = self.db.get_memory(replacement_id)
+            if record is None:
+                raise ValueError("replacement memory is unavailable")
+            if record.resident_id != assembly.resident_id or record.room_id != assembly.room_id:
+                raise ValueError("replacement memory belongs to a different resident or room")
+            if (
+                record.status != "accepted"
+                or record.tier not in {"hot", "warm"}
+                or record.privacy == "sealed"
+                or (record.expires_at and record.expires_at < datetime.now(UTC).isoformat())
+            ):
+                raise ValueError("replacement memory is not eligible for this context")
+            replacement_item = ContextSourceItem(
+                item_id=record.id,
+                text=memory_evidence_block(record, None),
+                provenance_class="runtime_memory",
+                authority=record.authority_state,
+                content_hash=record.content_hash,
+                source_ref=record.source_id,
+                metadata={
+                    "memory_type": record.memory_type,
+                    "tier": record.tier,
+                    "status": record.status,
+                    "authorship": record.authorship,
+                    "privacy": record.privacy,
+                    "source_lineage_id": record.source_lineage_id,
+                    "independent_source_key": record.independent_source_key,
+                    "counterfactual_replacement": True,
+                },
+            )
+
+        blocks = baseline_layer.text.split("\n\n---\n\n") if baseline_layer.text else []
+        if len(blocks) != len(baseline_layer.item_ids):
+            raise ValueError("baseline memory layer has an ambiguous item boundary")
+        expected_ids: list[str] = []
+        variant_blocks: list[str] = []
+        for index, (item_id, block) in enumerate(zip(baseline_layer.item_ids, blocks)):
+            if item_id == target_id:
+                if replacement_item is not None:
+                    expected_ids.append(replacement_item.item_id)
+                    variant_blocks.append(replacement_item.text.strip())
+                continue
+            expected_ids.append(item_id)
+            variant_blocks.append(block)
+
+        variant_text = "\n\n---\n\n".join(variant_blocks)
+        variant_used = self.counter.count(variant_text)
+        if variant_used > baseline_layer.budget_tokens:
+            raise ValueError("replacement memory exceeds the frozen Runtime memory-layer budget")
+        other_tokens = sum(
+            layer.used_tokens
+            for index, layer in enumerate(assembly.layers)
+            if index != memory_layer_index
+        )
+        total = other_tokens + variant_used + self.counter.count(assembly.current_message)
+        if total > assembly.maximum_tokens:
+            raise ValueError("replacement memory exceeds the frozen total context budget")
+
+        omitted = tuple(
+            item
+            for item in baseline_layer.omitted_item_ids
+            if item != f"{target_id}:remainder"
+        ) + (f"{target_id}:experiment_excluded",)
+        variant_layer = ContextLayer(
+            name=baseline_layer.name,
+            budget_tokens=baseline_layer.budget_tokens,
+            used_tokens=variant_used,
+            text=variant_text,
+            item_ids=tuple(expected_ids),
+            omitted_item_ids=omitted,
+            content_hash=sha256_text(variant_text),
+        )
+        layers = list(assembly.layers)
+        layers[memory_layer_index] = variant_layer
+        developer_text = self._developer_text(layers, assembly.state)
+        messages = (
+            {"role": "developer", "content": developer_text},
+            {"role": "user", "content": assembly.current_message},
+        )
+
+        variant_source_items = [
+            replacement_item if item.item_id == target_id and replacement_item else item
+            for item in (
+                original_items[item_id]
+                for item_id in baseline_layer.item_ids
+                if item_id != target_id or replacement_item is not None
+            )
+        ]
+        variant_source = replace(
+            source_result,
+            items=tuple(variant_source_items),
+            metadata={
+                **source_result.metadata,
+                "experiment_frozen_baseline_item_ids": list(baseline_layer.item_ids),
+                "experiment_unused_candidates_not_refilled": True,
+            },
+        )
+        source_results = list(assembly.source_results)
+        source_results[source_index] = variant_source
+
+        receipt = deepcopy(assembly.receipt)
+        layer_receipt = next(
+            item for item in receipt.get("layers", []) if item.get("name") == variant_layer.name
+        )
+        layer_receipt.update(
+            {
+                "used_tokens": variant_layer.used_tokens,
+                "content_hash": variant_layer.content_hash,
+                "included_item_ids": list(variant_layer.item_ids),
+                "omitted_item_ids": list(variant_layer.omitted_item_ids),
+                "included_in_context": bool(variant_layer.text),
+                "causal_influence": "unknown",
+            }
+        )
+        memory_source_receipt = next(
+            item
+            for item in receipt.get("context_sources", [])
+            if item.get("name") == "runtime_memory"
+        )
+        receipt["context_sources"] = [
+            self._context_source_receipt(result, variant_layer if result.source_name == "runtime_memory" else next(
+                (layer for layer in layers if layer.name == result.layer_name), None
+            ))
+            for result in source_results
+        ]
+        replacement_details = (
+            {
+                "memory_id": replacement_item.item_id,
+                "score": 0.0,
+                "reasons": ["counterfactual_replacement"],
+                "type": replacement_item.metadata.get("memory_type"),
+                "tier": replacement_item.metadata.get("tier"),
+                "status": replacement_item.metadata.get("status"),
+                "authority": replacement_item.authority,
+                "included_in_context": True,
+                "omitted_reason": None,
+            }
+            if replacement_item
+            else None
+        )
+        receipt["retrieved_details"] = [
+            *[
+                item
+                for item in receipt.get("retrieved_details", [])
+                if item.get("memory_id") != target_id
+                and item.get("memory_id") not in baseline_layer.omitted_item_ids
+            ],
+            *([replacement_details] if replacement_details else []),
+        ]
+        receipt["budget"]["used"] = total
+        receipt["current_message_hash"] = sha256_text(assembly.current_message)
+        receipt["memory_experiment_intervention"] = {
+            "target_memory_id": target_id,
+            "replacement_memory_id": replacement_id,
+            "kind": "replace" if replacement_id else "exclude",
+            "retrieval_rerun": False,
+            "unused_context_refilled": False,
+            "causal_influence": "unknown",
+        }
+        # Keep the pre-intervention source details available in the capsule receipt.
+        receipt["memory_experiment_intervention"]["baseline_source_hash"] = sha256_text(
+            stable_json(memory_source_receipt)
+        )
+
+        return replace(
+            assembly,
+            layers=tuple(layers),
+            total_tokens=total,
+            messages=messages,
+            receipt=receipt,
+            receipt_path=None,
+            source_results=tuple(source_results),
         )
 
     def _retrieve_context_sources(

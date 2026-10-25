@@ -96,6 +96,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "memory": {
         "auto_extract_conservative_candidates": True,
         "core_hard_limit_tokens": 2000,
+        "experiments": {"enabled": True},
     },
     "curation": {
         "enabled": True,

@@ -130,6 +130,9 @@ class ContextAssembly:
     receipt_path: Path | None
     messages: tuple[dict[str, str], ...]
     receipt: dict[str, Any] = field(default_factory=dict)
+    # In-memory only: experiment interventions need the exact source candidates
+    # that produced this prompt, without re-running retrieval.
+    source_results: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
