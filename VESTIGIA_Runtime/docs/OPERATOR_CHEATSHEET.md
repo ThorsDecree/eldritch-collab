@@ -91,4 +91,23 @@ No rows means there has been no explicit transition in this database; CoreRuntim
 - For inherited records, use `vestigia review-inheritance HOME`; for turn context, inspect the turn's receipt. Imported evidence does not become accepted identity by appearing in `ORIENTATION`. See [ONBOARDING.md](ONBOARDING.md).
 - Before updating code, stop long-lived processes using the home and make a backup or `pack-home`. See the [README](../README.md) for install, restore, provider, and doorway instructions.
 
-Source of truth for this page: `src/vestigia/runtime.py` (transitions and provider suppression), `src/vestigia/context.py` (context switches and receipts), `src/vestigia/cli.py` (commands), `src/vestigia/adapters/discord_adapter.py` (Discord commands), and `src/vestigia/packing.py` (restore behavior). A deployed Runtime may differ from this development branch; check its version and live capability contract.
+## Connection panel
+
+The resident-facing `connection.panel` action summarizes the Runtime lifecycle state, configured
+provider and model routes, the adapter attached to this Runtime instance, configured credential presence, Discord interface settings,
+attached context sources, resident preferences, capability counts, and unexpired resident-task
+counts. It never returns credential values, listening aliases, private-image pocket names, or
+task configuration. Provider reachability is explicitly `not_reported`; attachment does not
+prove a provider or doorway is reachable.
+
+Expired tasks are omitted from the pending count by their recorded expiry time; inspecting the
+panel does not rewrite their stored status. `jobs.list` and `jobs.inspect` remain the maintenance
+path that records the expired state.
+
+`connection.control` can enable or disable one attached optional context source for future
+context assembly. Required sources such as `runtime_memory` cannot be disabled. This preference
+does not stop a child process, disconnect a transport, change provider configuration, or alter
+operator-owned credentials. To inspect the exact live contract, request `capabilities` for
+`connection.panel` or `connection.control` from the Runtime.
+
+Source of truth for this page: `src/vestigia/runtime.py` (transitions and provider binding), `src/vestigia/context.py` (context switches and receipts), `src/vestigia/connection_panel.py` (connection snapshot), `src/vestigia/cli.py` (commands), `src/vestigia/adapters/discord_adapter.py` (Discord commands), and `src/vestigia/packing.py` (restore behavior). A deployed Runtime may differ from this development branch; check its version and live capability contract.

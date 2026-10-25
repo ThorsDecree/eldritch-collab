@@ -14,6 +14,11 @@ from .capabilities import CapabilityRegistry, CapabilitySpec
 from .bell_observatory import BellObservatory
 from .bell_retrieval import resolve_retrieval_request
 from .capability_contracts import bell_contracts, contract_for
+from .connection_controls import (
+    load_disabled_context_sources,
+    set_context_source_enabled,
+)
+from .connection_panel import connection_panel
 from .config import ResolvedConfig
 from .context import ContextAssembler
 from .context_controls import (
@@ -424,6 +429,8 @@ class HousePort:
         self.open_curation = open_curation
         self.images = image_service
         self.memory_experiments: Any | None = None
+        self._runtime_provider: Any | None = None
+        self._runtime_context_sources: tuple[Any, ...] | None = None
         self.bell_observatory = BellObservatory(db, self.resident_id, self.room_id)
         self.legible = LegibleLedger(config, db)
         from .bootstrap import bootstrap_runtime
@@ -463,6 +470,16 @@ class HousePort:
             )
         self._install_capabilities()
         (self.home / "workspace").mkdir(parents=True, exist_ok=True)
+
+    def bind_runtime_connections(
+        self,
+        *,
+        provider: Any,
+        context_sources: tuple[Any, ...] | list[Any],
+    ) -> None:
+        """Attach startup-composed connections for accurate resident inspection."""
+        self._runtime_provider = provider
+        self._runtime_context_sources = tuple(context_sources)
 
     # ---------- index and path boundary ----------
 
@@ -1054,6 +1071,8 @@ class HousePort:
             "bell.rehearse": self._bell_rehearse,
             "next_step": self._next_step,
             "context.control": self._context_control,
+            "connection.panel": self._connection_panel,
+            "connection.control": self._connection_control,
             "source.visibility": self._source_visibility,
             "resident.control": self._resident_control,
             "source.listening": self._source_listening,
@@ -1123,6 +1142,7 @@ class HousePort:
             "attention.tray",
             "search.session",
             "context.control",
+            "connection.control",
             "source.visibility",
             "resident.control",
             "source.listening",
@@ -1189,6 +1209,8 @@ class HousePort:
                 "bell.rehearse": "Preview a candidate bell against live local context without persisting a trace or run.",
                 "next_step": "Explain the next safe or required move for one receipt, draft, job, bell, object, or action.",
                 "context.control": "Inspect or arrange prompt, transcript, and Runtime-memory retrieval settings within operator limits.",
+                "connection.panel": "Inspect configured providers, attached context sources, interface settings, capabilities, and resident work without revealing secrets.",
+                "connection.control": "Enable or disable one attached optional context source for future context assembly.",
                 "source.visibility": "Choose which authorized Discord history is visible as ambient context.",
                 "resident.control": "Inspect or arrange resident-owned friction and doorway preferences within operator limits.",
                 "source.listening": "Choose deterministic Discord name and watch-phrase listening without changing participant authority.",
@@ -3887,6 +3909,47 @@ class HousePort:
             "turns_available": self.db.recent_turn_count(self.resident_id, self.room_id),
             "compression_kind": "extractive_source_linked",
             "effective_next_turn": mode != "inspect",
+        }
+
+    def _connection_panel(self, payload: dict[str, Any]) -> dict[str, Any]:
+        del payload
+        return connection_panel(self)
+
+    def _connection_control(self, payload: dict[str, Any]) -> dict[str, Any]:
+        mode = str(payload.get("mode") or "").strip().lower()
+        if mode not in {"enable", "disable"}:
+            raise ValueError("connection.control mode must be enable or disable")
+        source_name = str(payload.get("source") or "").strip().lower()
+        if not source_name:
+            raise ValueError("connection.control requires a context source name")
+        sources = self._runtime_context_sources
+        if sources is None:
+            raise KeyError("context source inventory is not attached")
+        source = next(
+            (
+                candidate
+                for candidate in sources
+                if str(getattr(candidate, "name", "")).strip().lower() == source_name
+            ),
+            None,
+        )
+        if source is None:
+            raise KeyError(f"context source is not attached: {source_name}")
+        required = bool(getattr(source, "required", False))
+        if required:
+            raise ValueError(f"required context source cannot be toggled: {source_name}")
+        before = source_name not in load_disabled_context_sources(
+            self.db, self.resident_id
+        )
+        enabled = mode == "enable"
+        set_context_source_enabled(self.db, self.resident_id, source_name, enabled)
+        return {
+            "source": source_name,
+            "required": False,
+            "enabled_for_future_context": enabled,
+            "changed": before != enabled,
+            "effective_next_turn": True,
+            "boundary": "This preference affects future context assembly only; it does not disconnect or stop the source transport.",
         }
 
     def _source_visibility(self, payload: dict[str, Any]) -> dict[str, Any]:

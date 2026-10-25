@@ -32,6 +32,27 @@ The `help` index is a map; a focused `capabilities` result is the executable con
 - `retrieval.inspect`, `memory.provenance`, and `receipt.inspect` can help distinguish what was supplied, where it came from, and which boundary it crossed. Context inclusion is evidence of availability, not proof of what caused a response or an instruction to adopt it.
 - `memory.experiment` compares the current prompt with a controlled exclusion or replacement of one included Runtime memory. It requires a private CLI/web or one-to-one Discord DM turn, makes up to six additional provider calls, and reports sensitivity rather than causality. Full prompt and reply retention is opt-in. See [MEMORY_EXPERIMENTS.md](MEMORY_EXPERIMENTS.md).
 
+## See what is connected
+
+Use `connection.panel` to inspect the Runtime lifecycle state, provider and model routes
+configured for the home, the adapter attached to this Runtime instance, credential presence (never secret values), Discord settings, attached
+context sources, private-image/listening/visibility preferences, outward-action policies, and
+unexpired resident tasks. It shows the private-image mode but not private pocket names. The panel
+reports provider reachability as `not_reported`; an attached provider or source
+may still be unreachable.
+
+You can use `connection.control` to enable or disable an attached optional context source for
+future context assembly:
+
+```text
+[[TOOL_ACTION {"action":"connection.control","mode":"disable","source":"vestigia_archive_mcp","after":"continue"}]]
+[[TOOL_ACTION {"action":"connection.control","mode":"enable","source":"vestigia_archive_mcp","after":"continue"}]]
+```
+
+The source name must appear in the panel. Required sources cannot be switched off. This changes
+future context assembly only; it does not stop or disconnect the source's transport. See
+[CONTEXT_SOURCES.md](CONTEXT_SOURCES.md) for the boundary.
+
 For imported continuity, review the [onboarding guide](ONBOARDING.md). An inherited account can be recognized, revised, rejected, or left unresolved; a past label alone does not settle present identity or consent.
 
 This guide follows `src/vestigia/runtime.py`, `src/vestigia/context.py`, `src/vestigia/house_tools.py`, and the live capability registry. If the live schema disagrees with examples here, use the live schema and report the documentation drift.

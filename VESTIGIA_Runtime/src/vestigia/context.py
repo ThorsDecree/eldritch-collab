@@ -11,6 +11,7 @@ from .bell_retrieval import RetrievalRequest, resolve_retrieval_request
 from .composition import build_context_sources
 from .config import ResolvedConfig
 from .context_controls import load_context_controls_verbose
+from .connection_controls import load_disabled_context_sources
 from .context_sources import (
     ContextSource,
     ContextSourceItem,
@@ -571,10 +572,13 @@ class ContextAssembler:
             1,
             int(self.config.get("context.external_source_max_items", 8)),
         )
+        disabled_sources = load_disabled_context_sources(self.db, self.resident_id)
 
         for source in self.context_sources:
             required = bool(getattr(source, "required", False))
             source_name = str(getattr(source, "name", "")).strip().lower()
+            if not required and source_name in disabled_sources:
+                continue
             if (
                 retrieval_request.policy_requested == "resident_selected"
                 and source_name not in retrieval_request.selected_sources
