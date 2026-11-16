@@ -16,6 +16,7 @@ from typing import Any, Protocol, Sequence
 from .config import ResolvedConfig
 from .db import ContinuityDB
 from .models import ImageResult
+from .image_rendering import RenderOptions, RenderedImage, RENDER_FIELDS, inspect_media, contact_sheet
 from .resident_controls import load_resident_controls
 from .utils import TokenCounter, new_id, sha256_file, sha256_text
 
@@ -165,7 +166,7 @@ class ImageProvider(Protocol):
     name: str
     model: str
 
-    def generate(self, prompt: str, *, count: int, size: str, quality: str) -> list[bytes]:
+    def generate(self, prompt: str, *, count: int, size: str, quality: str, render: RenderOptions | None = None) -> list[bytes | RenderedImage]:
         ...
 
     def edit(
@@ -176,7 +177,8 @@ class ImageProvider(Protocol):
         count: int,
         size: str,
         quality: str,
-    ) -> list[bytes]:
+        render: RenderOptions | None = None,
+    ) -> list[bytes | RenderedImage]:
         ...
 
 
@@ -199,41 +201,52 @@ class OpenAIImageProvider:
             from openai import OpenAI
         except ImportError as exc:
             raise RuntimeError("Install project dependencies before using images") from exc
-        kwargs = {"api_key": key}
+        kwargs = {"api_key": key, "max_retries": 0}
         base_url = str(config.get("provider.base_url", "")).strip()
         if base_url:
             kwargs["base_url"] = base_url
         self.client = OpenAI(**kwargs)
         self.model = str(config.get("models.image"))
 
-    def generate(self, prompt: str, *, count: int, size: str, quality: str) -> list[bytes]:
-        kwargs = {"model": self.model, "prompt": prompt, "n": count}
+    def _request(self, prompt: str, count: int, size: str, quality: str,
+                 render: RenderOptions | None) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {"model": render.model if render else self.model,
+                                  "prompt": prompt, "n": count}
         if size:
             kwargs["size"] = size
         if quality:
             kwargs["quality"] = quality
-        response = self.client.images.generate(**kwargs)
-        return [base64.b64decode(item.b64_json) for item in response.data if item.b64_json]
+        if render and (render.output_format != "png" or render.complexity is not None):
+            # Public SDK extension boundary: older SDK signatures do not expose
+            # preview GIF/complexity fields. extra_body is merged into request JSON
+            # (and multipart form fields for edits) by the official SDK.
+            kwargs["extra_body"] = {
+                key: value for key, value in render.to_dict().items()
+                if key in {"output_format", "frame_count", "frame_duration_ms", "complexity"}
+            }
+        return kwargs
 
-    def edit(
-        self,
-        prompt: str,
-        *,
-        source_images: Sequence[Path],
-        count: int,
-        size: str,
-        quality: str,
-    ) -> list[bytes]:
-        kwargs = {"model": self.model, "prompt": prompt, "n": count}
-        if size:
-            kwargs["size"] = size
-        if quality:
-            kwargs["quality"] = quality
+    @staticmethod
+    def _decode(response: Any, model: str) -> list[RenderedImage]:
+        usage = getattr(response, "usage", None)
+        if hasattr(usage, "model_dump"):
+            usage = usage.model_dump(mode="json")
+        return [RenderedImage(base64.b64decode(item.b64_json, validate=True), model,
+                              usage if isinstance(usage, dict) else None)
+                for item in response.data if item.b64_json]
+
+    def generate(self, prompt: str, *, count: int, size: str, quality: str,
+                 render: RenderOptions | None = None) -> list[RenderedImage]:
+        kwargs = self._request(prompt, count, size, quality, render)
+        return self._decode(self.client.images.generate(**kwargs), str(kwargs["model"]))
+
+    def edit(self, prompt: str, *, source_images: Sequence[Path], count: int,
+             size: str, quality: str, render: RenderOptions | None = None) -> list[RenderedImage]:
+        kwargs = self._request(prompt, count, size, quality, render)
         with ExitStack() as stack:
-            handles = [stack.enter_context(path.open("rb")) for path in source_images]
-            kwargs["image"] = handles
+            kwargs["image"] = [stack.enter_context(path.open("rb")) for path in source_images]
             response = self.client.images.edit(**kwargs)
-        return [base64.b64decode(item.b64_json) for item in response.data if item.b64_json]
+        return self._decode(response, str(kwargs["model"]))
 
 
 class OpenAIVisionProvider:
@@ -284,7 +297,17 @@ class FakeImageProvider:
         "AQUBAScY42YAAAAASUVORK5CYII="
     )
 
-    def generate(self, prompt: str, *, count: int, size: str, quality: str) -> list[bytes]:
+    def generate(self, prompt: str, *, count: int, size: str, quality: str, render: RenderOptions | None = None) -> list[bytes | RenderedImage]:
+        if render and render.output_format != "png":
+            from PIL import Image
+            buffer = BytesIO()
+            frames = [Image.new("RGB", (32, 32), (i * 17 % 256, 40, 200))
+                      for i in range(render.frame_count or 1)]
+            kwargs = ({"save_all": True, "append_images": frames[1:], "loop": 0,
+                       "duration": render.frame_duration_ms, "disposal": 2}
+                      if render.output_format == "gif" else {})
+            frames[0].save(buffer, format=render.output_format.upper(), **kwargs)
+            return [buffer.getvalue() for _ in range(count)]
         return [self._PNG for _ in range(count)]
 
     def edit(
@@ -295,8 +318,9 @@ class FakeImageProvider:
         count: int,
         size: str,
         quality: str,
-    ) -> list[bytes]:
-        return [self._PNG for _ in range(count)]
+        render: RenderOptions | None = None,
+    ) -> list[bytes | RenderedImage]:
+        return self.generate(prompt, count=count, size=size, quality=quality, render=render)
 
 
 class FakeVisionProvider:
@@ -349,7 +373,7 @@ class ImageService:
             ).isoformat()
             connection.execute(
                 """
-                UPDATE image_jobs SET status='queued', updated_at=?
+                UPDATE image_jobs SET status='failed', error_type='RenderOutcomeUnknown', updated_at=?
                 WHERE resident_id=? AND status='running' AND updated_at<?
                 """,
                 (datetime.now(UTC).isoformat(), self.resident_id, stale_before),
@@ -368,6 +392,18 @@ class ImageService:
             )
         return self.vision_provider
 
+    def render_options(self, render: dict[str, Any] | RenderOptions | None = None,
+                       *, count: int = 1) -> RenderOptions:
+        if isinstance(render, RenderOptions):
+            return RenderOptions.resolve(self.config, render.to_dict(), count=count, frozen=True)
+        return RenderOptions.resolve(self.config, render, count=count)
+
+    def media(self, data: bytes) -> dict[str, Any]:
+        return inspect_media(data,
+            max_bytes=int(self.config.get("images.max_input_bytes", 20000000)),
+            max_frames=int(self.config.get("images.max_decoded_frames", 256)),
+            max_pixels=int(self.config.get("images.max_decoded_pixels", 67108864)))
+
     def generate(
         self,
         prompt: str,
@@ -375,15 +411,19 @@ class ImageService:
         count: int = 1,
         confirmed: bool = False,
         turn_id: str | None = None,
+        render: dict[str, Any] | RenderOptions | None = None,
+        recipe_id: str | None = None,
     ) -> ImageResult:
+        options = self.render_options(render, count=count)
         self._authorize(count, confirmed, editing=False)
         visual_prompt, visual_ids = self._visual_prompt(prompt)
         provider = self._image_provider()
         blobs = provider.generate(
             visual_prompt,
             count=count,
-            size=str(self.config.get("images.default_size", "auto")),
-            quality=str(self.config.get("images.default_quality", "auto")),
+            size=options.size,
+            quality=options.quality,
+            render=options,
         )
         return self._save(
             blobs,
@@ -391,6 +431,9 @@ class ImageService:
             prompt=visual_prompt,
             visual_ids=visual_ids,
             sources=[],
+            render=options,
+            expected_count=count,
+            recipe_id=recipe_id,
             turn_id=turn_id,
         )
 
@@ -402,8 +445,15 @@ class ImageService:
         count: int = 1,
         confirmed: bool = False,
         turn_id: str | None = None,
+        render: dict[str, Any] | RenderOptions | None = None,
+        recipe_id: str | None = None,
     ) -> ImageResult:
+        options = self.render_options(render, count=count)
         self._authorize(count, confirmed, editing=True)
+        for item in source_images:
+            media = self.media(Path(item).read_bytes())
+            if media["animated"]:
+                raise ValueError("image edits require still reference images; animated input is not supported")
         originals = self._preserve_sources([Path(item).resolve() for item in source_images])
         visual_prompt, visual_ids = self._visual_prompt(prompt)
         provider = self._image_provider()
@@ -411,8 +461,9 @@ class ImageService:
             visual_prompt,
             source_images=originals,
             count=count,
-            size=str(self.config.get("images.default_size", "auto")),
-            quality=str(self.config.get("images.default_quality", "auto")),
+            size=options.size,
+            quality=options.quality,
+            render=options,
         )
         return self._save(
             blobs,
@@ -420,6 +471,9 @@ class ImageService:
             prompt=visual_prompt,
             visual_ids=visual_ids,
             sources=originals,
+            render=options,
+            expected_count=count,
+            recipe_id=recipe_id,
             turn_id=turn_id,
         )
 
@@ -431,6 +485,8 @@ class ImageService:
         count: int = 1,
         confirmed: bool = False,
         turn_id: str | None = None,
+        render: dict[str, Any] | RenderOptions | None = None,
+        recipe_id: str | None = None,
     ) -> ImageResult:
         if not image_ids:
             raise ValueError("image.edit requires at least one source image_id")
@@ -441,6 +497,8 @@ class ImageService:
             count=count,
             confirmed=confirmed,
             turn_id=turn_id,
+            render=render,
+            recipe_id=recipe_id,
         )
 
     def review(self, artifact_id: str, action: str, *, actor: str, reason: str = "") -> str:
@@ -520,7 +578,9 @@ class ImageService:
         allowed = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
         if suffix not in allowed:
             raise ValueError("supported image types are PNG, JPEG, WEBP, and GIF")
-        width, height, detected_format = self._validate_image_bytes(data)
+        media = self.media(data)
+        width, height, detected_format = media["width"], media["height"], media["format"].upper()
+        source = {**(source or {}), "media": media}
         if detected_format not in {"PNG", "JPEG", "WEBP", "GIF"}:
             raise ValueError("the attachment is not a supported image")
         digest = hashlib.sha256(data).hexdigest()
@@ -550,10 +610,10 @@ class ImageService:
                     ),
                 )
             return self._asset_row(existing, reused=True)
-        media_type = mimetypes.guess_type(clean_name)[0] or "application/octet-stream"
+        media_type = media["mime_type"]
         shelf = self.home / "artifacts" / "images" / "shelf"
         shelf.mkdir(parents=True, exist_ok=True)
-        canonical_suffix = ".jpg" if suffix == ".jpeg" else suffix
+        canonical_suffix = media["suffix"]
         target = shelf / f"{digest}{canonical_suffix}"
         if not target.exists():
             target.write_bytes(data)
@@ -1031,6 +1091,19 @@ class ImageService:
             ],
         }
 
+    def inspect_animation(self, image_id: str, *, maximum: int = 12) -> dict[str, Any]:
+        asset = self.get_asset(image_id)
+        if not asset:
+            raise KeyError("unknown image")
+        data = self.resolve_path(image_id).read_bytes()
+        media = self.media(data)
+        png, coverage = contact_sheet(data, maximum=maximum, media=media,
+            provenance={"image_id": asset["id"], "content_hash": hashlib.sha256(data).hexdigest()})
+        sheet = self.ingest_bytes(png, filename="contact-sheet.png", source_kind="derived",
+            source={"parent_image_id": asset["id"], "coverage": coverage}, privacy="private")
+        return {"image_id": asset["id"], "media": media, "coverage": coverage,
+                "contact_sheet_id": sheet["id"], "privacy": sheet["privacy"], "publication": False}
+
     def inspect(
         self,
         image_id: str,
@@ -1056,6 +1129,13 @@ class ImageService:
                 requested.append(normalized)
         if not requested:
             requested = ["ocr", "vision_low"]
+        coverage = None
+        media = self.media(path.read_bytes())
+        if media["animated"]:
+            preview = self.inspect_animation(image_id)
+            coverage = preview["coverage"]
+            path = self.resolve_path(preview["contact_sheet_id"])
+            clean_question += "\nInterpret only the sampled labelled frames. Coverage: " + json.dumps(coverage, sort_keys=True)
         outputs: list[dict[str, Any]] = []
         for route in requested:
             if route == "ocr":
@@ -1065,6 +1145,7 @@ class ImageService:
                         path,
                         question=clean_question,
                         language=language,
+                        coverage=coverage,
                     )
                 )
             else:
@@ -1074,6 +1155,7 @@ class ImageService:
                         path,
                         question=clean_question,
                         detail="high" if route == "vision_high" else "low",
+                        coverage=coverage,
                     )
                 )
         return {
@@ -1091,6 +1173,7 @@ class ImageService:
                 )
             },
             "question": clean_question,
+            "coverage": coverage,
             "results": outputs,
         }
 
@@ -1787,6 +1870,8 @@ class ImageService:
         *,
         turn_id: str | None,
         delivery: dict[str, Any] | None,
+        render: RenderOptions | None = None,
+        recipe_id: str | None = None,
     ) -> dict[str, Any]:
         normalized = operation.strip().lower()
         if normalized not in {"generate", "edit"}:
@@ -1798,7 +1883,11 @@ class ImageService:
         maximum = int(self.config.get("images.max_per_request", 2))
         if count < 1 or count > maximum:
             raise ValueError(f"count must be between 1 and {maximum}")
+        self._authorize(count, False, editing=normalized == "edit")
+        options = self.render_options(render or {k: payload[k] for k in RENDER_FIELDS if k in payload}, count=count)
         clean: dict[str, Any] = {
+            "render": options.to_dict(),
+            "forge_recipe_id": recipe_id,
             "prompt": prompt,
             "count": count,
             # Resident JSON cannot impersonate an operator confirmation. Homes that
@@ -1812,7 +1901,9 @@ class ImageService:
             # Resolve now so a queued job cannot smuggle a path or another resident's ID.
             clean["image_ids"] = [str(item) for item in image_ids]
             for image_id in clean["image_ids"]:
-                self.resolve_path(image_id)
+                path = self.resolve_path(image_id)
+                if self.media(path.read_bytes())["animated"]:
+                    raise ValueError("image edits require still reference images")
         job_id = new_id("image_job")
         now = datetime.now(UTC).isoformat()
         with self.db.connect() as connection:
@@ -1838,6 +1929,7 @@ class ImageService:
         return {
             "job_id": job_id,
             "operation": normalized,
+            "render": options.to_dict(),
             "status": "queued",
             "privacy": "private",
             "completion": "resident_continuation",
@@ -1887,12 +1979,16 @@ class ImageService:
         payload = json.loads(str(row["payload_json"]) or "{}")
         operation = str(row["operation"])
         try:
+            render = RenderOptions.resolve(self.config, payload["render"],
+                count=int(payload.get("count", 1)), frozen=True) if "render" in payload else None
             if operation == "generate":
                 result = self.generate(
                     str(payload["prompt"]),
                     count=int(payload.get("count", 1)),
                     confirmed=bool(payload.get("confirmed", False)),
                     turn_id=str(row["created_turn_id"] or "") or None,
+                    render=render,
+                    recipe_id=payload.get("forge_recipe_id"),
                 )
             else:
                 result = self.edit_assets(
@@ -1901,12 +1997,17 @@ class ImageService:
                     count=int(payload.get("count", 1)),
                     confirmed=bool(payload.get("confirmed", False)),
                     turn_id=str(row["created_turn_id"] or "") or None,
+                    render=render,
+                    recipe_id=payload.get("forge_recipe_id"),
                 )
             result_payload = {
                 "operation": operation,
                 "artifact_ids": list(result.artifact_ids),
                 "image_ids": list(result.image_ids),
                 "model": result.model,
+                "render": result.render,
+                "media": list(result.media),
+                "forge_recipe_id": payload.get("forge_recipe_id"),
                 "privacy": "private",
                 "publication": False,
             }
@@ -2035,12 +2136,15 @@ class ImageService:
         *,
         question: str,
         language: str,
+        coverage: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not bool(self.config.get("images.ocr_enabled", True)):
             return {"route": "ocr", "status": "disabled", "cached": False, "text": ""}
         binary = str(self.config.get("images.ocr_binary", "tesseract")).strip()
         version = self._ocr_version(binary)
         recipe = str(self.config.get("images.ocr_recipe", "direct-psm6"))
+        if coverage is not None:
+            recipe += ":" + sha256_text(json.dumps(coverage, sort_keys=True) + "\0" + sha256_file(path))
         category = self._question_category(question)
         cache_key = sha256_text(
             "\0".join(
@@ -2101,7 +2205,7 @@ class ImageService:
             question=question,
             cache_key=cache_key,
             result=text,
-            metadata={"recipe": recipe, "psm": psm, "paid_call": False},
+            metadata={"recipe": recipe, "psm": psm, "paid_call": False, "coverage": coverage},
         )
         return {
             "route": "ocr",
@@ -2118,6 +2222,7 @@ class ImageService:
         *,
         question: str,
         detail: str,
+        coverage: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not bool(self.config.get("images.vision_enabled", True)):
             return {
@@ -2137,7 +2242,8 @@ class ImageService:
                     provider.model,
                     detail,
                     sha256_text(" ".join(question.casefold().split())),
-                    "inspect-v1",
+                    "inspect-v1" if coverage is None else "gif-contact-sheet-v1:" + sha256_text(
+                        json.dumps(coverage, sort_keys=True) + "\0" + sha256_file(path)),
                 ]
             )
         )
@@ -2164,6 +2270,7 @@ class ImageService:
                 "provider": provider.name,
                 "paid_call": provider.name != "fake",
                 "schema": "inspect-v1",
+                "coverage": coverage,
             },
         )
         return {
@@ -2272,6 +2379,7 @@ class ImageService:
     def _asset_row(row: Any, *, reused: bool = False) -> dict[str, Any]:
         item = dict(row)
         item["source"] = json.loads(item.pop("source_json") or "{}")
+        item["media"] = item["source"].get("media")
         item["reused"] = reused
         return item
 
@@ -2412,15 +2520,28 @@ class ImageService:
 
     def _save(
         self,
-        blobs: list[bytes],
+        blobs: list[bytes | RenderedImage],
         *,
         operation: str,
         prompt: str,
         visual_ids: list[str],
         sources: list[Path],
         turn_id: str | None,
+        render: RenderOptions,
+        expected_count: int,
+        recipe_id: str | None = None,
     ) -> ImageResult:
         provider = self._image_provider()
+        if len(blobs) != expected_count:
+            raise ValueError("provider returned an unexpected number of images")
+        outputs = [item if isinstance(item, RenderedImage) else RenderedImage(item, provider.model)
+                   for item in blobs]
+        metadata = [self.media(item.data) for item in outputs]
+        for media in metadata:
+            if media["format"] != render.output_format:
+                raise ValueError("provider output format does not match requested output_format")
+            if render.output_format == "gif" and not media["animated"]:
+                raise ValueError("provider returned a static GIF for an animation request")
         directory = self.home / "artifacts" / "images" / (
             "generated" if operation == "generate" else "edits"
         )
@@ -2428,16 +2549,16 @@ class ImageService:
         artifact_ids: list[str] = []
         image_ids: list[str] = []
         paths: list[Path] = []
-        for blob in blobs:
-            path = directory / f"{new_id(operation)}.png"
-            path.write_bytes(blob)
+        for output, media in zip(outputs, metadata):
+            path = directory / f"{new_id(operation)}{media['suffix']}"
+            path.write_bytes(output.data)
             artifact_id = self.db.add_artifact(
                 resident_id=self.resident_id,
                 room_id=self.room_id,
                 turn_id=turn_id,
                 operation=operation,
                 provider=provider.name,
-                model=provider.model,
+                model=output.model,
                 path=str(path.relative_to(self.home)),
                 content_hash=sha256_file(path),
                 prompt_hash=sha256_text(prompt),
@@ -2451,6 +2572,9 @@ class ImageService:
                 source_kind=operation,
                 source={
                     "turn_id": turn_id,
+                    "render": render.to_dict(),
+                    "usage": output.usage,
+                    "forge_recipe_id": recipe_id,
                     "source_images": [
                         str(item.relative_to(self.home)) for item in sources
                     ],
@@ -2476,7 +2600,7 @@ class ImageService:
                             new_id("iev"),
                             str(asset["id"]),
                             json.dumps(
-                                {"operation": operation, "artifact_id": artifact_id},
+                                {"operation": operation, "artifact_id": artifact_id, "render": render.to_dict(), "usage": output.usage, "forge_recipe_id": recipe_id},
                                 sort_keys=True,
                             ),
                             datetime.now(UTC).isoformat(),
@@ -2487,7 +2611,9 @@ class ImageService:
         return ImageResult(
             artifact_ids=tuple(artifact_ids),
             paths=tuple(paths),
-            model=provider.model,
+            model=outputs[0].model,
             operation=operation,
             image_ids=tuple(image_ids),
+            render=render.to_dict(),
+            media=tuple(metadata),
         )

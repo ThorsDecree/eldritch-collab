@@ -464,6 +464,7 @@ def command_image_generate(args: argparse.Namespace) -> int:
         args.prompt,
         count=args.count,
         confirmed=args.confirm,
+        render=_image_render_args(args),
     )
     _json(
         {
@@ -471,6 +472,8 @@ def command_image_generate(args: argparse.Namespace) -> int:
             "image_ids": result.image_ids,
             "paths": result.paths,
             "model": result.model,
+            "render": result.render,
+            "media": result.media,
         }
     )
     return 0
@@ -484,6 +487,7 @@ def command_image_edit(args: argparse.Namespace) -> int:
         args.source,
         count=args.count,
         confirmed=args.confirm,
+        render=_image_render_args(args),
     )
     _json(
         {
@@ -491,9 +495,25 @@ def command_image_edit(args: argparse.Namespace) -> int:
             "image_ids": result.image_ids,
             "paths": result.paths,
             "model": result.model,
+            "render": result.render,
+            "media": result.media,
         }
     )
     return 0
+
+
+def _image_render_args(args: argparse.Namespace) -> dict[str, Any]:
+    from .image_rendering import RENDER_FIELDS
+    return {name: getattr(args, name) for name in RENDER_FIELDS if getattr(args, name, None) is not None}
+
+
+def _add_image_render_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--output-format", choices=["png", "jpeg", "webp", "gif"])
+    parser.add_argument("--frame-count", type=int)
+    parser.add_argument("--frame-duration-ms", type=int)
+    parser.add_argument("--size")
+    parser.add_argument("--quality", choices=["auto", "low", "medium", "high", "standard", "hd"])
+    parser.add_argument("--complexity", choices=["low", "medium", "high"])
 
 
 def command_image_review(args: argparse.Namespace) -> int:
@@ -896,6 +916,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--count", type=int, default=1)
     generate.add_argument("--confirm", action="store_true")
     generate.add_argument("--fake", action="store_true")
+    _add_image_render_args(generate)
     generate.set_defaults(func=command_image_generate)
 
     edit = image_sub.add_parser("edit")
@@ -905,6 +926,7 @@ def build_parser() -> argparse.ArgumentParser:
     edit.add_argument("--count", type=int, default=1)
     edit.add_argument("--confirm", action="store_true")
     edit.add_argument("--fake", action="store_true")
+    _add_image_render_args(edit)
     edit.set_defaults(func=command_image_edit)
 
     image_review = sub.add_parser("image-review")

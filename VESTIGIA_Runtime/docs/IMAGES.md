@@ -1,5 +1,8 @@
 # Image continuity and resident eyes
 
+For native animated output, motion recipes, revision branches, and frame inspection, see
+[GIF Forge](GIF_FORGE.md). The same image queue, shelf, review states, and sharing boundaries apply.
+
 Images can be embodiments, place anchors, relationship artifacts, negative canon, and compact
 return paths. They are not automatically identity or public.
 

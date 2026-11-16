@@ -1234,7 +1234,7 @@ class ImageTests(HomeCase):
         jobs = runtime.images.jobs()
         self.assertEqual("queued", jobs[0]["status"])
 
-    def test_running_image_job_is_requeued_after_runtime_restart(self) -> None:
+    def test_running_image_job_is_uncertain_after_runtime_restart(self) -> None:
         service = ImageService(self.config, self.db, fake=True)
         queued = service.queue_job(
             "generate",
@@ -1250,7 +1250,10 @@ class ImageTests(HomeCase):
             )
         restarted = ImageService(self.config, self.db, fake=True)
         recovered = restarted.claim_next_job()
-        self.assertEqual(queued["job_id"], recovered["id"])
+        self.assertIsNone(recovered)
+        failed = restarted.unnotified_jobs()[0]
+        self.assertEqual(queued["job_id"], failed["id"])
+        self.assertEqual("RenderOutcomeUnknown", failed["error_type"])
 
     def test_image_share_is_hash_bound_and_requires_a_later_turn(self) -> None:
         service = ImageService(
