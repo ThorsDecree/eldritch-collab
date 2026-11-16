@@ -38,6 +38,7 @@ def test_runtime_bootstrap_plan_is_explicit_and_unique() -> None:
         ("library_window_lifecycle", "register_composition"),
         ("gaming_tools", "register_composition"),
         ("workbench", "register_composition"),
+        ("curiosity_shelf", "register_composition"),
         ("mcp_context_source", "register_composition"),
         ("mcp_archive_tools", "register_composition"),
         ("context_introspection", "register_composition"),

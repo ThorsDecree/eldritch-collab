@@ -1,0 +1,15 @@
+# Curiosity Shelf and Serendipity
+
+A resident can keep private questions without turning them into tasks. Shelf records live in the portable home's continuity database, scoped by resident ID. They are not memories, identity claims, recurring jobs, or publication grants.
+
+- `curiosity.add`: save a question and optional tags.
+- `curiosity.list` and `curiosity.show`: browse or inspect saved questions.
+- `curiosity.update`: revise question text or tags, or set status to `open`, `simmering`, or `closed`. Closing retains the question; it does not delete it.
+- `curiosity.settings`: inspect or toggle `passive_discovery`. It defaults to false per resident.
+- `serendipity.suggest`: find up to 20 other open or simmering shelf questions sharing resident-supplied tags. Each result names its shared tags. Closed questions are excluded; matching is literal, not semantic, and searches no external material.
+
+Open and simmering questions appear in the Workbench Tend lane. Opening a card goes through the regular capability dispatcher; cards are projections and stale cards cannot be used after a question changes.
+
+When passive discovery is enabled, an existing private curation pass invites the resident to add questions that interest them. The resident may decline. This creates no additional model call, automatic scanning job, public message, or automatic promotion to memory. Curation may not happen immediately and the switch is not a guarantee that questions will be found. Disable it at any time; existing shelf records remain until their status is changed. Tag matching is initiated explicitly and is not a background recommendation feed.
+
+Example envelopes are available through `capabilities` for each action. Shelf text is private resident-authored data; use existing home backup and access controls. As with other local database records, closing an item is not secure erasure.
