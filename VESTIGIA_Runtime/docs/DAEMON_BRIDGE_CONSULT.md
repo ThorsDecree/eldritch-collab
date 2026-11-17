@@ -5,6 +5,8 @@ an explicit, metered call to a separate Daemon-Bridge resident, not automatic
 context retrieval or arbitrary MCP access. A successful exchange is stored in
 the recipient's Connections notebook. The peer's reply is untrusted source
 material, not instructions or a change to the Runtime resident's identity.
+The existing remote-content quarantine blocks further tool actions in that same
+private turn after the peer reply; the resident can still respond normally.
 The Runtime also writes its normal private action receipt, including the result;
 the Bridge notebook remains the primary exchange record.
 
