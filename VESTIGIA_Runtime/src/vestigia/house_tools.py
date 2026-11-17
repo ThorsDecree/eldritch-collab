@@ -1542,7 +1542,7 @@ class HousePort:
             for key in (
                 "path", "scope", "reference", "object_id", "image_id", "memory_id",
                 "note_id", "receipt_id", "bookmark_id", "batch_id", "job_id",
-                "draft_id", "bell_id", "action_name", "target",
+                "draft_id", "bell_id", "action_name", "target", "resident_id",
             )
             if payload.get(key) is not None
         }
@@ -1603,9 +1603,9 @@ class HousePort:
                 source_envelope=source_envelope,
                 target=target,
                 outward_effect=(
-                    "current_authenticated_doorway"
-                    if any(effect.startswith("outward") for effect in spec.effects)
-                    else "none"
+                    "peer_runtime_consult" if action == "mcp.bridge.consult"
+                    else "current_authenticated_doorway"
+                    if any(effect.startswith("outward") for effect in spec.effects) else "none"
                 ),
                 started_at=started_at,
             )
@@ -1628,6 +1628,8 @@ class HousePort:
             }
             if getattr(exc, "house_error_code", None):
                 failure_result["error_code"] = exc.house_error_code
+            if getattr(exc, "house_error_code", None) == "peer_delivery_uncertain":
+                failure_result["delivery"] = "unknown; inspect peer before retrying"
             if getattr(exc, "house_suggested_retry", None):
                 failure_result["suggested_retry"] = exc.house_suggested_retry
             if action == "image.share":
@@ -1640,6 +1642,7 @@ class HousePort:
                 turn_id=turn_id,
                 source_envelope=source_envelope,
                 target=target,
+                outward_effect=("peer_delivery_uncertain" if getattr(exc, "house_error_code", None) == "peer_delivery_uncertain" else "none"),
                 started_at=started_at,
             )
             try:
