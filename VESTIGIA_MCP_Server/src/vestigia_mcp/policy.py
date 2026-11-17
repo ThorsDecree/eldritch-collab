@@ -353,9 +353,9 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
     ),
     Capability(
         "daemon_bridge.query",
-        EffectClass.PERCEIVE,
+        EffectClass.ACT,
         Decision.ALLOW,
-        "Dispatch one metered, private, non-persistent resident consult with no outward action.",
+        "Dispatch one metered private consult and save the exchange in the resident's Connections notebook.",
     ),
     Capability(
         "runtime.list",

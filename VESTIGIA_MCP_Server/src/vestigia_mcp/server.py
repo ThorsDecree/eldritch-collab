@@ -2244,11 +2244,11 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         title="Consult one Daemon-Bridge resident",
         description=(
             "Dispatch one metered private consult to a named resident through the independent "
-            "Daemon-Bridge. The v0.1 contract is transient and channel-blind: no rolling-turn "
-            "persistence, Discord delivery, mode change, anchor write, or outward action. "
+            "Daemon-Bridge. The full query and response are saved in that resident's Connections notebook. "
+            "No rolling-turn persistence, Discord delivery, mode change, anchor write, or outward action. "
             "MCP supplies its own caller identity; callers cannot impersonate a Discord user."
         ),
-        annotations=METERED_READ_ANNOTATIONS,
+        annotations=LOCAL_WRITE_ANNOTATIONS,
     )
     def daemon_bridge_query(
         resident_id: str,
@@ -2283,7 +2283,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                         "type": "returned",
                         "source": "daemon_bridge.query",
                         "target": "VESTIGIA MCP",
-                        "evidence_scope": "transient_consult",
+                        "evidence_scope": "notebook_consult",
                     },
                 ],
                 omitted=("prompt_text", "answer_text", "bridge_token"),
@@ -2296,6 +2296,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     "model_route": result.get("model_route"),
                     "resolved_model": result.get("resolved_model"),
                     "bridge_receipt_id": result.get("bridge_receipt_id"),
+                    "notebook_entry_id": result.get("notebook_entry_id"),
                     "conversation_persistence": result.get(
                         "conversation_persistence"
                     ),
