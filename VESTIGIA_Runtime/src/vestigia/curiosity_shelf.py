@@ -40,7 +40,7 @@ def _get(house: Any, ident: str) -> dict[str, Any]:
     return _item(row)
 
 
-def dispatch(house: Any, payload: dict[str, Any]) -> dict[str, Any]:
+def dispatch(house: Any, payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
     action = payload['action']
     if action == 'curiosity.settings':
         if 'passive_discovery' in payload:
@@ -74,6 +74,9 @@ def dispatch(house: Any, payload: dict[str, Any]) -> dict[str, Any]:
         with house.db.connect() as c:
             c.execute('UPDATE curiosity_items SET question=?, tags_json=?, status=?, updated_at=? WHERE id=? AND resident_id=?', (question, json.dumps(tags), payload.get('status', item['status']), utc_now_iso(), item['id'], house.resident_id))
         return {'item': _get(house, item['id']), 'privacy': 'resident_private'}
+    if action == 'serendipity.explore':
+        from .serendipity_explore import explore
+        return explore(house, payload, context or {})
     if action == 'serendipity.suggest':
         if item['status'] == 'closed':
             return {'suggestions': [], 'privacy': 'resident_private'}
@@ -101,6 +104,7 @@ def _register(house: Any) -> None:
         'curiosity.show': ({'curiosity_id': ident}, ('curiosity_id',), False),
         'curiosity.update': ({'curiosity_id': ident, 'status': s(enum=['open', 'simmering', 'closed']), 'question': s(minLength=1, maxLength=4000), 'tags': {'type': 'array', 'items': s(minLength=1, maxLength=80), 'maxItems': 16}}, ('curiosity_id',), True),
         'curiosity.settings': ({'passive_discovery': {'type': 'boolean'}}, (), True),
+        'serendipity.explore': ({'curiosity_id': ident, 'scope': s(minLength=1, maxLength=80), 'terms': {'type': 'array', 'items': s(minLength=2, maxLength=40), 'minItems': 1, 'maxItems': 5}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20}}, ('curiosity_id', 'scope', 'terms'), False),
         'serendipity.suggest': ({'curiosity_id': ident, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20}}, ('curiosity_id',), False),
     }
     examples = {
@@ -109,6 +113,7 @@ def _register(house: Any) -> None:
         'curiosity.update': {'curiosity_id': 'curiosity_example', 'status': 'simmering'},
         'curiosity.settings': {'passive_discovery': True},
         'serendipity.suggest': {'curiosity_id': 'curiosity_example'},
+        'serendipity.explore': {'curiosity_id': 'curiosity_example', 'scope': 'workspace', 'terms': ['lantern']},
     }
     for name, (fields, required, writes) in actions.items():
         schema = object_schema({'action': {'type': 'string', 'const': name}, **fields, 'after': s(enum=['continue', 'finish'])}, required=('action', *required))
@@ -119,10 +124,11 @@ def _register(house: Any) -> None:
             'curiosity.update': 'Set a question open, simmering, or closed.',
             'curiosity.settings': 'Inspect or toggle optional curation-time discovery.',
             'serendipity.suggest': 'Find related open questions using shared tags.',
+            'serendipity.explore': 'Search a chosen local shelf for passages using explicit terms.',
         }[name], effects=('database:write_low_authority',) if writes else ('database:read',),
             group='curiosity', result_visibility='resident_private', input_schema=schema, config_key='house.enabled',
             example_envelopes=({'action': name, **examples[name], 'after': 'continue'},)),
-            lambda payload, context: dispatch(house, payload))
+            lambda payload, context: dispatch(house, payload, context))
 
 
 def register_composition() -> None:
