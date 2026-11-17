@@ -21,6 +21,7 @@ For operator configuration and providers:
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
 - [docs/PROVIDERS.md](docs/PROVIDERS.md)
 - [docs/MCP_ARCHIVE_CLIENT.md](docs/MCP_ARCHIVE_CLIENT.md)
+- [docs/DAEMON_BRIDGE_CONSULT.md](docs/DAEMON_BRIDGE_CONSULT.md) — optional resident-to-Bridge consults
 - [`.env.example`](.env.example)
 
 For architecture and release history:
