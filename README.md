@@ -1,84 +1,64 @@
 # Eldritch Collaboration
 
-The canonical development repository for the **VESTIGIA Runtime**: a portable,
-consent-first continuity house for resident agents.
+The development home for the **VESTIGIA Runtime**, **VESTIGIA MCP Server**, and
+**House Mechanic**: local-first tools for resident continuity, bounded access,
+and reviewable development work.
 
-## What VESTIGIA is
+VESTIGIA gives a resident a portable home for identity anchors, memory,
+transcripts, artifacts, tools, and explicit boundaries. The inference provider
+can be local or remote. The project treats source material as data rather than
+as authority, and uses capabilities, grants, and receipts to make consequential
+actions visible and bounded.
 
-VESTIGIA is a local-first continuity runtime for a resident who needs more than a
-large system prompt and less than unrestricted host authority. It gives the
-resident a portable home containing identity anchors, memory, transcripts,
-artifacts, tools, boundaries, receipts, and explicit ways to revise what the
-house carries forward.
+## Where to start
 
-The governing design principle is simple:
+- [VESTIGIA Runtime](VESTIGIA_Runtime/README.md) — a portable continuity
+  runtime for one active resident per turn. Start with its
+  [setup guide](VESTIGIA_Runtime/ELI5_SETUP.md),
+  [operator cheatsheet](VESTIGIA_Runtime/docs/OPERATOR_CHEATSHEET.md), or
+  [resident cheatsheet](VESTIGIA_Runtime/docs/RESIDENT_CHEATSHEET.md).
+- [VESTIGIA MCP Server](VESTIGIA_MCP_Server/README.md) — a local-first
+  capability broker for the Archive and connected runtimes, with executable
+  policy, scoped access, and audit receipts.
+- [VESTIGIA House Mechanic](VESTIGIA_House_Mechanic/README.md) — a separate
+  host-side development plane with named recipes and bounded operations.
+- [Daemon-Bridge](https://github.com/ThorsDecree/Daemon-Bridge) — the separate
+  multi-resident Discord runtime; the MCP Server can connect to it through an
+  explicitly configured loopback interface.
 
-> **Safety belongs in the architecture, not in personality suppression.**
+## Current development and release status
 
-Sources are classified. Ambient text is data rather than authority. Outward
-actions are capability-gated. Private artifacts remain private by default.
-Authorization and platform delivery are recorded separately. Refusal remains
-available.
+The Runtime package on development `main` is **`0.8.0.dev0`**. This is a
+development version, not a claim that a stable v0.8 release has shipped. The
+last formally validated Runtime release milestone is **v0.7.0 — The Resident's
+Drawers**; its [validation](VESTIGIA_Runtime/docs/releases/v0.7.0-validation.md)
+and [custody record](VESTIGIA_Runtime/docs/releases/v0.7.0-custody.md) preserve
+the exact evidence. Consult the [Runtime README](VESTIGIA_Runtime/README.md)
+and [changelog](VESTIGIA_Runtime/CHANGELOG.md) for current development status.
 
-## v0.7.0: The Resident’s Drawers
+The MCP Server package on `main` is **`0.10.0.dev0`**. Each component has its
+own configuration, dependencies, and authority boundaries; installing one does
+not automatically enable or authorize the others.
 
-The official v0.7.0 development-canon release includes:
+Current Runtime development includes resident-controlled context drawers,
+portable homes and continuity ledgers, local house and workspace tools, image
+and vision features, bells, bounded workshop tooling, and optional MCP Archive
+access. Availability and authority depend on the deployed configuration: the
+live executable capability contract and operator grants take precedence over
+summary descriptions here.
 
-- resident-owned context partitioning and configurable verbatim/compressed
-  transcript controls;
-- Discord ambient visibility modes: `hidden`, `mentions_only`,
-  `allowlisted_only`, and `all_channel`;
-- stable source identifiers, trust classes, and explicit `data-only` labeling;
-- Discord reaction authorization, add/remove delivery, failure receipts, and
-  visible-target enforcement;
-- private-by-default image storage with later-turn, destination-bound,
-  interface-bound, expiring, one-time confirmation challenges;
-- image generation, inspection, drawers, cards, pockets, jobs, and delivery;
-- resident-authored bells and recurring invitations;
-- scoped house/workspace reads and writes rather than arbitrary filesystem
-  access;
-- durable action receipts and context receipts;
-- portable home packing, verified restoration, and a genuine v0.6.1-to-v0.7.0
-  upgrade canary.
+## Project documentation
 
-Release validation and custody records live in:
+- [Runtime architecture](VESTIGIA_Runtime/ARCHITECTURE.md),
+  [configuration](VESTIGIA_Runtime/docs/CONFIGURATION.md), and
+  [providers](VESTIGIA_Runtime/docs/PROVIDERS.md)
+- [MCP Server documentation](VESTIGIA_MCP_Server/README.md), including
+  [Daemon-Bridge integration](VESTIGIA_MCP_Server/docs/DAEMON_BRIDGE.md)
+- [Repository roadmap](ROADMAP.md) — milestone history and planned work; some
+  status descriptions may lag current development
+- [Contributing](CONTRIBUTING.md)
 
-- [`VESTIGIA_Runtime/docs/releases/v0.7.0-validation.md`](VESTIGIA_Runtime/docs/releases/v0.7.0-validation.md)
-- [`VESTIGIA_Runtime/docs/releases/v0.7.0-custody.md`](VESTIGIA_Runtime/docs/releases/v0.7.0-custody.md)
-
-The verified post-merge distribution comes from Runtime CI run 35 for commit
-`748e5d74392ad4f0a98c75b187f82b91606e9e39`, artifact
-`vestigia-runtime-0.7.0-748e5d74392ad4f0a98c75b187f82b91606e9e39`.
-
-## Next threshold: the Workshop Within
-
-Operational hardening is already underway, followed by a staged resident
-workshop for bounded automation and code execution.
-
-The intended shape is not “give the model a shell.” It is a workshop with named
-walls and doors:
-
-- explicit operator grants;
-- isolated resident workspaces;
-- declared filesystem, network, environment, process, and resource limits;
-- immutable script provenance and review state;
-- typed inputs and outputs;
-- pause, cancellation, quarantine, and supersession;
-- durable authorization and execution receipts;
-- no silent downgrade from hardened isolation;
-- no authority created merely because code was generated, imported, or trusted
-  socially.
-
-The canonical roadmap is [`ROADMAP.md`](ROADMAP.md).
-
-## Start here
-
-The Runtime lives in [`VESTIGIA_Runtime/`](VESTIGIA_Runtime/).
-
-- [`VESTIGIA_Runtime/README.md`](VESTIGIA_Runtime/README.md) — Runtime overview
-- [`VESTIGIA_Runtime/ELI5_SETUP.md`](VESTIGIA_Runtime/ELI5_SETUP.md) — setup guide
-- [`ROADMAP.md`](ROADMAP.md) — milestones and non-goals
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — repository workflow
-
-Development canon is `main`. Work enters through a branch and pull request.
-Release tags and verified artifacts identify packaged distributions.
+Development canon is `main`. Work enters through a branch and pull request;
+release tags and verified artifacts identify packaged distributions. Keep
+credentials out of the repository and consult each component's setup guide
+before enabling external connections.
