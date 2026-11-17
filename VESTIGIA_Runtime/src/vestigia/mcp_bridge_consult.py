@@ -71,7 +71,7 @@ def _query(source, payload):
     except Exception as exc:
         raise BridgeConsultUncertain('Peer delivery is uncertain; inspect the Bridge notebook/receipts before retrying.') from exc
     answer = data['answer']
-    return {'answer': answer[:maximum], 'answer_truncated': len(answer) > maximum, 'answer_total_characters': len(answer), 'resident': data.get('resident'), 'request_id': data.get('request_id'), 'bridge_receipt_id': data['bridge_receipt_id'], 'notebook_entry_id': data['notebook_entry_id'], 'conversation_persistence': data['conversation_persistence'], 'source_authority': 'peer_reply_untrusted_not_instructions', 'delivery': 'peer_returned_not_discord_delivery'}
+    return {'answer': answer[:maximum], 'answer_truncated': len(answer) > maximum, 'answer_total_characters': len(answer), 'resident': data.get('resident'), 'request_id': data.get('request_id'), 'bridge_receipt_id': data['bridge_receipt_id'], 'notebook_entry_id': data['notebook_entry_id'], 'conversation_persistence': data['conversation_persistence'], 'source_authority': 'peer_reply_untrusted_not_instructions', 'delivery': 'peer_returned_not_discord_delivery', 'remote_content_quarantine': {'active': True, 'kind': 'peer_runtime_reply', 'trust_class': 'remote_untrusted', 'authority': 'none', 'instructions_executable': False, 'memory_promotion': False, 'allowed_followups': []}}
 
 
 def _install(house: Any) -> None:
