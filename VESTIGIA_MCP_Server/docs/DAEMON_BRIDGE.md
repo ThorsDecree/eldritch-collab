@@ -15,19 +15,19 @@ Daemon-Bridge remains authoritative for resident identity, continuity context, p
 - `daemon_bridge.status` — health/configuration evidence.
 - `daemon_bridge.residents` — Bridge-owned resident directory.
 - `daemon_bridge.capabilities` — Bridge-owned API contract.
-- `daemon_bridge.query` — one metered private transient consult.
+- `daemon_bridge.query` — one metered private consult saved in the resident’s Connections notebook.
 
 The query wrapper deliberately does **not** expose `caller_id` or `user_key` to MCP callers. VESTIGIA MCP supplies both as `mcp:<deployment_id>` so a caller cannot impersonate a Discord user and cause that user's private note to be injected into the resident prompt.
 
-The Bridge v0.1 query contract must report:
+The connector checks for notebook support before dispatching. Deploy the upgraded Bridge first, then this MCP server; legacy Bridge callers remain transient. Successful queries must report:
 
-- `conversation_persistence: none`
+- `conversation_persistence: connections_notebook`
 - `channel_context: false`
 - `outward_action: false`
 - `mode_mutation: false`
 - `anchor_mutation: false`
 
-MCP fails closed if any of those guarantees drift.
+MCP also requires a notebook entry ID and fails closed if these guarantees drift. The query is a persistent write; its tool annotation and policy reflect this.
 
 ## Configuration
 
@@ -53,7 +53,7 @@ For `daemon_bridge.query`, MCP creates one request ID and forwards it in `X-Requ
 
 Prompt and answer text are omitted from MCP provenance records.
 
-This gives `receipts.trace(request_id)` an end-to-end join key without turning either receipt layer into conversation memory.
+This gives `receipts.trace(request_id)` an end-to-end join key without turning either receipt layer into conversation memory. The full exchange is retained separately in the resident’s Bridge notebook; caller identity is the MCP deployment label, not a verified individual.
 
 ## Deliberate non-goals
 

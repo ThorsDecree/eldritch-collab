@@ -180,7 +180,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             for name in metered_reads:
                 read_annotations = tools[name].annotations
                 assert read_annotations is not None
-                assert read_annotations.read_only_hint is True
+                assert read_annotations.read_only_hint is False
                 assert read_annotations.destructive_hint is False
                 assert read_annotations.open_world_hint is False
                 assert read_annotations.idempotent_hint is False

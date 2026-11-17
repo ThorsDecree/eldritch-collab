@@ -253,6 +253,11 @@ class DaemonBridgeClient:
         if not route or len(route) > 64:
             raise DaemonBridgeError("model_route must contain 1 to 64 characters")
 
+        caps = self.capabilities(request_id=request_id)
+        options = (caps.get('operations', {}).get('query', {}).get('conversation_persistence_options', []))
+        if 'connections_notebook' not in options:
+            raise DaemonBridgeError('Daemon-Bridge does not support Connections notebook persistence; update the Bridge before querying')
+
         caller = f"mcp:{self.deployment_id}"
         response = self._request(
             "POST",
@@ -263,6 +268,7 @@ class DaemonBridgeClient:
                 "caller_id": caller,
                 "user_key": caller,
                 "model_route": route,
+                "conversation_persistence": "connections_notebook",
             },
             authenticated=True,
             request_id=request_id,
@@ -270,7 +276,7 @@ class DaemonBridgeClient:
         self._require_protocol(response)
 
         expected = {
-            "conversation_persistence": "none",
+            "conversation_persistence": "connections_notebook",
             "channel_context": False,
             "outward_action": False,
             "mode_mutation": False,
@@ -287,4 +293,6 @@ class DaemonBridgeClient:
             raise DaemonBridgeError(
                 "Daemon-Bridge query response is missing its Bridge receipt"
             )
+        if not str(response.get('notebook_entry_id') or '').strip():
+            raise DaemonBridgeError('Daemon-Bridge response is missing its notebook entry ID; do not retry blindly')
         return response

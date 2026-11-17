@@ -72,6 +72,7 @@ class _FakeBridgeHandler(BaseHTTPRequestHandler):
                         "query": {
                             "effect": "metered_private_consult",
                             "conversation_persistence": "none",
+                            "conversation_persistence_options": ["none", "connections_notebook"],
                             "channel_context": False,
                             "outward_action": False,
                             "mode_mutation": False,
@@ -118,7 +119,8 @@ class _FakeBridgeHandler(BaseHTTPRequestHandler):
                 "answer": "API window open. 💋",
                 "model_route": payload.get("model_route"),
                 "resolved_model": "fake-mini",
-                "conversation_persistence": "none",
+                "conversation_persistence": "connections_notebook",
+                "notebook_entry_id": "cn_fixture",
                 "channel_context": False,
                 "outward_action": False,
                 "mode_mutation": False,
@@ -189,7 +191,7 @@ def test_mcp_bridge_query_has_shared_receipts_and_no_identity_spoof(
                 "daemon_bridge.query",
             } <= set(tools)
             assert tools["daemon_bridge.query"].annotations is not None
-            assert tools["daemon_bridge.query"].annotations.read_only_hint is True
+            assert tools["daemon_bridge.query"].annotations.read_only_hint is False
             assert tools["daemon_bridge.query"].annotations.idempotent_hint is False
 
             status = await client.call_tool("daemon_bridge.status", {})
@@ -223,6 +225,7 @@ def test_mcp_bridge_query_has_shared_receipts_and_no_identity_spoof(
             assert sent["caller_id"] == "mcp:test-deployment"
             assert sent["user_key"] == "mcp:test-deployment"
             assert sent["content"] == "hello through MCP"
+            assert sent["conversation_persistence"] == "connections_notebook"
 
             audit = await client.call_tool(
                 "receipts.recent",
@@ -249,3 +252,13 @@ def test_mcp_bridge_query_has_shared_receipts_and_no_identity_spoof(
         bridge.shutdown()
         bridge.server_close()
         thread.join(timeout=2.0)
+
+
+def test_query_rejects_legacy_bridge_before_model_call(tmp_path, monkeypatch):
+    client = DaemonBridgeClient(enabled=True, host='127.0.0.1', port=8766, token_path=tmp_path / 'token', deployment_id='test')
+    monkeypatch.setattr(client, 'capabilities', lambda **kwargs: {'operations': {'query': {'conversation_persistence': 'none'}}})
+    def forbidden(*args, **kwargs):
+        raise AssertionError('must not dispatch a query to an incompatible bridge')
+    monkeypatch.setattr(client, '_request', forbidden)
+    with pytest.raises(DaemonBridgeError, match='does not support'):
+        client.query(resident_id='liora', content='hi', model_route=None, request_id='r')
