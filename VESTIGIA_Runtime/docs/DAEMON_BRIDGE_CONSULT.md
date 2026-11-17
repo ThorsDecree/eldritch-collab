@@ -30,9 +30,10 @@ VESTIGIA_BRIDGE_TIMEOUT_SECONDS=120
 VESTIGIA_BRIDGE_MAX_ANSWER_CHARS=24000
 ```
 
-Restart the Runtime. It forwards only the token **path**, fixed loopback host,
-port, timeout, MCP receipt state, and a deployment label to a separate MCP stdio
-child; provider, Discord and tunnel credentials are not forwarded. The token file
+Restart the Runtime. Its Bridge-specific child configuration includes the token
+**path**, fixed loopback host, port, timeout, MCP receipt state, and a deployment
+label. The MCP SDK also inherits its standard platform environment (such as PATH);
+provider, Discord and tunnel credentials are not forwarded. The token file
 is read by the MCP connector. Only named residents in the comma-separated
 operator allowlist are reachable. When disabled, the capability is not callable.
 The capability currently requires an authenticated Discord doorway; it does not
