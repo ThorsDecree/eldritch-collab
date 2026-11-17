@@ -25,6 +25,7 @@ _INSTALLATION_PLAN: Final[tuple[tuple[str, str], ...]] = (
     ("curiosity_shelf", "register_composition"),
     ("mcp_context_source", "register_composition"),
     ("mcp_archive_tools", "register_composition"),
+    ("mcp_bridge_consult", "register_composition"),
     ("context_introspection", "register_composition"),
     ("workspace_patch_staging", "register_composition"),
     ("private_message_capabilities", "register_composition"),
