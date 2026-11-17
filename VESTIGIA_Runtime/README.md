@@ -27,7 +27,7 @@ For architecture and release history:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md)
 - [CHANGELOG.md](CHANGELOG.md)
-- [ROADMAP.md](ROADMAP.md)
+- [repository roadmap](../ROADMAP.md)
 - [docs/releases/](docs/releases/)
 
 ## What VESTIGIA is
@@ -371,7 +371,7 @@ The v0.8.x line is building a semantic Resident Workbench so ordinary activity n
 
 Current main already contains the provider-neutral Workbench substrate and Continue-Reading provider. The complete daemon-facing Workbench, human localhost projection, browser integration, and intuitive launcher are roadmap work toward v0.9.0, not completed v0.8 features.
 
-See [ROADMAP.md](ROADMAP.md) and issue #46 in the repository.
+See [repository roadmap](../ROADMAP.md) and issue #46 in the repository.
 
 ## Inspect, curate, sleep, pack, and restore
 
