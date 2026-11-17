@@ -1078,7 +1078,8 @@ class CoreRuntime:
         if packet is None:
             return []
         batch_id = str(packet["batch_id"])
-        prompt = self.curator.internal_prompt(packet)
+        from .curiosity_shelf import curation_invitation
+        prompt = self.curator.internal_prompt(packet) + curation_invitation(self.house)
         try:
             reply, house_receipts, outbound_attachments, outbound_reactions = self._complete_with_house_tools(
                 turn_id=batch_id,
