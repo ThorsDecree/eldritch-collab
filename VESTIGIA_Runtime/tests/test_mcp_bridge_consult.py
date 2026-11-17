@@ -54,7 +54,7 @@ def test_transport_timeout_is_delivery_uncertain(tmp_path, monkeypatch):
         h.dispatch({'action': 'mcp.bridge.consult', 'resident_id': 'liora', 'content': 'hello'}, turn_id='turn3', context={'interface':'discord', 'delivery_target':{'id':'room'}})
 
 
-def test_child_receives_only_required_bridge_settings(tmp_path, monkeypatch):
+def test_bridge_specific_child_environment_omits_provider_credentials(tmp_path, monkeypatch):
     from vestigia.mcp_bridge_consult import BridgeMcpSource
     monkeypatch.setenv('OPENAI_API_KEY', 'private-provider-secret')
     h = house(tmp_path)
