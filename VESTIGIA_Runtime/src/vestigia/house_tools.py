@@ -20,6 +20,8 @@ from .connection_controls import (
 )
 from .connection_panel import connection_panel
 from .config import ResolvedConfig
+from .gif_forge import GifForge
+from .image_rendering import RENDER_FIELDS
 from .context import ContextAssembler
 from .context_controls import (
     VISIBILITY_MODES,
@@ -1466,6 +1468,26 @@ class HousePort:
                     image_handlers[spec.name],
                     authorizer=authorizer,
                 )
+            for name, description in {
+                "gif.plan": "Save a private motion brief, beat budget and compiled GIF recipe; no rendering.",
+                "gif.revise": "Branch an immutable GIF recipe, retaining its parent and change note.",
+                "gif.show": "Inspect a saved GIF recipe and its recent render jobs.",
+                "gif.list": "List the resident's saved GIF recipes.",
+                "gif.render": "Explicitly queue a private GIF render using a saved recipe and existing image budgets.",
+                "gif.inspect": "Build a private labelled contact sheet and measure actual animation timing locally.",
+            }.items():
+                rendering = name == "gif.render"
+                self.registry.register(
+                    CapabilitySpec(name=name, description=description,
+                        effects=("network:metered", "database:write", "filesystem:write") if rendering
+                                else ("database:read_write_low_authority", "filesystem:conditional"),
+                        cost_class="metered" if rendering else "free",
+                        confirmation="configured_budget" if rendering else "none",
+                        default_after="continue", result_visibility="resident_private",
+                        config_key="images.enabled" if rendering else None,
+                        **contract_for(name)),
+                    lambda payload, context, action=name: self._gif_action(action, payload, context),
+                    authorizer=self._image_generate_authorizer if rendering else None)
         bell_draft, bell_control = bell_contracts()
         self.registry.register_contract(
             CapabilitySpec(
@@ -3664,6 +3686,7 @@ class HousePort:
         result = self._require_images().generate(
             prompt,
             count=int(payload.get("count", 1)),
+            render={key: payload[key] for key in RENDER_FIELDS if key in payload},
             confirmed=False,
             turn_id=str(context.get("turn_id") or "") or None,
         )
@@ -3672,6 +3695,8 @@ class HousePort:
             "artifact_ids": list(result.artifact_ids),
             "image_ids": list(result.image_ids),
             "model": result.model,
+            "render": result.render,
+            "media": list(result.media),
             "privacy": "private",
             "publication": False,
         }
@@ -3698,6 +3723,7 @@ class HousePort:
             prompt,
             [str(item) for item in image_ids],
             count=int(payload.get("count", 1)),
+            render={key: payload[key] for key in RENDER_FIELDS if key in payload},
             confirmed=False,
             turn_id=str(context.get("turn_id") or "") or None,
         )
@@ -3706,9 +3732,27 @@ class HousePort:
             "artifact_ids": list(result.artifact_ids),
             "image_ids": list(result.image_ids),
             "model": result.model,
+            "render": result.render,
+            "media": list(result.media),
             "privacy": "private",
             "publication": False,
         }
+
+    def _gif_action(self, action: str, payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        forge = GifForge(self._require_images())
+        if action == "gif.plan":
+            return forge.plan(payload["brief"], payload.get("render"))
+        if action == "gif.revise":
+            return forge.revise(payload["recipe_id"], payload["changes"], change_note=payload["change_note"])
+        if action == "gif.show":
+            return forge.get(payload["recipe_id"])
+        if action == "gif.list":
+            return {"recipes": forge.list(int(payload.get("limit", 20)))}
+        if action == "gif.render":
+            return forge.render(payload["recipe_id"], count=int(payload.get("count", 1)),
+                turn_id=str(context.get("turn_id") or "") or None,
+                delivery=context.get("delivery_target") if isinstance(context.get("delivery_target"), dict) else None)
+        return forge.inspect(payload["image_id"], maximum=int(payload.get("maximum", 12)))
 
     def _image_history(
         self, payload: dict[str, Any], context: dict[str, Any]

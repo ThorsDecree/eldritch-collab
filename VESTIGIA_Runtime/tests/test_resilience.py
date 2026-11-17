@@ -216,7 +216,7 @@ def test_interrupted_database_transaction_rolls_back(tmp_path: Path) -> None:
     assert row is None
 
 
-def test_stale_running_image_job_is_requeued_on_restart(tmp_path: Path) -> None:
+def test_stale_running_image_job_is_not_retried_when_outcome_is_unknown(tmp_path: Path) -> None:
     home = initialize_home(tmp_path / "image-recovery", name="Image Recovery")
     config, db, _, images, _ = _services(home)
     queued = images.queue_job(
@@ -234,9 +234,8 @@ def test_stale_running_image_job_is_requeued_on_restart(tmp_path: Path) -> None:
         )
     restarted = ImageService(config, db, fake=True)
     jobs = {item["id"]: item for item in restarted.jobs(limit=20)}
-    assert jobs[job_id]["status"] == "queued"
-    claimed = restarted.claim_next_job()
-    assert claimed and claimed["id"] == job_id
+    assert jobs[job_id]["status"] == "failed"
+    assert restarted.claim_next_job() is None
 
 
 def test_once_bell_advances_before_delivery_and_does_not_auto_retry(tmp_path: Path) -> None:

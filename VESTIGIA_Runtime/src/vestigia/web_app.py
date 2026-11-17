@@ -6,6 +6,7 @@ operations used by the CLI, and it never opens a listener beyond localhost.
 from __future__ import annotations
 
 import html
+import json
 import secrets
 import tempfile
 import webbrowser
@@ -134,12 +135,20 @@ def _image_service(home: Path, env_file: str | Path | None) -> ImageService:
     return ImageService(config, db, fake=False)
 
 
+def _animation_label(asset: dict[str, Any]) -> str:
+    media = asset.get("media") or {}
+    if not media.get("animated"):
+        return ""
+    duration = media.get("duration_ms")
+    return f"{media['frame_count']} frames · {duration if duration is not None else 'unknown'} ms"
+
+
 def _image_assets(home: Path, env_file: str | Path | None) -> list[dict[str, Any]]:
     service = _image_service(home, env_file)
     with service.db.connect() as connection:
         rows = connection.execute(
             """
-            SELECT id, original_filename, media_type, width, height, privacy, created_at
+            SELECT id, original_filename, media_type, width, height, privacy, created_at, source_json
             FROM image_assets
             WHERE resident_id=?
             ORDER BY rowid DESC
@@ -147,7 +156,7 @@ def _image_assets(home: Path, env_file: str | Path | None) -> list[dict[str, Any
             """,
             (service.resident_id,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [{**dict(row), "media": json.loads(row["source_json"] or "{}").get("media")} for row in rows]
 
 
 def _status(home: Path, env_file: str | Path | None) -> dict[str, Any]:
@@ -472,7 +481,7 @@ window.scrollTo({{top:document.body.scrollHeight,behavior:'instant'}});
         for item in _image_assets(selected, app.state.env_file):
             image_url = "/image/" + urlencode({"home": str(selected), "image_id": item["id"]})
             cards.append(
-                f"""<section class=\"card image-card\"><img src=\"{image_url}\" alt=\"{_escape(item['original_filename'] or 'Private image')}\"><p><strong>{_escape(item['original_filename'] or 'Untitled image')}</strong></p><p class=\"muted\">{_escape(item['width'])}×{_escape(item['height'])} · {_escape(item['privacy'])}</p><form method=\"post\" action=\"/drawer/{_escape(item['id'])}/review\"><input type=\"hidden\" name=\"csrf_token\" value=\"{app.state.csrf_token}\"><input type=\"hidden\" name=\"home\" value=\"{_escape(selected)}\"><button class=\"secondary\" name=\"action\" value=\"keep\">Keep</button><button class=\"secondary\" name=\"action\" value=\"candidate\">Canon candidate</button><button class=\"secondary\" name=\"action\" value=\"reject\">Reject</button></form></section>"""
+                f"""<section class=\"card image-card\"><img src=\"{image_url}\" alt=\"{_escape(item['original_filename'] or 'Private image')}\"><p><strong>{_escape(item['original_filename'] or 'Untitled image')}</strong></p><p class=\"muted\">{_escape(item['width'])}×{_escape(item['height'])} · {_escape(item['privacy'])}</p><p class=\"muted\">{_escape(_animation_label(item))}</p><form method=\"post\" action=\"/drawer/{_escape(item['id'])}/review\"><input type=\"hidden\" name=\"csrf_token\" value=\"{app.state.csrf_token}\"><input type=\"hidden\" name=\"home\" value=\"{_escape(selected)}\"><button class=\"secondary\" name=\"action\" value=\"keep\">Keep</button><button class=\"secondary\" name=\"action\" value=\"candidate\">Canon candidate</button><button class=\"secondary\" name=\"action\" value=\"reject\">Reject</button></form></section>"""
             )
         notice = f'<p class="notice">{_escape(message)}</p>' if message else ""
         contents = "".join(cards) or '<section class="card"><p class="muted">The Picture Drawer is empty. Share an image in Talk to place it here privately.</p></section>'

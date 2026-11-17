@@ -173,3 +173,5 @@ class ImageResult:
     model: str
     operation: str
     image_ids: tuple[str, ...] = ()
+    render: dict[str, Any] = field(default_factory=dict)
+    media: tuple[dict[str, Any], ...] = ()

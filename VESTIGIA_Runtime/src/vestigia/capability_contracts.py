@@ -19,6 +19,25 @@ LIMIT_100 = I(minimum=1, maximum=100)
 TOKEN_LIMIT = I(minimum=100, maximum=12000)
 
 
+RENDER_OPTIONS = {
+    "output_format": S(enum=["png", "jpeg", "webp", "gif"]),
+    "frame_count": I(minimum=2, maximum=16),
+    "frame_duration_ms": I(minimum=20, maximum=2000),
+    "size": S(maxLength=40),
+    "quality": S(enum=["auto", "low", "medium", "high", "standard", "hd"]),
+    "complexity": S(enum=["low", "medium", "high"]),
+}
+BRIEF_FIELDS = {
+    "subject": S(minLength=1, maxLength=4000), "scene": S(maxLength=4000),
+    "motion": S(minLength=1, maxLength=4000), "camera": S(maxLength=4000),
+    "loop": S(maxLength=4000),
+    "invariants": A(S(minLength=1, maxLength=500), maxItems=16),
+    "reference_ids": A(ID, maxItems=16),
+    "beats": A(object_schema({"description": S(minLength=1, maxLength=1000),
+                                "frames": I(minimum=1, maximum=16)}, required=("description", "frames")), maxItems=16),
+}
+
+
 GROUPS: dict[str, str] = {
     **{name: "browse" for name in (
         "list", "search", "read", "continue", "stat", "bookmark",
@@ -28,6 +47,7 @@ GROUPS: dict[str, str] = {
     **{name: "pictures" for name in (
         "image.inspect", "image.generate", "image.edit", "image.history",
         "image.drawer", "image.review", "image.share",
+        "gif.plan", "gif.revise", "gif.show", "gif.list", "gif.render", "gif.inspect",
     )},
     **{name: "attention" for name in ("attention.tray", "retrieval.inspect")},
     **{name: "context" for name in (
@@ -71,6 +91,16 @@ GROUPS: dict[str, str] = {
 
 
 FIELDS: dict[str, tuple[dict[str, Any], tuple[str, ...]]] = {
+    "gif.plan": ({"brief": object_schema(BRIEF_FIELDS, required=("subject", "motion")),
+                  "render": object_schema(RENDER_OPTIONS)}, ("brief",)),
+    "gif.revise": ({"recipe_id": ID, "change_note": S(minLength=1, maxLength=4000),
+                    "changes": object_schema({"brief": object_schema(BRIEF_FIELDS),
+                                               "render": object_schema(RENDER_OPTIONS)})},
+                   ("recipe_id", "change_note", "changes")),
+    "gif.show": ({"recipe_id": ID}, ("recipe_id",)),
+    "gif.list": ({"limit": LIMIT_100}, ()),
+    "gif.render": ({"recipe_id": ID, "count": I(minimum=1, maximum=8), "confirmed": B()}, ("recipe_id",)),
+    "gif.inspect": ({"image_id": ID, "maximum": I(minimum=2, maximum=16)}, ("image_id",)),
     "list": ({"scope": S(), "limit": LIMIT_200}, ()),
     "search": ({"scope": S(), "query": S(minLength=1), "max_results": I(minimum=1, maximum=20)}, ("query",)),
     "read": ({"path": REF, "reference": REF, "bookmark_id": ID, "heading": S(), "chunk": I(minimum=0), "max_tokens": TOKEN_LIMIT}, ()),
@@ -201,8 +231,8 @@ FIELDS: dict[str, tuple[dict[str, Any], tuple[str, ...]]] = {
     "next_step": ({"receipt_id": ID, "reference": REF, "draft_id": ID, "job_id": ID, "bell_id": ID, "action_name": S()}, ()),
     "tool.run": ({"name": S(minLength=1), "arguments": O(additionalProperties=True)}, ("name",)),
     "image.inspect": ({"image_id": ID, "question": S(), "routes": A(S(enum=["ocr", "vision_low", "vision_high"]), minItems=1), "language": S()}, ("image_id",)),
-    "image.generate": ({"prompt": S(minLength=1), "count": I(minimum=1, maximum=8), "background": B(), "confirmed": B()}, ("prompt",)),
-    "image.edit": ({"prompt": S(minLength=1), "image_ids": A(ID, minItems=1, maxItems=8), "count": I(minimum=1, maximum=8), "background": B(), "confirmed": B()}, ("prompt", "image_ids")),
+    "image.generate": ({**RENDER_OPTIONS, "prompt": S(minLength=1), "count": I(minimum=1, maximum=8), "background": B(), "confirmed": B()}, ("prompt",)),
+    "image.edit": ({**RENDER_OPTIONS, "prompt": S(minLength=1), "image_ids": A(ID, minItems=1, maxItems=8), "count": I(minimum=1, maximum=8), "background": B(), "confirmed": B()}, ("prompt", "image_ids")),
     "image.history": ({"image_id": ID, "limit": LIMIT_200, "job_limit": LIMIT_200}, ()),
     "image.drawer": ({"mode": S(enum=["browse", "search", "get", "update", "summarize", "pocket", "timeline"]), "image_id": ID, "artifact_id": ID, "query": S(), "changes": O(additionalProperties=True), "pocket": S(), "present": B(), "inspect_if_missing": B(), "include_private": B(), "limit": LIMIT_100, "alias": S(), "summary": S(), "alt_text": S(), "visible_text": A(S()), "people": A(S()), "places": A(S()), "motifs": A(S()), "moods": A(S()), "uses": A(S()), "avoid_when": A(S()), "resident_note": S(), "inherited_framing": S(), "present_resonance": S(), "adoption_state": S(), "privacy": S()}, ()),
     "image.review": ({"image_id": ID, "artifact_id": ID, "review": S(minLength=1), "decision": S(minLength=1), "reason": S()}, ("image_id", "review")),
@@ -211,6 +241,8 @@ FIELDS: dict[str, tuple[dict[str, Any], tuple[str, ...]]] = {
 
 
 EXAMPLES: dict[str, tuple[dict[str, Any], ...]] = {
+    "gif.plan": ({"action": "gif.plan", "brief": {"subject": "Librarian cat and lantern", "motion": "Tail curls then returns to its starting pose"}, "render": {"frame_count": 9, "size": "512x512"}, "after": "continue"},),
+    "gif.revise": ({"action": "gif.revise", "recipe_id": "gif_...", "change_note": "Hold the camera still", "changes": {"brief": {"camera": "locked"}}, "after": "continue"},),
     "capabilities": (
         {"action": "capabilities", "after": "continue"},
         {"action": "capabilities", "target": "attention.tray", "after": "continue"},
