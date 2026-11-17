@@ -41,6 +41,7 @@ def test_runtime_bootstrap_plan_is_explicit_and_unique() -> None:
         ("curiosity_shelf", "register_composition"),
         ("mcp_context_source", "register_composition"),
         ("mcp_archive_tools", "register_composition"),
+        ("mcp_bridge_consult", "register_composition"),
         ("context_introspection", "register_composition"),
         ("workspace_patch_staging", "register_composition"),
         ("private_message_capabilities", "register_composition"),
