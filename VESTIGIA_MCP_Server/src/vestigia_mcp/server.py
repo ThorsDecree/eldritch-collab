@@ -203,6 +203,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             source_for("live"),
             settings.state_dir,
             source_prefix=settings.lanternslide_source_prefix,
+            source_prefixes=settings.lanternslide_source_prefixes,
             catalog_path=settings.lanternslide_catalog_path,
             scan_batch_max=settings.lanternslide_scan_batch_max,
             image_max_bytes=settings.lanternslide_image_max_bytes,
@@ -1760,7 +1761,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                     {
                         "type": "observed",
                         "source": "configured_live_archive",
-                        "target": settings.lanternslide_source_prefix or ".",
+                        "target": ", ".join(settings.lanternslide_source_prefixes or (settings.lanternslide_source_prefix or ".",)),
                         "evidence_scope": "bounded_image_metadata",
                     },
                     {
@@ -1822,6 +1823,24 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             arguments,
             lambda: lanternslide_service().find(query, unique_only=unique_only),
         )
+
+    @server.tool(
+        name="lanternslide.search", title="Search the Lanternslide art shelf",
+        description="Search paths and authored titles, descriptions, and tags. Results are bounded and paged by offset; this is not semantic image search.",
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def lanternslide_search(query: str = "", tags: list[str] | None = None, offset: int = 0, limit: int = 50) -> dict[str, object]:
+        args = {"query": query, "tags": tags, "offset": offset, "limit": limit}
+        return guarded("lanternslide.search", args, lambda: lanternslide_service().search(**args))
+
+    @server.tool(
+        name="lanternslide.annotate", title="Annotate a Lanternslide image",
+        description="Explicitly replace one image's local title, description and tags using its expected revision; revision zero creates an annotation. Identical content shares an annotation across paths.",
+        annotations=LOCAL_WRITE_ANNOTATIONS,
+    )
+    def lanternslide_annotate(image_id: str, title: str, description: str, tags: list[str], expected_revision: int) -> dict[str, object]:
+        args = {"image_id": image_id, "title": title, "description": description, "tags": tags, "expected_revision": expected_revision}
+        return guarded("lanternslide.annotate", args, lambda: lanternslide_service().annotate(**args))
 
     @server.tool(
         name="lanternslide.deal",

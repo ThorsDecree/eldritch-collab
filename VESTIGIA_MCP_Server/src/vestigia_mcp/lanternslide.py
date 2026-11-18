@@ -5,10 +5,12 @@ import io
 import json
 import os
 import random
+import sqlite3
 import tempfile
 import threading
 import uuid
 from collections import defaultdict
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -110,6 +112,7 @@ class LanternslideService:
         state_dir: Path,
         *,
         source_prefix: str = "pics",
+        source_prefixes: tuple[str, ...] | None = None,
         catalog_path: str = "pics/Lanternslide/catalog.json",
         scan_batch_max: int = 50,
         image_max_bytes: int = 25_000_000,
@@ -119,6 +122,12 @@ class LanternslideService:
         self._state_dir = state_dir.expanduser()
         self._state_path = self._state_dir / "lanternslide" / "catalog-state.json"
         self._source_prefix = normalize_prefix(source_prefix)
+        self._source_prefixes = tuple(dict.fromkeys(normalize_prefix(p) for p in (source_prefixes if source_prefixes is not None else (self._source_prefix,))))
+        if not self._source_prefixes:
+            raise LanternslideError("At least one source prefix is required")
+        if len(self._source_prefixes) > 32 or sum(len(p) for p in self._source_prefixes) > 1000:
+            raise LanternslideError("Lanternslide source roots exceed the configured bounds")
+        self._annotations_path = self._state_dir / "lanternslide" / "annotations.sqlite3"
         self._catalog_path = normalize_relative_path(catalog_path)
         if not _is_under(self._catalog_path, self._source_prefix):
             raise LanternslideError("Lanternslide catalog path must be inside source prefix")
@@ -167,9 +176,31 @@ class LanternslideService:
 
     def _candidate_paths(self) -> tuple[str, ...]:
         paths = []
-        for path in self._source.all_paths():
+        if self._source.kind == "directory":
+            for prefix in self._source_prefixes:
+                root = self._source.root
+                for part in PurePosixPath(prefix).parts:
+                    try:
+                        if part not in os.listdir(root):
+                            raise LanternslideError(f"Lanternslide source root unavailable or case mismatch: {prefix}")
+                    except OSError as exc:
+                        raise LanternslideError(f"Lanternslide source root unavailable: {prefix}") from exc
+                    root = root / part
+                    if root.is_symlink():
+                        raise LanternslideError("Lanternslide source root cannot be a symlink")
+                if not root.is_dir():
+                    raise LanternslideError(f"Lanternslide source root unavailable: {prefix or '.'}")
+        try:
+            candidates = self._source.all_paths(strict=True, prefixes=self._source_prefixes)
+        except ArchiveError as exc:
+            raise LanternslideError("Cannot enumerate Lanternslide source roots") from exc
+        if self._source.kind == "zip":
+            for prefix in self._source_prefixes:
+                if prefix and not any(_is_under(path, prefix) for path in candidates):
+                    raise LanternslideError(f"Lanternslide source root unavailable: {prefix}")
+        for path in candidates:
             normalized = normalize_relative_path(path)
-            if not _is_under(normalized, self._source_prefix):
+            if not any(_is_under(normalized, prefix) for prefix in self._source_prefixes):
                 continue
             if _is_under(normalized, self._catalog_parent):
                 continue
@@ -179,11 +210,13 @@ class LanternslideService:
         return tuple(sorted(paths))
 
     def _candidate_manifest(self, paths: tuple[str, ...]) -> str:
-        return _canonical_digest({"source_prefix": self._source_prefix, "paths": paths})
+        manifest = {"source_prefix": self._source_prefix, "paths": paths}
+        if self._source_prefixes != (self._source_prefix,):
+            manifest["source_prefixes"] = self._source_prefixes
+        return _canonical_digest(manifest)
 
     def _catalog_digest(self, state: dict[str, Any]) -> str:
-        return _canonical_digest(
-            {
+        catalog = {
                 "schema_version": CATALOG_SCHEMA_VERSION,
                 "source_prefix": self._source_prefix,
                 "catalog_path": self._catalog_path,
@@ -193,13 +226,16 @@ class LanternslideService:
                 "omissions": state.get("omissions", []),
                 "complete": bool(state.get("complete")),
             }
-        )
+        if self._source_prefixes != (self._source_prefix,):
+            catalog["source_prefixes"] = self._source_prefixes
+        return _canonical_digest(catalog)
 
     def _new_state(self, paths: tuple[str, ...]) -> dict[str, Any]:
         return {
             "schema_version": CATALOG_SCHEMA_VERSION,
             "scan_id": f"lanternslide_scan_{uuid.uuid4().hex}",
             "source_prefix": self._source_prefix,
+            "source_prefixes": list(self._source_prefixes),
             "catalog_path": self._catalog_path,
             "candidate_paths": list(paths),
             "candidate_manifest_sha256": self._candidate_manifest(paths),
@@ -239,6 +275,8 @@ class LanternslideService:
             if str(item.get("path", "")) in current_set
         ]
         state["candidate_manifest_sha256"] = self._candidate_manifest(current_paths)
+        state["source_prefix"] = self._source_prefix
+        state["source_prefixes"] = list(self._source_prefixes)
         state["complete"] = state["progress_offset"] >= len(state["candidate_paths"])
         state["catalog_sha256"] = self._catalog_digest(state)
         self._write_state(state)
@@ -259,8 +297,18 @@ class LanternslideService:
             omissions=omissions,
         )
 
+    @contextmanager
+    def _scan_lock(self):
+        # Serialize catalog read/reconcile/write across MCP processes sharing a state dir.
+        lock_path = self._state_dir / "lanternslide" / "scan-lock.sqlite3"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(lock_path, timeout=30)) as db:
+            with db:
+                db.execute("BEGIN IMMEDIATE")
+                yield
+
     def scan(self, *, scan_id: str | None = None) -> dict[str, object]:
-        with self._lock:
+        with self._lock, self._scan_lock():
             current_paths = self._candidate_paths()
             current_manifest = self._candidate_manifest(current_paths)
             state = self._load_state()
@@ -342,6 +390,7 @@ class LanternslideService:
                 return {
                     "schema_version": CATALOG_SCHEMA_VERSION,
                     "source_prefix": self._source_prefix,
+                    "source_prefixes": list(self._source_prefixes),
                     "catalog_path": self._catalog_path,
                     "scan_id": None,
                     "complete": False,
@@ -357,6 +406,9 @@ class LanternslideService:
             result.pop("omissions", None)
             result["schema_version"] = CATALOG_SCHEMA_VERSION
             result["source_prefix"] = self._source_prefix
+            result["source_prefixes"] = list(self._source_prefixes)
+            result["catalog_source_prefixes"] = state.get("source_prefixes", [state.get("source_prefix", "")])
+            result["configuration_changed"] = set(result["catalog_source_prefixes"]) != set(self._source_prefixes)
             result["catalog_path"] = self._catalog_path
             return result
 
@@ -364,6 +416,8 @@ class LanternslideService:
         state = self._load_state()
         if state is None or not state.get("complete"):
             raise LanternslideError("Lanternslide catalog is not complete")
+        if set(state.get("source_prefixes", [state.get("source_prefix", "")])) != set(self._source_prefixes):
+            raise LanternslideError("Lanternslide roots changed; scan before using the catalog")
         return state
 
     def find(self, query: str, *, unique_only: bool = False) -> dict[str, object]:
@@ -379,6 +433,79 @@ class LanternslideService:
         if unique_only:
             entries = self._unique_entries(entries)
         return {"query": query, "unique_only": unique_only, "entries": entries}
+
+    def _annotation_db(self) -> sqlite3.Connection:
+        self._annotations_path.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(self._annotations_path, timeout=10)
+        db.execute("CREATE TABLE IF NOT EXISTS annotations (image_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL, tags TEXT NOT NULL)")
+        return db
+
+    @staticmethod
+    def _validate_tags(tags: list[str]) -> list[str]:
+        if not isinstance(tags, list) or len(tags) > 50:
+            raise LanternslideError("Invalid annotation tags")
+        unique: dict[str, str] = {}
+        for tag in tags:
+            if not isinstance(tag, str) or not tag.strip() or len(tag) > 100:
+                raise LanternslideError("Invalid annotation tags")
+            unique.setdefault(tag.strip().casefold(), tag.strip())
+        return list(unique.values())
+
+    def annotate(self, image_id: str, *, title: str, description: str, tags: list[str], expected_revision: int) -> dict[str, Any]:
+        if not isinstance(image_id, str) or len(image_id) != 64 or any(c not in "0123456789abcdef" for c in image_id):
+            raise LanternslideError("Invalid image ID")
+        if isinstance(expected_revision, bool) or not isinstance(expected_revision, int) or expected_revision < 0:
+            raise LanternslideError("Invalid annotation revision")
+        if not isinstance(title, str) or not isinstance(description, str) or len(title) > 300 or len(description) > 8000:
+            raise LanternslideError("Invalid annotation text")
+        normalized_tags = self._validate_tags(tags)
+        if not any(entry["image_id"] == image_id for entry in self._complete_state().get("entries", [])):
+            raise LanternslideError("Unknown catalog image ID")
+        with closing(self._annotation_db()) as db:
+            with db:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute("SELECT revision FROM annotations WHERE image_id = ?", (image_id,)).fetchone()
+                revision = row[0] if row else 0
+                if revision != expected_revision:
+                    raise LanternslideError("Annotation revision conflict")
+                revision += 1
+                db.execute("INSERT OR REPLACE INTO annotations VALUES (?, ?, ?, ?, ?)", (image_id, revision, title, description, json.dumps(normalized_tags, ensure_ascii=False)))
+        return {"image_id": image_id, "revision": revision, "title": title, "description": description, "tags": normalized_tags}
+
+    def search(self, *, query: str = "", tags: list[str] | None = None, offset: int = 0, limit: int = 50) -> dict[str, Any]:
+        if not isinstance(query, str) or len(query) > 300 or isinstance(offset, bool) or not isinstance(offset, int) or offset < 0 or isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise LanternslideError("Invalid search bounds")
+        wanted_tags = {t.casefold() for t in self._validate_tags(tags if tags is not None else [])}
+        state = self._complete_state()
+        annotations: dict[str, dict[str, Any]] = {}
+        if self._annotations_path.exists():
+            with closing(self._annotation_db()) as db:
+                for image_id, revision, title, description, raw_tags in db.execute("SELECT image_id, revision, title, description, tags FROM annotations"):
+                    annotations[image_id] = {"revision": revision, "title": title, "description": description, "tags": json.loads(raw_tags)}
+        wanted = query.strip().casefold()
+        matches = []
+        for entry in state.get("entries", []):
+            annotation = annotations.get(entry["image_id"])
+            fields = [entry["path"]]
+            if annotation:
+                fields.extend([annotation["title"], annotation["description"], *annotation["tags"]])
+            if wanted and not any(wanted in field.casefold() for field in fields):
+                continue
+            if wanted_tags and not wanted_tags.issubset({t.casefold() for t in annotation["tags"]} if annotation else set()):
+                continue
+            matches.append({**entry, "annotation": annotation})
+        page: list[dict[str, Any]] = []
+        used = 1024
+        for entry in matches[offset:offset + limit]:
+            size = len(json.dumps(entry, ensure_ascii=True).encode("utf-8")) + 2
+            if used + size > 128_000:
+                if not page:
+                    raise LanternslideError("One search result exceeds the response byte budget")
+                break
+            page.append(entry)
+            used += size
+        next_offset = offset + len(page)
+        return {"entries": page, "total": len(matches), "next_offset": next_offset if next_offset < len(matches) else None}
 
     @staticmethod
     def _unique_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -496,6 +623,7 @@ class LanternslideService:
                 "omitted_total": len(state.get("omissions", [])),
             }
         ]
+        lines[0]["source_prefixes"] = list(self._source_prefixes)
         lines.extend({"type": "entry", **entry} for entry in entries)
         by_hash: dict[str, list[str]] = defaultdict(list)
         for entry in entries:

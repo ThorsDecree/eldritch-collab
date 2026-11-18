@@ -248,9 +248,12 @@ class ArchiveSource:
             raise ArchiveError("Archive source is not a directory")
         return self.root.resolve(strict=True)
 
-    def _iter_directory_files(self) -> Iterator[tuple[str, Path, int]]:
+    def _iter_directory_files(self, *, strict: bool = False, prefixes: tuple[str, ...] | None = None) -> Iterator[tuple[str, Path, int]]:
         root = self._directory_root()
-        for current, dirnames, filenames in os.walk(root, followlinks=False):
+        def onerror(error: OSError) -> None:
+            raise ArchiveError(f"Cannot enumerate Archive directory: {error}") from error
+
+        for current, dirnames, filenames in os.walk(root, followlinks=False, onerror=onerror if strict else None):
             current_path = Path(current)
             dirnames[:] = [
                 name
@@ -259,6 +262,11 @@ class ArchiveSource:
                 and not self._is_excluded(
                     (current_path / name).relative_to(root).as_posix()
                 )
+                and (prefixes is None or any(
+                    _matches_prefix((current_path / name).relative_to(root).as_posix(), prefix)
+                    or _matches_prefix(prefix, (current_path / name).relative_to(root).as_posix())
+                    for prefix in prefixes
+                ))
             ]
             for filename in filenames:
                 path = current_path / filename
@@ -290,9 +298,9 @@ class ArchiveSource:
             members.append((normalized, info))
         return members
 
-    def all_paths(self) -> tuple[str, ...]:
+    def all_paths(self, *, strict: bool = False, prefixes: tuple[str, ...] | None = None) -> tuple[str, ...]:
         if self.kind == "directory":
-            return tuple(sorted(relative for relative, _, _ in self._iter_directory_files()))
+            return tuple(sorted(relative for relative, _, _ in self._iter_directory_files(strict=strict, prefixes=prefixes)))
         return tuple(sorted(relative for relative, _ in self._zip_members()))
 
     def stats(self) -> ArchiveStats:

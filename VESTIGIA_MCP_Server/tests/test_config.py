@@ -204,3 +204,9 @@ def test_house_mechanic_rejects_non_loopback_env(monkeypatch) -> None:
     monkeypatch.setenv("VESTIGIA_MCP_HOUSE_MECHANIC_HOST", "0.0.0.0")
     with pytest.raises(ValueError, match="loopback"):
         Settings.from_env()
+
+
+def test_lanternslide_multiple_roots_are_configurable(monkeypatch):
+    monkeypatch.setenv("VESTIGIA_MCP_LANTERNSLIDE_SOURCE_PREFIXES", "pics, PerchanceRenders, pics")
+    settings = Settings.from_env()
+    assert set(settings.lanternslide_source_prefixes) == {"pics", "PerchanceRenders"}
