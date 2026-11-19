@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from vestigia.cli import main
 from vestigia.home import initialize_home
 from vestigia.config import load_config
 from vestigia.db import ContinuityDB
 from vestigia.private_messages import PrivateMessageService
+
+pytestmark = pytest.mark.usefixtures("private_message_test_clock")
 
 
 def create_queued_message(home):

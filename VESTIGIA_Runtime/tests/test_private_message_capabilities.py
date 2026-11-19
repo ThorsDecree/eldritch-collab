@@ -11,6 +11,8 @@ from vestigia.private_messages import PrivateMessageService
 from vestigia.providers.fake import FakeProvider
 from vestigia.runtime import CoreRuntime
 
+pytestmark = pytest.mark.usefixtures("private_message_test_clock")
+
 
 def prepared_service(tmp_path):
     home = initialize_home(tmp_path / "home", name="Resident", glyph="🏮")

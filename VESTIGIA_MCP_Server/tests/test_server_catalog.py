@@ -45,6 +45,8 @@ EXPECTED_TOOLS = {
     "lanternslide.status",
     "lanternslide.scan",
     "lanternslide.find",
+    "lanternslide.search",
+    "lanternslide.annotate",
     "lanternslide.deal",
     "lanternslide.contact_sheet",
     "lanternslide.stage_catalog",
@@ -158,6 +160,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
                 "archive.stage_directory",
                 "archive.stage_discard",
                 "lanternslide.scan",
+                "lanternslide.annotate",
                 "lanternslide.stage_catalog",
             }
             direct_writes = {"archive.share_porchlight"}
@@ -389,7 +392,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert identity_result.structured_content["archive"]["live"]["available"] is True
             assert (
                 identity_result.structured_content["capability_registry"]["capability_count"]
-                == 54
+                == 56
             )
 
             glance_result = await client.call_tool("house.glance", {})
@@ -403,7 +406,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert status_result.is_error is False
             assert status_result.structured_content is not None
             assert status_result.structured_content["server"]["version"] == __version__
-            assert status_result.structured_content["policy"]["capability_count"] == 54
+            assert status_result.structured_content["policy"]["capability_count"] == 56
             assert status_result.structured_content["runtime"]["configured"] is False
             assert status_result.structured_content["archive"]["promotion_configured"] is True
             assert (
@@ -621,6 +624,24 @@ def test_wire_lanternslide_scans_deals_sheets_and_stages_catalog(tmp_path: Path)
             assert stage["status"] == "staged"
             assert not (live / "pics" / "Lanternslide" / "catalog.json").exists()
 
+    asyncio.run(exercise())
+
+
+def test_lanternslide_annotations_are_searchable_through_mcp(tmp_path: Path) -> None:
+    live = tmp_path / "live"
+    (live / "pics").mkdir(parents=True)
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(live / "pics" / "one.png")
+    server = create_server(Settings(live_archive_root=live, snapshot_archive_root=None, state_dir=tmp_path / "state", deployment_id="shelf-wire"))
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            await client.call_tool("lanternslide.scan", {})
+            deal = await client.call_tool("lanternslide.deal", {"count": 1, "seed": "shelf"})
+            image_id = deal.structured_content["image_ids"][0]
+            saved = await client.call_tool("lanternslide.annotate", {"image_id": image_id, "title": "Sunroom", "description": "A warm room", "tags": ["Hearth"], "expected_revision": 0})
+            assert saved.is_error is False
+            found = await client.call_tool("lanternslide.search", {"query": "warm", "tags": ["hearth"]})
+            assert found.structured_content["entries"][0]["image_id"] == image_id
     asyncio.run(exercise())
 
 

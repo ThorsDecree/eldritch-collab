@@ -1,4 +1,6 @@
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -47,6 +49,158 @@ def test_scan_resumes_and_content_ids_are_stable(tmp_path: Path) -> None:
     assert again["catalog_sha256"] == second["catalog_sha256"]
     assert service.scan(scan_id=first["scan_id"])["catalog_sha256"] == second["catalog_sha256"]
     assert ids["pics/a.png"] != ids["pics/b.png"]
+
+
+def test_multiple_roots_preserve_existing_scan_and_deduplicate_overlaps(tmp_path: Path) -> None:
+    root, old = _service(tmp_path, batch=1)
+    _write_image(root / "pics/a.png", (1, 2, 3))
+    _write_image(root / "pics/nested/b.png", (4, 5, 6))
+    _write_image(root / "PerchanceRenders/deep/c.png", (7, 8, 9))
+    first = old.scan()
+    service = LanternslideService(ArchiveSource(root), tmp_path / "state", source_prefix="pics", source_prefixes=("pics", "pics/nested", "PerchanceRenders"), scan_batch_max=1)
+    result = service.scan(scan_id=first["scan_id"])
+    while not result["complete"]:
+        result = service.scan(scan_id=first["scan_id"])
+    assert result["candidate_total"] == 3
+    assert {x["path"] for x in result["entries"]} == {"pics/a.png", "pics/nested/b.png", "PerchanceRenders/deep/c.png"}
+    assert result["entries"][1]["image_id"]
+
+
+def test_annotations_survive_rescan_and_can_be_searched_by_tag(tmp_path: Path) -> None:
+    root, service = _service(tmp_path)
+    _write_image(root / "pics/a.png", (1, 2, 3))
+    first = service.scan()
+    image_id = first["entries"][0]["image_id"]
+    saved = service.annotate(image_id, title="The Sunroom", description="A warm room", tags=["Hearth", "Family"], expected_revision=0)
+    assert saved["revision"] == 1
+    with pytest.raises(LanternslideError, match="revision"):
+        service.annotate(image_id, title="stale", description="", tags=[], expected_revision=0)
+    _write_image(root / "pics/new.png", (4, 5, 6))
+    service.scan(scan_id=first["scan_id"])
+    reopened = LanternslideService(ArchiveSource(root), tmp_path / "state")
+    found = reopened.search(query="warm", tags=["hearth"])
+    assert [x["image_id"] for x in found["entries"]] == [image_id]
+    assert found["entries"][0]["annotation"]["title"] == "The Sunroom"
+
+
+def test_changed_root_configuration_requires_reconciliation(tmp_path: Path) -> None:
+    root, old = _service(tmp_path)
+    _write_image(root / "pics/a.png", (1, 2, 3))
+    _write_image(root / "other/b.png", (4, 5, 6))
+    old.scan()
+    expanded = LanternslideService(ArchiveSource(root), tmp_path / "state", source_prefixes=("pics", "other"))
+    assert expanded.status()["configuration_changed"] is True
+    with pytest.raises(LanternslideError, match="roots changed"):
+        expanded.deal(1, "seed")
+    assert expanded.scan()["indexed_total"] == 2
+    assert expanded.status()["configuration_changed"] is False
+
+
+def test_missing_root_does_not_prune_prior_catalog(tmp_path: Path) -> None:
+    root, old = _service(tmp_path)
+    _write_image(root / "pics/a.png", (1, 2, 3))
+    old.scan()
+    expanded = LanternslideService(ArchiveSource(root), tmp_path / "state", source_prefixes=("pics", "missing"))
+    with pytest.raises(LanternslideError, match="root"):
+        expanded.scan()
+    assert old.status()["indexed_total"] == 1
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows case-insensitive filesystem behavior")
+def test_mis_cased_root_does_not_prune_catalog(tmp_path: Path) -> None:
+    root, old = _service(tmp_path)
+    _write_image(root / "pics/a.png", (1, 2, 3))
+    old.scan()
+    changed = LanternslideService(ArchiveSource(root), tmp_path / "state", source_prefixes=("PICS",))
+    with pytest.raises(LanternslideError, match="root"):
+        changed.scan()
+    assert old.status()["indexed_total"] == 1
+
+
+def test_traversal_error_does_not_prune_catalog(tmp_path: Path, monkeypatch) -> None:
+    root, service = _service(tmp_path)
+    _write_image(root / "pics/a.png", (1, 2, 3))
+    service.scan()
+
+    def fail_walk(*args, onerror=None, **kwargs):
+        onerror(PermissionError("directory inaccessible"))
+        return iter(())
+
+    monkeypatch.setattr("vestigia_mcp.adapters.archive.os.walk", fail_walk)
+    with pytest.raises(LanternslideError, match="enumerate"):
+        service.scan()
+    assert service.status()["indexed_total"] == 1
+
+
+def test_unrelated_unreadable_directory_does_not_block_scan(tmp_path: Path, monkeypatch) -> None:
+    root, service = _service(tmp_path)
+    _write_image(root / "pics/a.png", (1, 2, 3))
+    (root / "unrelated").mkdir()
+    import os
+    real_scandir = os.scandir
+
+    def restricted_scandir(path):
+        if Path(path).name == "unrelated":
+            raise PermissionError("unrelated directory inaccessible")
+        return real_scandir(path)
+
+    monkeypatch.setattr("vestigia_mcp.adapters.archive.os.scandir", restricted_scandir)
+    assert service.scan()["indexed_total"] == 1
+
+
+def test_separate_services_serialize_scan_batches(tmp_path: Path) -> None:
+    root, first = _service(tmp_path, batch=1)
+    _write_image(root / "pics/a.png", (1, 2, 3))
+    _write_image(root / "pics/b.png", (4, 5, 6))
+    initial = first.scan()
+    second = LanternslideService(ArchiveSource(root), tmp_path / "state", scan_batch_max=1)
+    entered = threading.Event()
+    release = threading.Event()
+    original = first._candidate_paths
+
+    def paused_paths():
+        entered.set()
+        assert release.wait(5)
+        return original()
+
+    first._candidate_paths = paused_paths
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        one = pool.submit(first.scan, scan_id=initial["scan_id"])
+        assert entered.wait(5)
+        two = pool.submit(second.scan, scan_id=initial["scan_id"])
+        try:
+            assert not two.done()
+        finally:
+            release.set()
+        assert one.result(timeout=10)["complete"] is True
+        assert two.result(timeout=10)["indexed_total"] == 2
+
+
+def test_search_limits_response_bytes_and_can_continue(tmp_path: Path) -> None:
+    root, service = _service(tmp_path)
+    _write_image(root / "pics/a.png", (1, 2, 3))
+    for number in range(30):
+        (root / "pics" / f"copy-{number}.png").write_bytes((root / "pics/a.png").read_bytes())
+    image_id = service.scan()["entries"][0]["image_id"]
+    service.annotate(image_id, title="", description="x" * 8000, tags=[], expected_revision=0)
+    page = service.search(limit=100)
+    assert len(json.dumps(page, ensure_ascii=False).encode("utf-8")) < 200000
+    assert page["next_offset"] == len(page["entries"])
+    assert service.search(offset=page["next_offset"], limit=100)["entries"]
+
+
+def test_annotation_search_pages_and_distinguishes_identical_content(tmp_path: Path) -> None:
+    root, service = _service(tmp_path)
+    _write_image(root / "pics/a.png", (1, 2, 3))
+    (root / "pics/copy.png").write_bytes((root / "pics/a.png").read_bytes())
+    image_id = service.scan()["entries"][0]["image_id"]
+    service.annotate(image_id, title="Shared", description="", tags=["Art", "art"], expected_revision=0)
+    first = service.search(tags=["ART"], limit=1)
+    assert first["total"] == 2
+    assert first["next_offset"] == 1
+    second = service.search(tags=["art"], offset=first["next_offset"], limit=1)
+    assert second["entries"][0]["annotation"]["tags"] == ["Art"]
+    assert second["next_offset"] is None
 
 
 def test_scan_excludes_derived_catalog_and_records_omissions(tmp_path: Path) -> None:

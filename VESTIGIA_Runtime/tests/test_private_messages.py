@@ -5,6 +5,8 @@ import pytest
 from vestigia.db import ContinuityDB
 from vestigia.private_messages import PrivateMessageService
 
+pytestmark = pytest.mark.usefixtures("private_message_test_clock")
+
 
 @pytest.fixture
 def service(tmp_path):

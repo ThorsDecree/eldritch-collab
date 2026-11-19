@@ -218,6 +218,14 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Return a deterministic bounded random deal from the Lanternslide catalog.",
     ),
     Capability(
+        "lanternslide.search", EffectClass.PERCEIVE, Decision.ALLOW,
+        "Search image paths and explicitly authored annotations with bounded results.",
+    ),
+    Capability(
+        "lanternslide.annotate", EffectClass.PREPARE, Decision.ALLOW,
+        "Write a revision-checked annotation to MCP-owned local state.",
+    ),
+    Capability(
         "lanternslide.contact_sheet",
         EffectClass.PERCEIVE,
         Decision.ALLOW,

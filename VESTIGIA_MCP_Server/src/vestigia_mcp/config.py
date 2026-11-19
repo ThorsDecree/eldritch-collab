@@ -147,6 +147,7 @@ class Settings:
     gametable_enabled: bool = False
     gametable_state_dir: Path | None = None
     lanternslide_source_prefix: str = "pics"
+    lanternslide_source_prefixes: tuple[str, ...] | None = None
     lanternslide_catalog_path: str = "pics/Lanternslide/catalog.json"
     lanternslide_scan_batch_max: int = 50
     lanternslide_image_max_bytes: int = 25_000_000
@@ -251,6 +252,11 @@ class Settings:
             gametable_enabled=_bool_env("VESTIGIA_MCP_GAMETABLE_ENABLED"),
             gametable_state_dir=_optional_path("VESTIGIA_MCP_GAMETABLE_STATE_DIR"),
             lanternslide_source_prefix=lanternslide_source_prefix,
+            lanternslide_source_prefixes=(
+                _path_prefix_allowlist("VESTIGIA_MCP_LANTERNSLIDE_SOURCE_PREFIXES")
+                if os.getenv("VESTIGIA_MCP_LANTERNSLIDE_SOURCE_PREFIXES", "").strip()
+                else None
+            ),
             lanternslide_catalog_path=_lanternslide_catalog_path_env(
                 lanternslide_source_prefix
             ),
