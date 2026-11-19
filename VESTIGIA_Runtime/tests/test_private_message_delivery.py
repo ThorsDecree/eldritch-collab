@@ -9,6 +9,8 @@ from vestigia.adapters.discord_adapter import deliver_private_message_once
 from vestigia.db import ContinuityDB
 from vestigia.private_messages import PrivateMessageService
 
+pytestmark = pytest.mark.usefixtures("private_message_test_clock")
+
 
 def queued_message(tmp_path, *, quota=3, body="Exact approved text"):
     db = ContinuityDB(tmp_path / "continuity.db")
