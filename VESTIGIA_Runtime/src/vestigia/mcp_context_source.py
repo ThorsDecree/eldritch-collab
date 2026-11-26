@@ -242,33 +242,7 @@ class VestigiaArchiveMcpSource:
         )
         async with Client(params) as client:
             result = await client.call_tool(name, arguments)
-            text_blocks: list[str] = []
-            image_blocks: list[dict[str, str]] = []
-            for block in result.content:
-                block_type = str(getattr(block, "type", ""))
-                if block_type == "text":
-                    text_blocks.append(str(getattr(block, "text", "")))
-                elif block_type == "image":
-                    image_blocks.append(
-                        {
-                            "data": str(getattr(block, "data", "")),
-                            "mime_type": str(getattr(block, "mime_type", "")),
-                        }
-                    )
-            if result.is_error:
-                detail = "; ".join(item for item in text_blocks if item).strip()
-                raise ContextSourceError(
-                    f"MCP tool {name} returned an error"
-                    + (f": {detail}" if detail else "")
-                )
-            structured = result.structured_content
-            return {
-                "tool": name,
-                "structured_content": (
-                    dict(structured) if isinstance(structured, dict) else None
-                ),
-                "text_blocks": text_blocks,
-                "image_blocks": image_blocks,
+            server_metadata = {
                 "protocol_version": str(client.protocol_version or "") or None,
                 "server_name": (
                     str(client.server_info.name or "") or None
@@ -281,6 +255,36 @@ class VestigiaArchiveMcpSource:
                     else None
                 ),
             }
+
+        text_blocks: list[str] = []
+        image_blocks: list[dict[str, str]] = []
+        for block in result.content:
+            block_type = str(getattr(block, "type", ""))
+            if block_type == "text":
+                text_blocks.append(str(getattr(block, "text", "")))
+            elif block_type == "image":
+                image_blocks.append(
+                    {
+                        "data": str(getattr(block, "data", "")),
+                        "mime_type": str(getattr(block, "mime_type", "")),
+                    }
+                )
+        if result.is_error:
+            detail = "; ".join(item for item in text_blocks if item).strip()
+            raise ContextSourceError(
+                f"MCP tool {name} returned an error"
+                + (f": {detail}" if detail else "")
+            )
+        structured = result.structured_content
+        return {
+            "tool": name,
+            "structured_content": (
+                dict(structured) if isinstance(structured, dict) else None
+            ),
+            "text_blocks": text_blocks,
+            "image_blocks": image_blocks,
+            **server_metadata,
+        }
 
     def _child_env(self) -> dict[str, str]:
         env = {

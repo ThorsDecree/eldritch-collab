@@ -16,6 +16,44 @@ SOURCE = {"type": "string", "enum": ["live", "snapshot"]}
 PATH = {"type": "string", "minLength": 1, "maxLength": 500}
 PREFIX = {"type": "string", "maxLength": 500}
 AFTER = {"type": "string", "enum": ["continue", "finish"]}
+STAGE_ID = {"type": "string", "pattern": "archive_stage_[0-9a-f]{32}"}
+SHA256 = {"type": "string", "pattern": "[0-9a-f]{64}"}
+REASON = {"type": "string", "maxLength": 1000}
+
+
+class _ArchiveWriteSource(VestigiaArchiveMcpSource):
+    def __init__(self, browse_source: VestigiaArchiveMcpSource, prefixes: list[str]) -> None:
+        super().__init__(browse_source.config, browse_source.db, browse_source.source_config)
+        self._prefixes = ",".join(prefixes)
+        self._live_root = self.source_config.live_root.resolve()
+        root_digest = hashlib.sha256(str(self._live_root).encode("utf-8")).hexdigest()
+        self._state_dir = self.home / "traces" / f"mcpw-{root_digest[:20]}"
+
+    def _child_env(self) -> dict[str, str]:
+        return {
+            "VESTIGIA_MCP_LIVE_ARCHIVE_ROOT": str(self._live_root),
+            "VESTIGIA_MCP_STATE_DIR": str(self._state_dir),
+            "VESTIGIA_MCP_DEPLOYMENT_ID": f"{self.resident_id}-runtime-archive-writes",
+            "VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES": self._prefixes,
+        }
+
+
+def _authorize_archive_write(
+    _spec: CapabilitySpec, _payload: dict[str, Any], context: dict[str, Any],
+) -> None:
+    if context.get("invocation") != "conversation" or not context.get("turn_id"):
+        raise PermissionError("Archive write tools require a private conversation turn")
+    interface = context.get("interface")
+    target = context.get("delivery_target")
+    if interface in {"cli", "web"} or (
+        interface == "discord"
+        and isinstance(target, dict)
+        and target.get("kind") == "discord_dm"
+        and target.get("id")
+        and not context.get("is_group_dm")
+    ):
+        return
+    raise PermissionError("Archive write tools require the local CLI, web UI, or a one-to-one Discord DM")
 
 
 def _payload(
@@ -150,6 +188,9 @@ def _register_one(
     example: dict[str, Any],
     media: bool = False,
     bound_text: bool = False,
+    archive_write_tool: bool = False,
+    write_effects: tuple[str, ...] = (),
+    next_step: str = "",
 ) -> None:
     properties = {"action": {"type": "string", "const": name}, **fields, "after": AFTER}
 
@@ -174,9 +215,13 @@ def _register_one(
             )
             maximum = int(arguments.pop("max_chars", default_maximum))
         result = _payload(source, server_tool, arguments)
+        if archive_write_tool:
+            result["mcp"]["archive_mutated"] = result.get("canonical_changed") is True
+            if next_step:
+                result["next_step"] = next_step
         return _bound_text_content(result, maximum) if maximum is not None else result
 
-    effects = ("filesystem:read", "process:spawn_local")
+    effects = ("filesystem:read", "process:spawn_local", *write_effects)
     if media:
         effects += ("filesystem:write_private_image_cache", "database:audit_write")
     house.registry.register(
@@ -185,7 +230,7 @@ def _register_one(
             description=description,
             effects=effects,
             cost_class="free",
-            confirmation="none",
+            confirmation="resident_authenticated_doorway" if archive_write_tool else "none",
             default_after="continue",
             result_visibility="resident_private",
             config_key="context_sources.mcp_archive.enabled",
@@ -196,13 +241,70 @@ def _register_one(
                 required=("action", *required),
             ),
             example_envelopes=({"action": name, **example, "after": "continue"},),
-            next_step=(
+            next_step=next_step or (
                 "Inspect the returned private image_id with image.inspect."
                 if media
                 else "Use another mcp.archive capability to continue bounded Archive browsing."
             ),
         ),
         handler,
+        authorizer=_authorize_archive_write if archive_write_tool else None,
+    )
+
+
+def _register_write_tools(house: Any, source: _ArchiveWriteSource) -> None:
+    stage_example = {"stage_id": "archive_stage_" + "0" * 32}
+    common = {"archive_write_tool": True}
+    _register_one(
+        house, source, name="mcp.archive.write_capabilities", server_tool="archive.write_capabilities",
+        description="Inspect the operator's live Archive write grants, file types, and byte ceiling.",
+        fields={}, required=(), example={}, **common,
+    )
+    _register_one(
+        house, source, name="mcp.archive.stage_text", server_tool="archive.stage_text",
+        description="Stage a UTF-8 file create or replacement under a granted live Archive prefix.",
+        fields={
+            "path": PATH,
+            "content": {"type": "string"},
+            "expected_base_sha256": {"type": "string", "pattern": "absent|[0-9a-f]{64}"},
+            "reason": REASON,
+        },
+        required=("path", "content", "expected_base_sha256"),
+        example={"path": "Notes/example.md", "content": "# Example\n", "expected_base_sha256": "absent"},
+        write_effects=("filesystem:write_mcp_stage",),
+        next_step="Use mcp.archive.stage_inspect to review, then mcp.archive.promote with the exact stage_id and proposal_sha256.",
+        **common,
+    )
+    _register_one(
+        house, source, name="mcp.archive.stage_list", server_tool="archive.stage_list",
+        description="List this Runtime's saved Archive proposal metadata.",
+        fields={
+            "status": {"type": "string", "enum": ["staged", "promoted", "discarded", "all"]},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+        },
+        required=("limit",), example={"status": "staged", "limit": 10}, **common,
+    )
+    _register_one(
+        house, source, name="mcp.archive.stage_inspect", server_tool="archive.stage_inspect",
+        description="Inspect a saved proposal's hashes, status, and current validation.",
+        fields={"stage_id": STAGE_ID}, required=("stage_id",), example=stage_example, **common,
+    )
+    _register_one(
+        house, source, name="mcp.archive.promote", server_tool="archive.promote",
+        description="Apply the exact staged proposal to the live Archive after MCP validates its prefix and base.",
+        fields={"stage_id": STAGE_ID, "proposal_sha256": SHA256},
+        required=("stage_id", "proposal_sha256"),
+        example={**stage_example, "proposal_sha256": "0" * 64},
+        write_effects=("filesystem:write_live_archive", "filesystem:write_mcp_stage"),
+        next_step="Read the live file with mcp.archive.read_text and compare its content_sha256 to result_sha256.",
+        **common,
+    )
+    _register_one(
+        house, source, name="mcp.archive.stage_discard", server_tool="archive.stage_discard",
+        description="Discard a pending proposal and retain its receipt.",
+        fields={"stage_id": STAGE_ID, "reason": REASON},
+        required=("stage_id",), example=stage_example,
+        write_effects=("filesystem:write_mcp_stage",), **common,
     )
 
 
@@ -302,6 +404,10 @@ def _register(house: Any) -> None:
         required=("path",),
         example={"path": "00_Bootloader/house_index.json"},
     )
+
+    write_prefixes = house.config.get("context_sources.mcp_archive.write_prefixes", [])
+    if source is not None and write_prefixes:
+        _register_write_tools(house, _ArchiveWriteSource(source, write_prefixes))
 
 
 def register_composition() -> None:

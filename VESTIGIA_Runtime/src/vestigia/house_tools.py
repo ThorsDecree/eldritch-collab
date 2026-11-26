@@ -1542,7 +1542,7 @@ class HousePort:
             for key in (
                 "path", "scope", "reference", "object_id", "image_id", "memory_id",
                 "note_id", "receipt_id", "bookmark_id", "batch_id", "job_id",
-                "draft_id", "bell_id", "action_name", "target", "resident_id",
+                "draft_id", "bell_id", "action_name", "target", "resident_id", "stage_id",
             )
             if payload.get(key) is not None
         }
