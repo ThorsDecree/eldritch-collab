@@ -231,6 +231,9 @@ class McpArchiveToolTests(unittest.TestCase):
                 format="PNG",
             )
 
+            status_result = house.dispatch(
+                {"action": "mcp.archive.status"}, turn_id="turn_mcp_real_status",
+            )
             text_result = house.dispatch(
                 {
                     "action": "mcp.archive.read_text",
@@ -248,6 +251,8 @@ class McpArchiveToolTests(unittest.TestCase):
                 turn_id="turn_mcp_real_media",
             )
 
+        self.assertTrue(status_result["ok"])
+        self.assertEqual(status_result["live"]["file_count"], 2)
         self.assertTrue(text_result["ok"])
         self.assertEqual(
             text_result["content"].splitlines(),

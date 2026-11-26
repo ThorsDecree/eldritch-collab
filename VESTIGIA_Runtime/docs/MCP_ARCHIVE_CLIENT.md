@@ -12,6 +12,13 @@ credentials and the Runtime home are not forwarded to the child process.
 
 ## Install
 
+The Windows `Start VESTIGIA.cmd` launcher checks the Runtime virtual
+environment each time it starts. With the sibling MCP Server checkout present,
+it installs or repairs both the `mcp-context` extra and the local server
+package. Use `Start VESTIGIA.cmd --prepare` to prepare the environment without
+starting an interface. The repository's [Windows suite launcher](../../README.md#start-a-windows-pilot)
+can prepare both environments and start the Runtime and tunnel together.
+
 From `VESTIGIA_Runtime`, using Runtime's virtual environment:
 
 ```powershell

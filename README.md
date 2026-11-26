@@ -26,6 +26,40 @@ actions visible and bounded.
   multi-resident Discord runtime; the MCP Server can connect to it through an
   explicitly configured loopback interface.
 
+## Start a Windows pilot
+
+From the root of the pilot checkout, prepare the two local virtual environments
+before creating or updating the pilot tunnel profile.
+
+```powershell
+.\Start-VESTIGIA-Suite.ps1 -PrepareOnly
+```
+
+Use the pilot MCP Server's `.venv\Scripts\vestigia-mcp.exe` as the stdio
+command in its existing tunnel profile. The checked-in [tunnel launcher](VESTIGIA_MCP_Server/README.md#one-click-secure-mcp-tunnel-launcher)
+loads its ignored local sidecar. For combined startup it expects explicit
+`VESTIGIA_MCP_LIVE_ARCHIVE_ROOT`, `VESTIGIA_MCP_SNAPSHOT_ARCHIVE_ROOT`,
+`VESTIGIA_MCP_STATE_DIR`, and `VESTIGIA_MCP_DEPLOYMENT_ID` settings for the
+pilot. Configure any pilot write grants in the sidecar as well.
+
+```powershell
+.\Start-VESTIGIA-Suite.ps1 -Profile Vex-local `
+  -RuntimeHome .\VESTIGIA_Runtime\homes\vex `
+  -RuntimeEnvFile .\VESTIGIA_Runtime\.env -Mode Discord
+```
+
+The launcher opens the tunnel in its own console and runs the selected Runtime
+interface in the current session. Omit `-Mode Discord` for the local web UI on
+port 8767, or supply `-WebPort` to select another port. Close each service
+through its own console. The launcher expects an existing `home.yaml` and
+Runtime environment file.
+
+To use an operator-maintained combined Porchlight launcher, pass
+`-McpLauncher .\VESTIGIA_MCP_Server\Start-VESTIGIA-MCP-Porchlight.bat` with
+the same arguments. The custom launcher receives the selected profile and
+Runtime paths in its environment. Check its sidecar and its own routing
+settings before using it, since those settings are managed by that launcher.
+
 ## Current development and release status
 
 The Runtime package on development `main` is **`0.8.0.dev0`**. This is a
