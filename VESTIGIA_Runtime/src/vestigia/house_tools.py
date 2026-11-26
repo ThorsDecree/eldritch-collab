@@ -1546,6 +1546,8 @@ class HousePort:
             )
             if payload.get(key) is not None
         }
+        if action == "mcp.call" and isinstance(payload.get("tool"), str):
+            target["tool"] = payload["tool"][:128]
         try:
             result, spec, after = self.registry.dispatch(
                 clean,
@@ -1591,14 +1593,16 @@ class HousePort:
                         "error_type": type(index_exc).__name__,
                         "error": str(index_exc)[:300],
                     }
+            audit_response = response
+            if action == "memory.experiment":
+                audit_response = self._memory_experiment_audit_projection(response)
+            elif action == "mcp.call":
+                audit_response = {key: value for key, value in response.items() if key != "mcp_result"}
+                audit_response["result_retention"] = "metadata_and_private_image_ids"
             receipt_id = self.legible.record_receipt(
                 action=action,
                 status="succeeded",
-                result=(
-                    self._memory_experiment_audit_projection(response)
-                    if action == "memory.experiment"
-                    else response
-                ),
+                result=audit_response,
                 turn_id=turn_id,
                 source_envelope=source_envelope,
                 target=target,
@@ -1614,11 +1618,7 @@ class HousePort:
                 action,
                 str(payload.get("path") or payload.get("memory_id") or ""),
                 "ok",
-                (
-                    self._memory_experiment_audit_projection(response)
-                    if action == "memory.experiment"
-                    else response
-                ),
+                {**audit_response, "receipt_id": receipt_id},
             )
             return response
         except Exception as exc:

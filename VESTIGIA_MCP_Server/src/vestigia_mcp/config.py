@@ -8,6 +8,59 @@ from .adapters.archive import normalize_relative_path
 from .house_mechanic import DevActionFilter, parse_dev_actions
 
 
+def load_deployment_env(path: Path) -> dict[str, str]:
+    """Read an explicit standalone deployment without shell or variable expansion."""
+    environment = {"VESTIGIA_MCP_GAMETABLE_ENABLED": "1"}
+    for number, raw in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        key = key.strip()
+        if not separator or not key.startswith("VESTIGIA_MCP_") or not key.isidentifier():
+            raise ValueError(f"Expected a VESTIGIA_MCP_ setting at {path}:{number}")
+        value = value.strip()
+        if len(value) >= 2 and value[0] in {"'", '"'} and value[0] == value[-1]:
+            value = value[1:-1]
+        environment[key] = value
+    for required_path in (
+        "VESTIGIA_MCP_LIVE_ARCHIVE_ROOT",
+        "VESTIGIA_MCP_STATE_DIR",
+    ):
+        if not Path(environment.get(required_path, "")).is_absolute():
+            raise ValueError(f"{required_path} must be explicit and absolute in {path}")
+    if not environment.get("VESTIGIA_MCP_DEPLOYMENT_ID", "").strip():
+        raise ValueError(f"VESTIGIA_MCP_DEPLOYMENT_ID is required in {path}")
+    for optional_path in (
+        "VESTIGIA_MCP_SNAPSHOT_ARCHIVE_ROOT",
+        "VESTIGIA_MCP_RUNTIME_HOME",
+        "VESTIGIA_MCP_RUNTIME_ENV_FILE",
+        "VESTIGIA_MCP_MOUNTS_FILE",
+        "VESTIGIA_MCP_RUNTIMES_FILE",
+        "VESTIGIA_MCP_GAMETABLE_STATE_DIR",
+        "VESTIGIA_MCP_PORCHLIGHT_BRIDGE_TOKEN_PATH",
+        "VESTIGIA_MCP_DAEMON_BRIDGE_TOKEN_PATH",
+        "VESTIGIA_MCP_HOUSE_MECHANIC_TOKEN_PATH",
+    ):
+        value = environment.get(optional_path, "")
+        if value and not Path(value).is_absolute():
+            raise ValueError(f"{optional_path} must be absolute in {path}")
+    live = Path(environment["VESTIGIA_MCP_LIVE_ARCHIVE_ROOT"]).resolve(strict=True)
+    state = Path(environment["VESTIGIA_MCP_STATE_DIR"]).resolve()
+    snapshot = environment.get("VESTIGIA_MCP_SNAPSHOT_ARCHIVE_ROOT")
+    roots = [live]
+    if snapshot:
+        roots.append(Path(snapshot).resolve(strict=True))
+    gametable_state = Path(environment.get("VESTIGIA_MCP_GAMETABLE_STATE_DIR") or state).resolve()
+    if not live.is_dir() or any(
+        directory.is_relative_to(root)
+        for root in roots
+        for directory in (state, gametable_state)
+    ):
+        raise ValueError("A deployment needs a live Archive directory and state outside its Archive sources")
+    return environment
+
+
 def _optional_path(name: str) -> Path | None:
     raw = os.getenv(name, "").strip()
     return Path(raw).expanduser() if raw else None

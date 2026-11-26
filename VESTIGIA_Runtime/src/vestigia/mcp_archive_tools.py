@@ -10,6 +10,7 @@ from typing import Any
 from .capabilities import CapabilitySpec, object_schema
 from .composition import register_capability_installer
 from .mcp_context_source import ContextSourceError, VestigiaArchiveMcpSource, _factory
+from .mcp_deployment_tools import register_deployment_tools, require_private_mcp_turn
 
 
 SOURCE = {"type": "string", "enum": ["live", "snapshot"]}
@@ -36,24 +37,6 @@ class _ArchiveWriteSource(VestigiaArchiveMcpSource):
             "VESTIGIA_MCP_DEPLOYMENT_ID": f"{self.resident_id}-runtime-archive-writes",
             "VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES": self._prefixes,
         }
-
-
-def _authorize_archive_write(
-    _spec: CapabilitySpec, _payload: dict[str, Any], context: dict[str, Any],
-) -> None:
-    if context.get("invocation") != "conversation" or not context.get("turn_id"):
-        raise PermissionError("Archive write tools require a private conversation turn")
-    interface = context.get("interface")
-    target = context.get("delivery_target")
-    if interface in {"cli", "web"} or (
-        interface == "discord"
-        and isinstance(target, dict)
-        and target.get("kind") == "discord_dm"
-        and target.get("id")
-        and not context.get("is_group_dm")
-    ):
-        return
-    raise PermissionError("Archive write tools require the local CLI, web UI, or a one-to-one Discord DM")
 
 
 def _payload(
@@ -248,7 +231,7 @@ def _register_one(
             ),
         ),
         handler,
-        authorizer=_authorize_archive_write if archive_write_tool else None,
+        authorizer=require_private_mcp_turn if archive_write_tool else None,
     )
 
 
@@ -310,6 +293,7 @@ def _register_write_tools(house: Any, source: _ArchiveWriteSource) -> None:
 
 def _register(house: Any) -> None:
     source = _factory(house.config, house.db)
+    register_deployment_tools(house)
 
     _register_one(
         house,
