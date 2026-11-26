@@ -116,11 +116,9 @@ class CoreRuntime:
         )
         self.assembler = ContextAssembler(config, self.db)
         self.counter = TokenCounter(str(config.get("models.default")))
-        if provider is not None:
-            self.provider = provider
-        else:
-            self.provider = build_provider(config, fake=fake)
-        self.provider = ReceiptProvider(self.provider, self.home)
+        if provider is None:
+            provider = build_provider(config, fake=fake)
+        self.provider = ReceiptProvider(provider, self.home)
         self.house.memory_experiments = MemoryExperimentService(
             self.assembler,
             self.db,
@@ -128,7 +126,7 @@ class CoreRuntime:
             self.home,
         )
         self.house.bind_runtime_connections(
-            provider=self.provider,
+            provider=provider,
             context_sources=self.assembler.context_sources,
         )
 
