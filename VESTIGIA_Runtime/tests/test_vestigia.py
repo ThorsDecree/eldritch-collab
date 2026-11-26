@@ -393,6 +393,7 @@ class ProviderAdapterTests(HomeCase):
                 return types.SimpleNamespace(
                     output_text="Provider present.",
                     id="response-1",
+                    model="gpt-served-version",
                     usage={"input_tokens": 10},
                 )
 
@@ -414,6 +415,8 @@ class ProviderAdapterTests(HomeCase):
         self.assertEqual("gpt-5.6", captured["model"])
         self.assertEqual({"effort": "medium"}, captured["reasoning"])
         self.assertEqual("Provider present.", reply.text)
+        self.assertEqual("gpt-5.6", reply.model)
+        self.assertEqual("gpt-served-version", reply.reported_model)
 
     def test_image_adapter_supports_generation_and_multiple_reference_edits(self) -> None:
         calls = []
