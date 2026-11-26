@@ -598,7 +598,7 @@ def _chat_middleware(
             response_prepared=None,
         )
         raise
-    prepared = bool(
+    prepared = not result.model_approval_receipt_id and bool(
         result.text or result.outbound_attachments or result.outbound_reactions
     )
     complete_wake_receipt(

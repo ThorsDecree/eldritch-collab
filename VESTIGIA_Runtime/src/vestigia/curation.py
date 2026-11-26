@@ -504,9 +504,10 @@ class Curator:
             self.fail_batch(batch_id, exc)
             raise
 
-    def fail_batch(self, batch_id: str, error: Exception) -> None:
-        """Make a failed private pass retryable without losing transcript coverage."""
+    def fail_batch(self, batch_id: str, error: Exception, *, retryable: bool = True) -> None:
+        """Record a failed private pass and rewind coverage only for retryable failures."""
         now = utc_now_iso()
+        status = "failed_retryable" if retryable else "model_approval_required"
         with self.db.connect() as connection:
             batch = connection.execute(
                 """
@@ -515,7 +516,9 @@ class Curator:
                 """,
                 (batch_id, self.resident_id, self.room_id),
             ).fetchone()
-            if not batch or str(batch["status"]) in {"claimed", "failed_retryable"}:
+            if not batch or str(batch["status"]) in {
+                "claimed", "failed_retryable", "model_approval_required",
+            }:
                 return
             turn_ids = json.loads(str(batch["turn_ids_json"]))
             rowids = []
@@ -541,30 +544,31 @@ class Curator:
             connection.execute(
                 """
                 UPDATE curation_batches
-                SET status='failed_retryable', resolved_at=? WHERE id=?
+                SET status=?, resolved_at=? WHERE id=?
                 """,
-                (now, batch_id),
+                (status, now, batch_id),
             )
             connection.execute(
                 """
                 UPDATE curation_state
                 SET eligible_exchanges=0,
-                    last_considered_turn_rowid=MIN(last_considered_turn_rowid, ?),
+                    last_considered_turn_rowid=CASE WHEN ?
+                        THEN MIN(last_considered_turn_rowid, ?) ELSE last_considered_turn_rowid END,
                     updated_at=?
                 WHERE resident_id=? AND room_id=?
                 """,
-                (rewind_to, now, self.resident_id, self.room_id),
+                (retryable, rewind_to, now, self.resident_id, self.room_id),
             )
             self._insert_event(
                 connection,
                 batch_id=batch_id,
                 draft_id=None,
                 event_type="private_pass_failed",
-                status="failed_retryable",
+                status=status,
                 payload={
                     "error_type": type(error).__name__,
                     "error_hash": sha256_text(str(error)),
-                    "transcript_coverage_rewound": bool(rowids),
+                    "transcript_coverage_rewound": retryable and bool(rowids),
                 },
                 now=now,
             )

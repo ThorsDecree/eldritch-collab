@@ -541,6 +541,17 @@ def run_discord(
                 room_id=runtime.room_id,
             )
             result = await asyncio.to_thread(runtime.chat, normalized)
+            if result.model_approval_receipt_id:
+                bell_service.event(
+                    bell.id,
+                    "model_approval_required",
+                    "blocked",
+                    payload={
+                        "turn_id": result.turn_id,
+                        "receipt_id": result.model_approval_receipt_id,
+                    },
+                )
+                return
             if result.suppressed:
                 bell_service.event(
                     bell.id, "runtime_suppressed", "deferred",
@@ -1132,6 +1143,9 @@ def run_discord(
                 listening_event_id,
                 status="runtime_suppressed",
             )
+            return
+        if result.model_approval_receipt_id:
+            await message.reply(result.text, mention_author=False)
             return
         visible, controls = apply_resident_controls(
             result.text,

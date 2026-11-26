@@ -8,6 +8,7 @@ from typing import Any
 
 from .context import ContextAssembler
 from .db import ContinuityDB
+from .model_approval import ModelApprovalGate, ModelApprovalRequired
 from .models import ContextAssembly, ProviderRequest
 from .providers.base import Provider
 from .utils import atomic_write_json, new_id, sha256_text, stable_json, utc_now_iso
@@ -22,12 +23,15 @@ class MemoryExperimentService:
         db: ContinuityDB,
         provider: Provider,
         home: Path,
+        *,
+        model_approval: ModelApprovalGate | None = None,
     ) -> None:
         self.assembler = assembler
         self.db = db
         self.provider = provider
         self.home = Path(home).resolve()
         self.experiments_path = self.home / "traces" / "experiments"
+        self.model_approval = model_approval
 
     def dispatch(self, payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         mode = str(payload.get("mode") or "run").strip().lower()
@@ -121,6 +125,14 @@ class MemoryExperimentService:
                 )
                 try:
                     reply = self.provider.complete(request)
+                    if self.model_approval is not None:
+                        self.model_approval.check(
+                            reply,
+                            route=model_route,
+                            turn_id=assembly.turn_id,
+                            invocation="memory_experiment",
+                            call_index=len(arms),
+                        )
                     arm = {
                         "repetition": repetition,
                         "arm": arm_name,
@@ -132,6 +144,8 @@ class MemoryExperimentService:
                         "response_hash": sha256_text(reply.text),
                         "text": reply.text,
                     }
+                except ModelApprovalRequired:
+                    raise
                 except Exception as exc:
                     # Provider exception messages can echo request data; persist only
                     # the error class and make no automatic retry.
