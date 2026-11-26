@@ -9,6 +9,7 @@ import unittest
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
+from zipfile import ZipFile
 
 from PIL import Image
 
@@ -27,9 +28,11 @@ def _mcp_integration_available() -> bool:
 
 
 class McpArchiveToolTests(unittest.TestCase):
-    def _house(self, root: Path, *, enabled: bool = True) -> HousePort:
+    def _house(
+        self, root: Path, *, enabled: bool = True, write_prefixes: str = "", snapshot: Path | None = None,
+    ) -> HousePort:
         archive = root / "archive"
-        archive.mkdir()
+        archive.mkdir(parents=True)
         home = root / "home"
         home.mkdir()
         (home / "home.yaml").write_text(
@@ -55,6 +58,8 @@ class McpArchiveToolTests(unittest.TestCase):
             {
                 "VESTIGIA_CONTEXT_MCP_ENABLED": "",
                 "VESTIGIA_CONTEXT_MCP_LIVE_ARCHIVE_ROOT": "",
+                "VESTIGIA_CONTEXT_MCP_SNAPSHOT_ARCHIVE_ROOT": str(snapshot) if snapshot else "",
+                "VESTIGIA_CONTEXT_MCP_WRITE_PREFIXES": write_prefixes,
             },
             clear=False,
         ):
@@ -64,6 +69,58 @@ class McpArchiveToolTests(unittest.TestCase):
         (home / "traces").mkdir(exist_ok=True)
         images = ImageService(config, db, fake=True)
         return HousePort(config, db, image_service=images)
+
+    def test_write_grant_is_explicit_and_separate_from_tunnel_and_browse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {"VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES": "House", "OPENAI_API_KEY": "synthetic-key"},
+        ):
+            root = Path(tmp)
+            read_only = self._house(root / "read_only")
+            self.assertNotIn("mcp.archive.promote", {item["name"] for item in read_only.registry.describe()})
+            house = self._house(root / "opted_in", write_prefixes="Vex, Notes")
+            with patch.object(VestigiaArchiveMcpSource, "call_tool", autospec=True) as call:
+                call.return_value = {"structured_content": {}}
+                house.dispatch({"action": "mcp.archive.status"})
+                house.dispatch(
+                    {"action": "mcp.archive.write_capabilities"},
+                    turn_id="turn_grants",
+                    context={"invocation": "conversation", "interface": "web"},
+                )
+
+        browse, write = (entry.args[0]._child_env() for entry in call.call_args_list)
+        self.assertNotIn("VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES", browse)
+        self.assertEqual(write["VESTIGIA_MCP_ARCHIVE_WRITE_PREFIXES"], "Vex,Notes")
+        self.assertNotEqual(browse["VESTIGIA_MCP_STATE_DIR"], write["VESTIGIA_MCP_STATE_DIR"])
+        self.assertNotIn("OPENAI_API_KEY", write)
+        self.assertNotIn("VESTIGIA_MCP_SNAPSHOT_ARCHIVE_ROOT", write)
+
+    def test_archive_write_rejects_untrusted_turns_before_mcp(self) -> None:
+        dm = {"kind": "discord_dm", "id": "test-dm"}
+        conversation = {"invocation": "conversation", "interface": "discord", "delivery_target": dm}
+        blocked_contexts = [
+            {},
+            {"invocation": "conversation", "interface": "bell"},
+            {"invocation": "private_curation", "interface": "curation"},
+            {**conversation, "is_group_dm": True},
+            {**conversation, "delivery_target": {"kind": "discord_channel", "id": "test-channel"}},
+        ]
+        payload = {
+            "action": "mcp.archive.promote",
+            "stage_id": "archive_stage_" + "a" * 32,
+            "proposal_sha256": "a" * 64,
+        }
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            VestigiaArchiveMcpSource, "call_tool",
+        ) as call:
+            house = self._house(Path(tmp), write_prefixes="Vex")
+            for context in blocked_contexts:
+                with self.subTest(context=context), self.assertRaises(PermissionError):
+                    house.dispatch(payload, turn_id="turn_denied", context=context)
+            with self.assertRaises(PermissionError):
+                house.dispatch(payload, context=conversation)
+            self.assertNotIn("mcp.archive.promote", house.registry.forgeable_names())
+            call.assert_not_called()
 
     def test_archive_capabilities_are_discoverable_and_config_gated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -263,6 +320,113 @@ class McpArchiveToolTests(unittest.TestCase):
         self.assertTrue(media_result["image_id"].startswith("img_"))
         self.assertGreater(media_result["size"], 0)
         self.assertEqual(media_result["mcp"]["tool"], "archive.read_media")
+
+    @unittest.skipUnless(
+        _mcp_integration_available(),
+        "requires optional mcp-context dependency and installed VESTIGIA MCP server",
+    )
+    def test_real_stdio_stages_promotes_and_reads_back_live_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = root / "snapshot.zip"
+            with ZipFile(snapshot, "w") as archived:
+                archived.writestr("Vex/canary.md", "Snapshot baseline\n")
+            snapshot_hash = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+            house = self._house(root, write_prefixes="Vex", snapshot=snapshot)
+            archive = root / "archive"
+            (archive / "Vex").mkdir()
+            (archive / "VexOther").mkdir()
+            target = archive / "Vex" / "canary.md"
+            discord_dm = {
+                "interface": "discord",
+                "invocation": "conversation",
+                "delivery_target": {"kind": "discord_dm", "id": "test-dm"},
+            }
+            create = {
+                "action": "mcp.archive.stage_text",
+                "path": "Vex/canary.md",
+                "content": "Synthetic canary\n",
+                "expected_base_sha256": "absent",
+            }
+            with self.assertRaisesRegex(RuntimeError, "outside configured canonical write prefixes"):
+                house.dispatch({**create, "path": "VexOther/blocked.md"}, turn_id="denied", context=discord_dm)
+            staged = house.dispatch(create, turn_id="stage_create", context=discord_dm)
+            self.assertFalse(target.exists())
+            self.assertFalse(staged["mcp"]["archive_mutated"])
+            self.assertNotIn("content", staged)
+
+            home = root / "home"
+            restarted = HousePort(house.config, ContinuityDB(home / "memory" / "continuity.db"))
+            stage_id = staged["stage_id"]
+            pending = restarted.dispatch(
+                {"action": "mcp.archive.stage_list", "limit": 10},
+                turn_id="list_pending", context=discord_dm,
+            )
+            self.assertEqual([item["stage_id"] for item in pending["stages"]], [stage_id])
+            inspected = restarted.dispatch(
+                {"action": "mcp.archive.stage_inspect", "stage_id": stage_id},
+                turn_id="inspect", context=discord_dm,
+            )
+            self.assertTrue(inspected["validation"]["ready"])
+            promote = {
+                "action": "mcp.archive.promote",
+                "stage_id": stage_id,
+                "proposal_sha256": inspected["proposal_sha256"],
+            }
+            with self.assertRaisesRegex(RuntimeError, "Proposal digest does not match"):
+                restarted.dispatch({**promote, "proposal_sha256": "0" * 64}, turn_id="bad_digest", context=discord_dm)
+            committed = restarted.dispatch(promote, turn_id="promote_create", context=discord_dm)
+            self.assertTrue(committed["mcp"]["archive_mutated"])
+            self.assertEqual(target.read_bytes(), b"Synthetic canary\n")
+            receipt = restarted.legible.inspect_receipt(committed["receipt_id"])
+            self.assertEqual(receipt["status"], "succeeded")
+            self.assertEqual(receipt["target"]["stage_id"], stage_id)
+            self.assertEqual(receipt["result"]["result_sha256"], committed["result_sha256"])
+            retried = restarted.dispatch(promote, turn_id="retry_create", context=discord_dm)
+            self.assertTrue(retried["already_promoted"])
+            self.assertFalse(retried["mcp"]["archive_mutated"])
+
+            read = {"action": "mcp.archive.read_text", "source": "live", "path": "Vex/canary.md"}
+            initial = restarted.dispatch(read, turn_id="read_create")
+            self.assertEqual(initial["content_sha256"], committed["result_sha256"])
+            replacement = restarted.dispatch(
+                {**create, "content": "Authorized edit\n", "expected_base_sha256": initial["content_sha256"]},
+                turn_id="stage_edit", context=discord_dm,
+            )
+            target.write_bytes(b"Concurrent edit\n")
+            promote_edit = {
+                **promote,
+                "stage_id": replacement["stage_id"],
+                "proposal_sha256": replacement["proposal_sha256"],
+            }
+            with self.assertRaisesRegex(RuntimeError, "changed after staging"):
+                restarted.dispatch(promote_edit, turn_id="stale", context=discord_dm)
+            self.assertEqual(target.read_bytes(), b"Concurrent edit\n")
+            discarded = restarted.dispatch(
+                {"action": "mcp.archive.stage_discard", "stage_id": replacement["stage_id"]},
+                turn_id="discard_stale", context=discord_dm,
+            )
+            self.assertEqual(discarded["status"], "discarded")
+            replacement = restarted.dispatch(
+                {
+                    **create,
+                    "content": "Authorized edit\n",
+                    "expected_base_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                },
+                turn_id="restage_edit", context=discord_dm,
+            )
+            edited = restarted.dispatch(
+                {**promote_edit, "stage_id": replacement["stage_id"], "proposal_sha256": replacement["proposal_sha256"]},
+                turn_id="promote_edit", context=discord_dm,
+            )
+            final = restarted.dispatch(read, turn_id="read_edit")
+            self.assertEqual(final["content"], "Authorized edit\n")
+            self.assertEqual(final["content_sha256"], edited["result_sha256"])
+            self.assertEqual(final["content_sha256"], hashlib.sha256(target.read_bytes()).hexdigest())
+            self.assertEqual(list((archive / "VexOther").iterdir()), [])
+            unchanged = restarted.dispatch({**read, "source": "snapshot"}, turn_id="read_snapshot")
+            self.assertEqual(unchanged["content"], "Snapshot baseline\n")
+            self.assertEqual(hashlib.sha256(snapshot.read_bytes()).hexdigest(), snapshot_hash)
 
 
 if __name__ == "__main__":

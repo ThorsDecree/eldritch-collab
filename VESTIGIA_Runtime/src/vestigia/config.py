@@ -86,6 +86,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "anchor_chars": 12000,
             "timeout_seconds": 30,
             "archive_text_max_bytes": 1000000,
+            "write_prefixes": [],
         },
     },
     "bridge_consult": {
@@ -316,6 +317,7 @@ ENV_MAP: dict[str, tuple[str, Callable[[str], Any]]] = {
     "VESTIGIA_CONTEXT_MCP_ANCHOR_CHARS": ("context_sources.mcp_archive.anchor_chars", _as_int),
     "VESTIGIA_CONTEXT_MCP_TIMEOUT_SECONDS": ("context_sources.mcp_archive.timeout_seconds", _as_int),
     "VESTIGIA_CONTEXT_MCP_ARCHIVE_TEXT_MAX_BYTES": ("context_sources.mcp_archive.archive_text_max_bytes", _as_int),
+    "VESTIGIA_CONTEXT_MCP_WRITE_PREFIXES": ("context_sources.mcp_archive.write_prefixes", parse_csv),
     "VESTIGIA_RETRIEVAL_LIMIT": ("retrieval.limit", _as_int),
     "VESTIGIA_TRANSCRIPT_TAIL_MESSAGES": ("retrieval.transcript_tail_messages", _as_int),
     "VESTIGIA_AUTO_EXTRACT_MEMORY": ("memory.auto_extract_conservative_candidates", _as_bool),
@@ -541,6 +543,14 @@ def load_config(home_path: str | Path, env_file: str | Path | None = None) -> Re
         raise ValueError("context.resident_max_retrieval_tokens must be between 0 and 12000")
     mcp_context = data.get("context_sources", {}).get("mcp_archive", {})
     if bool(mcp_context.get("enabled", False)):
+        write_prefixes = mcp_context.get("write_prefixes", [])
+        if not isinstance(write_prefixes, list) or any(
+            not isinstance(prefix, str) or not prefix.strip() or "," in prefix
+            for prefix in write_prefixes
+        ):
+            raise ValueError(
+                "context_sources.mcp_archive.write_prefixes must be a list of nonblank paths"
+            )
         if not str(mcp_context.get("live_archive_root", "")).strip():
             raise ValueError(
                 "context_sources.mcp_archive.live_archive_root is required when enabled"
