@@ -24,6 +24,7 @@ from .models import (
 )
 from .providers.base import Provider
 from .providers import build_provider
+from .provider_call_receipts import ReceiptProvider
 from .memory_experiments import MemoryExperimentService
 from .utils import TokenCounter, atomic_write_json, atomic_write_text, new_id, sha256_text, stable_json, utc_now_iso
 
@@ -115,10 +116,9 @@ class CoreRuntime:
         )
         self.assembler = ContextAssembler(config, self.db)
         self.counter = TokenCounter(str(config.get("models.default")))
-        if provider is not None:
-            self.provider = provider
-        else:
-            self.provider = build_provider(config, fake=fake)
+        if provider is None:
+            provider = build_provider(config, fake=fake)
+        self.provider = ReceiptProvider(provider, self.home)
         self.house.memory_experiments = MemoryExperimentService(
             self.assembler,
             self.db,
@@ -126,7 +126,7 @@ class CoreRuntime:
             self.home,
         )
         self.house.bind_runtime_connections(
-            provider=self.provider,
+            provider=provider,
             context_sources=self.assembler.context_sources,
         )
 
