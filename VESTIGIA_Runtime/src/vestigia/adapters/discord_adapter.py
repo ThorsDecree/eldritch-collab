@@ -1160,6 +1160,8 @@ def run_discord(
             )
         maximum = int(config.get("discord.max_message_chars", 1900))
         if visible:
+            if result.model_change_notice:
+                visible = f"{result.model_change_notice}\n\n{visible}"
             for index, chunk in enumerate(chunk_text(visible, maximum)):
                 if index == 0:
                     await message.reply(chunk, mention_author=False)
