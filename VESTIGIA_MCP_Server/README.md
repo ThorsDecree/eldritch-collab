@@ -498,11 +498,21 @@ Restart after changing the registry.
 
 ### Optional GameTable module
 
-GameTable is disabled unless the deployment enables it:
+An existing environment-configured server enables GameTable with:
 
 ```text
 VESTIGIA_MCP_GAMETABLE_ENABLED=1
 ```
+
+A dedicated deployment can share one MCP settings file between Runtime and the tunnel:
+
+```powershell
+vestigia-mcp --deployment-env C:\path\to\pilot-mcp.env
+```
+
+The file takes precedence over inherited `VESTIGIA_MCP_*` settings and enables
+GameTable by default. Use the Vex instance's own live Archive, state directory and
+deployment ID. See the [Runtime MCP Archive client guide](../VESTIGIA_Runtime/docs/MCP_ARCHIVE_CLIENT.md#dedicated-mcp-deployment).
 
 It stores game state under `VESTIGIA_MCP_STATE_DIR/gametable/` by default. To place that
 non-canonical state elsewhere, set an explicit directory outside Archive roots:

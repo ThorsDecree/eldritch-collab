@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import sys
-import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, TypeVar
+from typing import Any
 
 from .composition import register_context_source_factory
 from .config import ResolvedConfig
@@ -18,10 +16,10 @@ from .context_sources import (
     ContextSourceResult,
 )
 from .db import ContinuityDB
+from .mcp_stdio import McpStdioClient, run_async_blocking as _run_async_blocking
 from .utils import sha256_text
 
 
-T = TypeVar("T")
 CANONICAL_REGISTRY_PATH = "00_Bootloader/house_index.json"
 _STOPWORDS = {
     "about",
@@ -109,46 +107,6 @@ def _query_terms(query: str, limit: int) -> tuple[str, ...]:
     return tuple(candidate[2] for candidate in ranked[:limit])
 
 
-def _run_async_blocking(factory: Callable[[], Awaitable[T]], timeout: float) -> T:
-    """Run one bounded async MCP exchange from synchronous Runtime code.
-
-    CLI/FastAPI sync paths normally have no running loop. If an interface invokes Runtime
-    synchronously from inside an event-loop thread, use one short-lived helper thread rather
-    than trying to nest asyncio.run(). The coroutine itself is wrapped in wait_for so client
-    cancellation can tear down the stdio child.
-    """
-
-    async def bounded() -> T:
-        return await asyncio.wait_for(factory(), timeout=timeout)
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(bounded())
-
-    value: dict[str, T] = {}
-    error: list[BaseException] = []
-
-    def runner() -> None:
-        try:
-            value["result"] = asyncio.run(bounded())
-        except BaseException as exc:  # preserve the original exception across the thread
-            error.append(exc)
-
-    thread = threading.Thread(
-        target=runner,
-        name="vestigia-mcp-context",
-        daemon=True,
-    )
-    thread.start()
-    thread.join(timeout + 5.0)
-    if thread.is_alive():
-        raise TimeoutError("MCP context helper thread did not stop after timeout")
-    if error:
-        raise error[0]
-    return value["result"]
-
-
 @dataclass(frozen=True)
 class _McpContextConfig:
     live_root: Path
@@ -163,7 +121,7 @@ class _McpContextConfig:
     archive_text_max_bytes: int
 
 
-class VestigiaArchiveMcpSource:
+class VestigiaArchiveMcpSource(McpStdioClient):
     """Optional Archive evidence source using a local VESTIGIA MCP stdio child.
 
     The child receives only the Archive paths and MCP-owned receipt location required for
@@ -181,6 +139,7 @@ class VestigiaArchiveMcpSource:
     ) -> None:
         self.config = config
         self.db = db
+        super().__init__(source_config.timeout_seconds)
         self.source_config = source_config
         self.home = config.home_path.resolve()
         self.resident_id = str(config.get("resident.id"))
@@ -197,94 +156,6 @@ class VestigiaArchiveMcpSource:
             raise ContextSourceError(
                 f"VESTIGIA Archive MCP retrieval failed: {type(exc).__name__}: {exc}"
             ) from exc
-
-    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Call one MCP tool through the same credential-minimizing stdio bridge.
-
-        Resident-facing MCP capabilities use this narrow seam rather than receiving a raw
-        client. Image bytes remain separated from text/structured results so callers can put
-        them into Runtime's private content-addressed image shelf without copying base64 into
-        resident-visible receipts.
-        """
-
-        tool_name = str(name).strip()
-        if not tool_name:
-            raise ValueError("MCP tool name must not be empty")
-        try:
-            return _run_async_blocking(
-                lambda: self._call_tool_async(tool_name, dict(arguments)),
-                float(self.source_config.timeout_seconds),
-            )
-        except ContextSourceError:
-            raise
-        except Exception as exc:
-            raise ContextSourceError(
-                f"VESTIGIA Archive MCP tool call failed: {type(exc).__name__}: {exc}"
-            ) from exc
-
-    async def _call_tool_async(
-        self,
-        name: str,
-        arguments: dict[str, Any],
-    ) -> dict[str, Any]:
-        try:
-            from mcp import Client, StdioServerParameters
-        except ImportError as exc:
-            raise ContextSourceError(
-                "MCP Archive tools are enabled but the optional MCP SDK is not installed; "
-                "install VESTIGIA Runtime with the 'mcp-context' extra"
-            ) from exc
-
-        params = StdioServerParameters(
-            command=sys.executable,
-            args=["-m", "vestigia_mcp.cli"],
-            env=self._child_env(),
-        )
-        async with Client(params) as client:
-            result = await client.call_tool(name, arguments)
-            server_metadata = {
-                "protocol_version": str(client.protocol_version or "") or None,
-                "server_name": (
-                    str(client.server_info.name or "") or None
-                    if client.server_info is not None
-                    else None
-                ),
-                "server_version": (
-                    str(client.server_info.version or "") or None
-                    if client.server_info is not None
-                    else None
-                ),
-            }
-
-        text_blocks: list[str] = []
-        image_blocks: list[dict[str, str]] = []
-        for block in result.content:
-            block_type = str(getattr(block, "type", ""))
-            if block_type == "text":
-                text_blocks.append(str(getattr(block, "text", "")))
-            elif block_type == "image":
-                image_blocks.append(
-                    {
-                        "data": str(getattr(block, "data", "")),
-                        "mime_type": str(getattr(block, "mime_type", "")),
-                    }
-                )
-        if result.is_error:
-            detail = "; ".join(item for item in text_blocks if item).strip()
-            raise ContextSourceError(
-                f"MCP tool {name} returned an error"
-                + (f": {detail}" if detail else "")
-            )
-        structured = result.structured_content
-        return {
-            "tool": name,
-            "structured_content": (
-                dict(structured) if isinstance(structured, dict) else None
-            ),
-            "text_blocks": text_blocks,
-            "image_blocks": image_blocks,
-            **server_metadata,
-        }
 
     def _child_env(self) -> dict[str, str]:
         env = {

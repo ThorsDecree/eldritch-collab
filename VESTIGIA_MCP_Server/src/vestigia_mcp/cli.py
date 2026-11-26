@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import argparse
 import logging
+import os
+from pathlib import Path
 
-from .config import Settings
+from .config import Settings, load_deployment_env
 from .porchlight_bridge import PairingTokenStore, create_porchlight_bridge
-from .server import create_server
 
 
 def main() -> None:
@@ -14,8 +16,20 @@ def main() -> None:
     restrictions, and deployment-scoped grants are implemented and tested.
     """
 
+    parser = argparse.ArgumentParser(description="Run the VESTIGIA MCP stdio server")
+    parser.add_argument("--deployment-env", type=Path, help="Read MCP settings from this deployment file")
+    arguments = parser.parse_args()
+    if arguments.deployment_env is not None:
+        environment = load_deployment_env(arguments.deployment_env)
+        for key in list(os.environ):
+            if key.startswith("VESTIGIA_MCP_"):
+                del os.environ[key]
+        os.environ.update(environment)
     logging.basicConfig(level=logging.INFO)
-    create_server().run()
+    # The stdio server is constructed at import time. Apply the selected settings first.
+    from .server import mcp
+
+    mcp.run()
 
 
 def porchlight_bridge_main() -> None:

@@ -104,6 +104,52 @@ live root, so proposals staged for one root cannot be applied after switching to
 another root. The write child receives no snapshot path or tunnel credentials.
 Retrieval and Archive browsing keep using their read-only child.
 
+## Dedicated MCP deployment
+
+For a single resident with a dedicated MCP deployment, point Runtime at the
+deployment's own MCP settings file:
+
+```dotenv
+VESTIGIA_CONTEXT_MCP_DEPLOYMENT_ENV_FILE=C:\path\to\pilot-mcp.env
+```
+
+The file contains literal `VESTIGIA_MCP_*` settings. It requires an absolute live
+Archive directory, an absolute state directory outside the Archive, and an explicit
+deployment ID. Put the pilot's Archive prefixes and any mount or service bindings in
+this file. Use absolute paths for filesystem settings and keep the file outside the
+Archive. The file defines the resident's authority, so link only the pilot's resources.
+GameTable is available by default with this file. A deployment can explicitly set
+`VESTIGIA_MCP_GAMETABLE_ENABLED=0`.
+
+Run the dedicated tunnel's MCP executable with the same file as its
+`--deployment-env` argument. Both processes then use the same Lanternslide catalog,
+GameTable database, Archive stages and MCP receipts. Their MCP settings come from the
+file, and the network tunnel's control-plane API key stays with the tunnel launcher.
+Existing Runtime Archive retrieval uses its own read-only configuration.
+
+```text
+[[TOOL_ACTION {"action":"mcp.tools","prefix":"lanternslide."}]]
+[[TOOL_ACTION {"action":"mcp.tools","tool":"game.create"}]]
+[[TOOL_ACTION {"action":"mcp.call","tool":"lanternslide.scan","arguments":{}}]]
+```
+
+`mcp.tools` lists all tools advertised by the selected deployment, with optional
+`prefix`, `offset` and `limit`. An exact `tool` lookup returns its native input schema.
+`mcp.call` dispatches that tool with an `arguments` object; the server enforces its own
+policy, path grants, revision checks and seat tokens. Both actions are available in
+local web and CLI conversations and allowlisted one-to-one Discord DMs.
+The MCP manifest resources are also readable through the native `archive.read_text`
+tool at `manifest.md` with the corresponding `live` or `snapshot` source.
+
+To browse pictures, finish a Lanternslide scan, use `lanternslide.deal` or
+`lanternslide.search`, and request `lanternslide.contact_sheet` with selected image IDs.
+Runtime imports the result into its private image shelf for `image.inspect`.
+GameTable returns seat credentials on creation. Give each player their own credential
+privately. Delegated MCP receipts keep the tool name, request ID when supplied, and
+any private image IDs. Tool bodies, including hands and bearer tokens, are available
+to the conversational model in the private tool round. Account for any provider
+processing, full prompt capture, or conversational disclosure when handling them.
+
 ## Authority boundary
 
 MCP Archive results are external Archive records, not automatic memory, identity, adoption,
