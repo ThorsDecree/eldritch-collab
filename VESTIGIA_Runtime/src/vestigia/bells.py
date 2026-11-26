@@ -613,10 +613,13 @@ class BellService:
                     bell_id,
                 ),
             )
-        self.event(
-            bell_id, "fired", status, prompt_snapshot=bell.prompt,
-            payload={"scheduled_for": bell.next_fire_at},
-        )
+            connection.execute(
+                """INSERT INTO bell_events
+                (id, bell_id, event_type, status, prompt_snapshot, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (new_id("bev"), bell_id, "fired", status, bell.prompt,
+                 stable_json({"scheduled_for": bell.next_fire_at}), utc_now_iso()),
+            )
         return self.get(bell_id)
 
     def event(
