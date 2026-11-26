@@ -150,6 +150,7 @@ class ProviderReply:
     model: str
     response_id: str | None = None
     usage: dict[str, Any] = field(default_factory=dict)
+    reported_model: str | None = None
 
 
 @dataclass(frozen=True)

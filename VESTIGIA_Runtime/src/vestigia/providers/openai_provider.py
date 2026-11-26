@@ -57,6 +57,7 @@ class OpenAIProvider:
                 text=text,
                 provider="openai-compatible",
                 model=model,
+                reported_model=getattr(response, "model", None) or None,
                 response_id=getattr(response, "id", None),
                 usage=usage,
             )
@@ -74,6 +75,7 @@ class OpenAIProvider:
             text=response.output_text or "",
             provider="openai",
             model=model,
+            reported_model=getattr(response, "model", None) or None,
             response_id=getattr(response, "id", None),
             usage=self._dump(getattr(response, "usage", None)),
         )

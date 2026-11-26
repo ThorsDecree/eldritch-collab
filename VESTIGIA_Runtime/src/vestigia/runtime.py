@@ -346,6 +346,7 @@ class CoreRuntime:
             metadata={
                 "provider": reply.provider,
                 "model": reply.model,
+                "reported_model": reply.reported_model,
                 "response_id": reply.response_id,
                 "resident_control_receipts": resident_receipts,
             },
@@ -384,6 +385,7 @@ class CoreRuntime:
                 "created_at": utc_now_iso(),
                 "provider": reply.provider,
                 "model": reply.model,
+                "reported_model": reply.reported_model,
                 "response_id": reply.response_id,
                 "usage": reply.usage,
                 "response_hash": sha256_text(visible),
@@ -671,6 +673,7 @@ class CoreRuntime:
                         text=kept_text,
                         provider=reply.provider,
                         model=reply.model,
+                        reported_model=reply.reported_model,
                         response_id=reply.response_id,
                         usage=reply.usage,
                     ), receipts, outbound_attachments, outbound_reactions
@@ -688,6 +691,7 @@ class CoreRuntime:
                         text=kept_text,
                         provider=reply.provider,
                         model=reply.model,
+                        reported_model=reply.reported_model,
                         response_id=reply.response_id,
                         usage=reply.usage,
                     ), receipts, outbound_attachments, outbound_reactions
@@ -872,6 +876,7 @@ class CoreRuntime:
                         text=kept_text,
                         provider=reply.provider,
                         model=reply.model,
+                        reported_model=reply.reported_model,
                         response_id=reply.response_id,
                         usage=reply.usage,
                     ), receipts, outbound_attachments, outbound_reactions
