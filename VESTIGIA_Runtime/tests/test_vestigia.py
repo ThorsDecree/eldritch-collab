@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import types
@@ -593,6 +594,22 @@ class DiscordDoorTests(unittest.TestCase):
 class BellSchedulerTests(HomeCase):
     def service(self) -> BellService:
         return BellService(self.db, "test-resident", "hearth")
+
+    def test_fire_event_failure_preserves_due_bell(self) -> None:
+        service = self.service()
+        at = datetime.now(UTC) + timedelta(hours=2)
+        bell = service.create(title="Recovery", purpose="hello", prompt="Check",
+            schedule_kind="once", schedule={"at": at.isoformat()}, timezone="UTC",
+            created_by="test", delivery_interface="discord",
+            delivery_target={"kind": "dm", "id": "123"})
+        with self.db.connect() as connection:
+            connection.execute("""CREATE TRIGGER fail_fire BEFORE INSERT ON bell_events
+                WHEN NEW.event_type = 'fired' BEGIN SELECT RAISE(ABORT, 'injected'); END""")
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "injected"):
+            service.mark_fired(bell.id, fired_at=at)
+        restored = service.get(bell.id)
+        self.assertEqual("active", restored.status)
+        self.assertEqual(bell.next_fire_at, restored.next_fire_at)
 
     def test_once_bell_has_visible_registry_and_append_only_receipts(self) -> None:
         service = self.service()
