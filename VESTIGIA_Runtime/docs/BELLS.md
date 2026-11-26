@@ -84,6 +84,26 @@ doorway where the resident authored the draft.
 - `DORMANT` prevents provider calls. Due bells wait without treating rest as failure.
 - Quiet-hour firings move to the next quiet-hour end.
 
+## Inspecting an interrupted Discord bell
+
+Run `vestigia bell delivery HOME BELL_ID` to see the most recent firing records.
+Each tracked firing links the original schedule, the Runtime turn when recorded,
+and Discord's returned acknowledgments for each text or attachment part.
+
+| Status | Local evidence |
+| --- | --- |
+| `missing` | No firing evidence, or a legacy firing without correlated delivery records. |
+| `incomplete` | The firing was claimed, and there is no terminal result or Discord send intent. The Runtime may still be working. |
+| `uncertain` | Discord sending began and the Runtime lacks a completed result. Any recorded per-part acknowledgments are included. |
+| `failed` | The adapter recorded an error before it began Discord sending. |
+| `suppressed` or `blocked` | Runtime policy prevented the conversational delivery. |
+| `completed` | The adapter finished, including a silent finish with zero parts. A Discord acknowledgment records acceptance by the API. |
+
+The inspection reads evidence without starting a turn, changing a schedule, or
+replaying an interrupted send. A recurring bell keeps its next scheduled
+occurrence. The status covers the Discord response. Runtime work or other tool
+effects may have occurred before the response was sent.
+
 ## Retrieval at bell time
 
 The bell invitation is the resident-visible current message, so it remains the attention-salient
