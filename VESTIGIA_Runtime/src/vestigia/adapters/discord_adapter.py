@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -310,6 +311,7 @@ def build_bell_runtime_message(
     fired: Any,
     *,
     room_id: str,
+    firing_event_id: str | None = None,
 ) -> NormalizedMessage:
     """Build the exact Runtime envelope used by the Discord bell scheduler."""
     return NormalizedMessage(
@@ -318,15 +320,43 @@ def build_bell_runtime_message(
         speaker_id=f"bell:{bell.id}",
         interface="bell",
         room_id=room_id,
-        external_id=f"{bell.id}:{fired.last_fired_at}",
+        external_id=f"bell:{firing_event_id}" if firing_event_id else f"{bell.id}:{fired.last_fired_at}",
         metadata={
             "bell_id": bell.id,
+            **({"firing_event_id": firing_event_id} if firing_event_id else {}),
             "bell_purpose": bell.purpose,
             "bell_strength": bell.strength,
             "bell_retrieval": bell_service.retrieval_envelope(bell),
             "causal_influence": "unknown",
         },
     )
+
+
+async def deliver_bell_output(
+    service: BellService,
+    bell_id: str,
+    firing_event_id: str,
+    *,
+    text: str,
+    attachments: Sequence[Path],
+    maximum_chars: int,
+    send_text: Callable[[str], Awaitable[Any]],
+    send_attachment: Callable[[Path], Awaitable[Any]],
+) -> None:
+    parts = [*(chunk_text(text, maximum_chars) if text else []), *attachments]
+    if not parts:
+        return
+    service.event(
+        bell_id, "outward_started", "sending", firing_event_id=firing_event_id,
+        payload={"parts": len(parts)},
+    )
+    for index, part in enumerate(parts, start=1):
+        sent = await send_text(part) if isinstance(part, str) else await send_attachment(part)
+        message_id = getattr(sent, "id", None)
+        service.event(
+            bell_id, "outward_acknowledged", "acknowledged", firing_event_id=firing_event_id,
+            payload={"part": index, "message_id": str(message_id) if message_id is not None else None},
+        )
 
 
 async def deliver_private_message_once(
@@ -526,25 +556,30 @@ def run_discord(
             )
             bell_service.defer(bell.id, until, reason="protected quiet hours")
             return
-        fired = bell_service.mark_fired(bell.id, fired_at=now)
+        firing = bell_service.claim_due(bell, fired_at=now)
+        if firing is None:
+            return
         try:
             destination = await resolve_bell_destination(bell)
             bell_service.event(
                 bell.id, "delivered_to_runtime", "seen",
                 prompt_snapshot=bell.prompt,
                 payload={"delivery_target": bell.delivery_target},
+                firing_event_id=firing.event_id,
             )
             normalized = build_bell_runtime_message(
                 bell_service,
                 bell,
-                fired,
+                firing.bell,
                 room_id=runtime.room_id,
+                firing_event_id=firing.event_id,
             )
             result = await asyncio.to_thread(runtime.chat, normalized)
             if result.suppressed:
                 bell_service.event(
                     bell.id, "runtime_suppressed", "deferred",
                     payload={"runtime_state": result.state},
+                    firing_event_id=firing.event_id,
                 )
                 return
             visible, controls = apply_resident_controls(
@@ -557,14 +592,17 @@ def run_discord(
             if controls:
                 receipt = "\n".join(f"[Runtime bell receipt: {item}]" for item in controls)
                 visible = (visible + "\n\n" + receipt).strip()
-            if visible:
-                maximum = int(config.get("discord.max_message_chars", 1900))
-                for chunk in chunk_text(visible, maximum):
-                    await destination.send(chunk)
-            for path in result.outbound_attachments:
-                await send_outbound_attachment(destination, path)
+            await deliver_bell_output(
+                bell_service, bell.id, firing.event_id,
+                text=visible,
+                attachments=result.outbound_attachments,
+                maximum_chars=int(config.get("discord.max_message_chars", 1900)),
+                send_text=destination.send,
+                send_attachment=lambda path: send_outbound_attachment(destination, path),
+            )
             bell_service.event(
                 bell.id, "answered", "answered",
+                firing_event_id=firing.event_id,
                 payload={
                     "turn_id": result.turn_id,
                     "control_results": controls,
@@ -572,10 +610,10 @@ def run_discord(
                 },
             )
         except Exception as exc:
-            bell_service.event(
-                bell.id, "delivery_failed", "failed", payload={"error": str(exc)}
+            bell_service.record_delivery_failure(
+                bell.id, firing.event_id, error_type=type(exc).__name__,
             )
-            print(f"VESTIGIA bell delivery failed: bell_id={bell.id} error={exc}")
+            print(f"VESTIGIA bell delivery failed: bell_id={bell.id} error_type={type(exc).__name__}")
 
     async def bell_loop() -> None:
         poll = max(5, int(config.get("bells.poll_seconds", 30)))

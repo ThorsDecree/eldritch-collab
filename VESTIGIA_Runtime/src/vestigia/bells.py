@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 from typing import Any, Sequence
 from zoneinfo import ZoneInfo
@@ -126,6 +126,12 @@ class Bell:
     created_by: str
     created_at: str
     updated_at: str
+
+
+@dataclass(frozen=True)
+class BellFiring:
+    event_id: str
+    bell: Bell
 
 
 def _aware(value: str | datetime) -> datetime:
@@ -585,31 +591,63 @@ class BellService:
         return self.get(bell_id)
 
     def mark_fired(self, bell_id: str, *, fired_at: datetime | None = None) -> Bell:
-        bell = self.get(bell_id)
+        firing = self._record_firing(bell_id, fired_at=fired_at)
+        assert firing is not None
+        return firing.bell
+
+    def claim_due(self, bell: Bell, *, fired_at: datetime | None = None) -> BellFiring | None:
+        """Claim the due occurrence only if the scheduler's snapshot is still current."""
+        return self._record_firing(bell.id, fired_at=fired_at, expected=bell)
+
+    def _record_firing(
+        self, bell_id: str, *, fired_at: datetime | None, expected: Bell | None = None,
+    ) -> BellFiring | None:
         when = _aware(fired_at or datetime.now(UTC))
-        following = next_fire(
-            kind=bell.schedule_kind,
-            schedule=bell.schedule,
-            timezone=bell.timezone,
-            after=when,
-        )
-        status = "active"
-        if bell.schedule_kind == "once" or following is None:
-            status = "completed"
-            following = None
-        if bell.expires_at and following and following >= _aware(bell.expires_at):
-            status, following = "expired", None
         with self.db.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM bells WHERE id=? AND resident_id=? AND room_id=?",
+                (bell_id, self.resident_id, self.room_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown bell: {bell_id}")
+            bell = self._row(row)
+            if expected is not None and (
+                bell.status != "active"
+                or bell.revision != expected.revision
+                or bell.next_fire_at != expected.next_fire_at
+                or bell.next_fire_at is None
+                or _aware(bell.next_fire_at) > when
+                or (bell.expires_at is not None and _aware(bell.expires_at) <= when)
+            ):
+                return None
+            following = next_fire(
+                kind=bell.schedule_kind, schedule=bell.schedule, timezone=bell.timezone, after=when,
+            )
+            status = "active"
+            if bell.schedule_kind == "once" or following is None:
+                status, following = "completed", None
+            if bell.expires_at and following and following >= _aware(bell.expires_at):
+                status, following = "expired", None
+            event_id = new_id("bev")
+            updated = replace(
+                bell, last_fired_at=when.isoformat(),
+                next_fire_at=following.isoformat() if following else None,
+                status=status, updated_at=utc_now_iso(),
+            )
+            payload = {"scheduled_for": bell.next_fire_at}
+            if expected is not None:
+                payload.update(  # Includes only the evidence needed to track the occurrence.
+                    delivery_tracked=True, fired_at=updated.last_fired_at,
+                    next_fire_at=updated.next_fire_at,
+                )
             connection.execute(
                 """
                 UPDATE bells SET last_fired_at=?, next_fire_at=?, status=?, updated_at=?
                 WHERE id=?
                 """,
                 (
-                    when.isoformat(),
-                    following.isoformat() if following else None,
-                    status,
-                    utc_now_iso(),
+                    updated.last_fired_at, updated.next_fire_at, updated.status, updated.updated_at,
                     bell_id,
                 ),
             )
@@ -617,10 +655,10 @@ class BellService:
                 """INSERT INTO bell_events
                 (id, bell_id, event_type, status, prompt_snapshot, payload_json, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (new_id("bev"), bell_id, "fired", status, bell.prompt,
-                 stable_json({"scheduled_for": bell.next_fire_at}), utc_now_iso()),
+                (event_id, bell_id, "fired", status, bell.prompt,
+                 stable_json(payload), updated.updated_at),
             )
-        return self.get(bell_id)
+        return BellFiring(event_id, updated)
 
     def event(
         self,
@@ -630,8 +668,12 @@ class BellService:
         *,
         prompt_snapshot: str | None = None,
         payload: dict[str, Any] | None = None,
+        firing_event_id: str | None = None,
     ) -> str:
         event_id = new_id("bev")
+        data = dict(payload or {})
+        if firing_event_id is not None:
+            data["firing_event_id"] = firing_event_id
         with self.db.connect() as connection:
             connection.execute(
                 """
@@ -641,10 +683,113 @@ class BellService:
                 """,
                 (
                     event_id, bell_id, event_type, status, prompt_snapshot,
-                    stable_json(payload or {}), utc_now_iso(),
+                    stable_json(data), utc_now_iso(),
                 ),
             )
         return event_id
+
+    def record_delivery_failure(
+        self, bell_id: str, firing_event_id: str, *, error_type: str,
+    ) -> None:
+        with self.db.connect() as connection:
+            attempted = connection.execute(
+                """SELECT 1 FROM bell_events WHERE bell_id=? AND event_type='outward_started'
+                AND json_extract(payload_json, '$.firing_event_id')=?""",
+                (bell_id, firing_event_id),
+            ).fetchone()
+        self.event(
+            bell_id, "delivery_failed", "uncertain" if attempted else "failed",
+            firing_event_id=firing_event_id, payload={"error_type": error_type},
+        )
+
+    def delivery_history(self, bell_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        """Project locally recorded delivery evidence. This never changes a schedule."""
+        bell = self.get(bell_id)
+        if (bell.resident_id, bell.room_id) != (self.resident_id, self.room_id):
+            raise KeyError(f"Unknown bell: {bell_id}")
+        with self.db.connect() as connection:
+            connection.execute("BEGIN")
+            fires = connection.execute(
+                """SELECT id, payload_json FROM bell_events
+                WHERE bell_id=? AND event_type='fired' ORDER BY rowid DESC LIMIT ?""",
+                (bell_id, min(100, max(1, limit))),
+            ).fetchall()
+            runtime_tables = connection.execute(
+                """SELECT COUNT(*) FROM sqlite_schema
+                WHERE type='table' AND name IN ('turns', 'bell_observatory_runs')"""
+            ).fetchone()[0]
+            result = []
+            for fire in fires:
+                event_id = str(fire["id"])
+                firing = json.loads(fire["payload_json"])
+                row = None
+                if runtime_tables == 2:
+                    row = connection.execute(
+                        """SELECT t.id, json_extract(r.response_json, '$.state') AS runtime_state
+                        FROM turns t LEFT JOIN bell_observatory_runs r
+                            ON r.turn_id=t.id AND r.bell_id=? AND r.resident_id=t.resident_id
+                        WHERE t.interface='bell' AND t.external_id=? AND t.resident_id=? AND t.room_id=?
+                        ORDER BY r.rowid DESC LIMIT 1""",
+                        (bell_id, f"bell:{event_id}", self.resident_id, self.room_id),
+                    ).fetchone()
+                turn_id = str(row["id"]) if row else None
+                runtime_state = row["runtime_state"] if row else None
+                stages = connection.execute(
+                    """SELECT event_type, status, payload_json FROM bell_events
+                    WHERE bell_id=? AND (
+                        json_extract(payload_json, '$.firing_event_id')=?
+                        OR (event_type='model_approval_required' AND json_extract(payload_json, '$.turn_id')=?)
+                    ) ORDER BY rowid""",
+                    (bell_id, event_id, turn_id),
+                ).fetchall()
+                result.append(self._delivery_summary(event_id, firing, turn_id, runtime_state, stages))
+        return result
+
+    @staticmethod
+    def _delivery_summary(
+        event_id: str,
+        firing: dict[str, Any],
+        turn_id: str | None,
+        runtime_state: str | None,
+        stages: Sequence[Any],
+    ) -> dict[str, Any]:
+        expected_parts = 0
+        acknowledged = []
+        last_event = "fired"
+        status = "incomplete" if firing.get("delivery_tracked") is True else "missing"
+        if status == "incomplete" and runtime_state == "model_approval_required":
+            status = "blocked"
+        error_type = None
+        for stage in stages:
+            last_event = str(stage["event_type"])
+            data = json.loads(stage["payload_json"])
+            if last_event == "outward_started":
+                expected_parts = int(data["parts"])
+                status = "uncertain"
+            elif last_event == "outward_acknowledged":
+                acknowledged.append({"part": data["part"], "message_id": data["message_id"]})
+            elif last_event == "answered":
+                status = "completed"
+            elif last_event == "runtime_suppressed":
+                status = "suppressed"
+            elif last_event == "model_approval_required":
+                status = "blocked"
+            elif last_event == "delivery_failed":
+                status = str(stage["status"])
+                error_type = data.get("error_type")
+        return {
+            "firing_event_id": event_id,
+            "scheduled_for": firing.get("scheduled_for"),
+            "fired_at": firing.get("fired_at"),
+            "next_fire_at": firing.get("next_fire_at"),
+            "status": status,
+            "last_event": last_event,
+            "turn_id": turn_id,
+            "runtime_response_state": runtime_state,
+            "expected_parts": expected_parts,
+            "acknowledged_parts": acknowledged,
+            "error_type": error_type,
+        }
 
     def events(self, bell_id: str, limit: int = 50) -> list[dict[str, Any]]:
         self.get(bell_id)

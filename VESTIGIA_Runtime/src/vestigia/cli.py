@@ -577,6 +577,17 @@ def command_bells(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_bell_delivery(args: argparse.Namespace) -> int:
+    _, service = _bell_service(args.home, args.env_file)
+    occurrences = service.delivery_history(args.bell_id, limit=args.limit)
+    _json({
+        "bell_id": args.bell_id,
+        "latest_status": occurrences[0]["status"] if occurrences else "missing",
+        "occurrences": occurrences,
+    })
+    return 0
+
+
 def command_bell_show(args: argparse.Namespace) -> int:
     _, service = _bell_service(args.home, args.env_file)
     _json({"bell": asdict(service.get(args.bell_id)), "events": service.events(args.bell_id)})
@@ -978,6 +989,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_home_env(bell_show)
     bell_show.add_argument("bell_id")
     bell_show.set_defaults(func=command_bell_show)
+
+    bell_delivery = bell_sub.add_parser("delivery", help="Inspect recorded Discord delivery outcomes")
+    _add_home_env(bell_delivery)
+    bell_delivery.add_argument("bell_id")
+    bell_delivery.add_argument("--limit", type=int, default=20)
+    bell_delivery.set_defaults(func=command_bell_delivery)
 
     for action_name in ("pause", "resume", "delete"):
         bell_status = bell_sub.add_parser(action_name)
