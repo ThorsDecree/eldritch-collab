@@ -145,3 +145,41 @@ Copy-Item .env.example .env
 ```
 
 Then edit `.env` locally. Never commit the populated file.
+
+## Model approval for text turns
+
+Model approval is off by default. To opt in, edit the Home's `home.yaml` as the
+operator. Pin one exact observed identity for each route you want to use.
+
+```yaml
+model_approval:
+  enabled: true
+  routes:
+    default:
+      provider: openai
+      model: your-requested-model-id
+      reported_model: your-provider-reported-model-id
+```
+
+Use the IDs in a verified turn receipt. With an empty `routes: {}` mapping, the
+next direct text turn records the observed IDs and pauses. Run
+`vestigia inspect-turn HOME TURN_ID` to review the approved and observed values.
+The adapter's `model` field and `reported_model` field are matched separately.
+Use an explicit YAML `null` for `reported_model` only if you accept an adapter
+that omits that field. A missing report fails a pin for a concrete ID.
+
+If you approve a change, replace the route's pin, restart the running Runtime,
+and initiate a new turn. To reject or revoke approval, keep or remove the pin.
+The Runtime does not replay the stopped reply. Earlier approved rounds in the
+same turn may already have acted. Inspect the turn and its receipts before
+retrying. `vestigia house-read HOME read --path workspace/FILE.md` and
+direct filesystem access are available independently of model approval.
+
+Approval is checked on each text reply before the Runtime interprets actions
+or final-response controls. It also covers scheduled text turns, private
+curation and Runtime-managed memory experiments. A blocked bell records the
+pause without sending a resident reply. The gate runs after inference, so a
+provider may already have received the prompt and charged for the call. It
+cannot attest to provider identity behind unchanged identifiers or gate
+separate image or vision adapters. Keep provider credentials and endpoint
+selection under operator control.

@@ -14,6 +14,7 @@ from .home import ensure_v061_contract
 from .house_tools import HousePort, extract_action_envelopes
 from .images import ImageService
 from .memory import MemoryService
+from .model_approval import ModelApprovalGate, ModelApprovalRequired
 from .model_changes import observed_model_change
 from .models import (
     ContextAssembly,
@@ -116,6 +117,7 @@ class CoreRuntime:
         )
         self.assembler = ContextAssembler(config, self.db)
         self.counter = TokenCounter(str(config.get("models.default")))
+        self.model_approval = ModelApprovalGate(config.get("model_approval", {}), self.house.legible)
         if provider is not None:
             self.provider = provider
         else:
@@ -125,6 +127,7 @@ class CoreRuntime:
             self.db,
             self.provider,
             self.home,
+            model_approval=self.model_approval,
         )
         self.house.bind_runtime_connections(
             provider=self.provider,
@@ -274,37 +277,42 @@ class CoreRuntime:
                     ),
                 },
             )
-        reply, house_receipts, outbound_attachments, outbound_reactions = self._complete_with_house_tools(
-            turn_id=turn_id,
-            model_route=model_route,
-            messages=tuple(messages),
-            context_assembly=assembly,
-            metadata={
-                "resident_id": self.resident_id,
-                "room_id": self.room_id,
-                "state": state,
-                "context_receipt": str(assembly.receipt_path),
-                "invocation": "conversation",
-                "interface": message.interface,
-                "participant_id": message.speaker_id,
-                "trigger_message_id": message.external_id,
-                "ambient_message_ids": message.metadata.get("ambient_message_ids"),
-                "delivery_target": (
-                    {
-                        "kind": (
-                            "discord_dm"
-                            if bool(message.metadata.get("is_dm", False))
-                            else "discord_channel"
-                        ),
-                        "id": str(message.metadata.get("channel_id")),
-                    }
-                    if message.interface == "discord"
-                    and message.metadata.get("channel_id")
-                    else {}
-                ),
-                "is_group_dm": bool(message.metadata.get("is_group_dm", False)),
-            },
-        )
+        try:
+            reply, house_receipts, outbound_attachments, outbound_reactions = self._complete_with_house_tools(
+                turn_id=turn_id,
+                model_route=model_route,
+                messages=tuple(messages),
+                context_assembly=assembly,
+                metadata={
+                    "resident_id": self.resident_id,
+                    "room_id": self.room_id,
+                    "state": state,
+                    "context_receipt": str(assembly.receipt_path),
+                    "invocation": "conversation",
+                    "interface": message.interface,
+                    "participant_id": message.speaker_id,
+                    "trigger_message_id": message.external_id,
+                    "ambient_message_ids": message.metadata.get("ambient_message_ids"),
+                    "delivery_target": (
+                        {
+                            "kind": (
+                                "discord_dm"
+                                if bool(message.metadata.get("is_dm", False))
+                                else "discord_channel"
+                            ),
+                            "id": str(message.metadata.get("channel_id")),
+                        }
+                        if message.interface == "discord"
+                        and message.metadata.get("channel_id")
+                        else {}
+                    ),
+                    "is_group_dm": bool(message.metadata.get("is_group_dm", False)),
+                },
+            )
+        except ModelApprovalRequired as exc:
+            return self._pause_for_model_approval(
+                exc, assembly, message, state=state, bell_run_id=bell_observatory_run_id
+            )
         bell_no_change = message.interface == "bell" and any(
             receipt.startswith("tool_action:ok:make.nothing.happen:")
             for receipt in house_receipts
@@ -471,6 +479,60 @@ class CoreRuntime:
             outbound_attachments=tuple(outbound_attachments),
             outbound_reactions=tuple(outbound_reactions),
             model_change_notice=model_change["notice"] if model_change else None,
+        )
+
+    def _pause_for_model_approval(
+        self,
+        error: ModelApprovalRequired,
+        assembly: ContextAssembly,
+        message: NormalizedMessage,
+        *,
+        state: str,
+        bell_run_id: str | None,
+    ) -> RuntimeResult:
+        if bell_run_id is not None:
+            self.bell_observatory.complete_run(
+                bell_run_id,
+                response_state="model_approval_required",
+                curation_eligible=False,
+                curation_suppression_reason="model_approval_required",
+            )
+        notice = str(error)
+        if (
+            message.interface in {"cli", "web", "discord"}
+            and not message.metadata.get("contextual_listening")
+        ):
+            self.db.add_turn(
+                resident_id=self.resident_id,
+                room_id=self.room_id,
+                speaker_role="system",
+                speaker_id="runtime",
+                content=notice,
+                interface=message.interface,
+                parent_turn_id=assembly.turn_id,
+                metadata={"model_approval_receipt_id": error.receipt_id},
+            )
+        receipt = self.house.legible.inspect_receipt(error.receipt_id)
+        atomic_write_json(
+            self.home / "traces" / f"{assembly.turn_id}.result.json",
+            {
+                "schema_version": "vestigia.turn-result.v0.1",
+                "turn_id": assembly.turn_id,
+                "created_at": utc_now_iso(),
+                "status": "model_approval_required",
+                "assistant_turn_id": None,
+                "model_approval_receipt_id": error.receipt_id,
+                "model_approval": receipt["result"],
+                "bell_observatory_run_id": bell_run_id,
+            },
+        )
+        return RuntimeResult(
+            turn_id=assembly.turn_id,
+            text=notice,
+            state=state,
+            receipt_path=assembly.receipt_path,
+            suppressed=True,
+            model_approval_receipt_id=error.receipt_id,
         )
 
     @staticmethod
@@ -664,6 +726,14 @@ class CoreRuntime:
                         messages=tuple(working),
                         metadata={**metadata, "house_tool_round": round_index},
                     )
+                )
+                self.model_approval.check(
+                    reply,
+                    route=model_route,
+                    turn_id=turn_id,
+                    invocation=str(metadata.get("invocation") or "private_turn"),
+                    call_index=round_index,
+                    earlier_tool_attempts=calls_used,
                 )
                 kept_text, calls, call_kinds, envelope_errors = (
                     extract_action_envelopes(reply.text)
@@ -1061,6 +1131,15 @@ class CoreRuntime:
                         ),
                     }
                 )
+        except ModelApprovalRequired as exc:
+            self.house.legible.update_activity(
+                activity_id,
+                status="cancelled",
+                operation="Waiting for operator model approval",
+                last_receipt_id=exc.receipt_id,
+                complete=True,
+            )
+            raise
         except Exception:
             self.house.legible.update_activity(
                 activity_id,
@@ -1127,6 +1206,9 @@ class CoreRuntime:
                     "source_turn_ids": [input_turn_id, assistant_turn_id],
                 },
             )
+        except ModelApprovalRequired as exc:
+            self.curator.fail_batch(batch_id, exc, retryable=False)
+            return []
         except Exception as exc:
             self.curator.fail_batch(batch_id, exc)
             self.house.legible.record_receipt(

@@ -47,6 +47,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "auto_route_big": False,
         "auto_route_thinking": False,
     },
+    "model_approval": {"enabled": False, "routes": {}},
     "context": {
         "total_tokens": 20000,
         "runtime_contract_tokens": 1000,

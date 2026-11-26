@@ -166,6 +166,7 @@ class RuntimeResult:
     outbound_attachments: tuple[Path, ...] = ()
     outbound_reactions: tuple[dict[str, Any], ...] = ()
     model_change_notice: str | None = None
+    model_approval_receipt_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -141,6 +141,9 @@ def command_chat(args: argparse.Namespace) -> int:
         )
         if result.model_change_notice:
             print(f"\n{result.model_change_notice}")
+        if result.model_approval_receipt_id:
+            print(f"\n{result.text}\n")
+            continue
         print(f"\n{name}: {result.text}\n")
     return 0
 
