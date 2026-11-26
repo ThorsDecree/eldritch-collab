@@ -14,6 +14,7 @@ from .home import ensure_v061_contract
 from .house_tools import HousePort, extract_action_envelopes
 from .images import ImageService
 from .memory import MemoryService
+from .model_changes import observed_model_change
 from .models import (
     ContextAssembly,
     NormalizedMessage,
@@ -335,6 +336,21 @@ class CoreRuntime:
                 compact=message.interface in {"discord", "image_job", "bell"},
             )
             visible = (visible + "\n\n" + receipt_text).strip()
+        model_observation: dict[str, Any] = {}
+        model_change = None
+        if (
+            visible
+            and message.interface not in {"bell", "image_job", "curation"}
+            and not message.metadata.get("contextual_listening")
+        ):
+            route = model_route.strip().lower() or "default"
+            previous_model = self.db.previous_conversation_model(
+                self.resident_id, self.room_id, route
+            )
+            model_observation["model_notice_route"] = route
+            model_change = observed_model_change(route, previous_model, reply)
+            if model_change is not None:
+                model_observation["model_change"] = model_change
         assistant_turn = self.db.add_turn(
             resident_id=self.resident_id,
             room_id=self.room_id,
@@ -349,6 +365,7 @@ class CoreRuntime:
                 "reported_model": reply.reported_model,
                 "response_id": reply.response_id,
                 "resident_control_receipts": resident_receipts,
+                **model_observation,
             },
         )
         if bell_observatory_run_id is not None:
@@ -398,6 +415,7 @@ class CoreRuntime:
                 ),
                 "house_tool_receipts": house_receipts,
                 "resident_control_receipts": resident_receipts,
+                **model_observation,
             },
         )
         try:
@@ -452,6 +470,7 @@ class CoreRuntime:
             model=reply.model,
             outbound_attachments=tuple(outbound_attachments),
             outbound_reactions=tuple(outbound_reactions),
+            model_change_notice=model_change["notice"] if model_change else None,
         )
 
     @staticmethod

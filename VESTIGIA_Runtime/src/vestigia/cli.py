@@ -139,6 +139,8 @@ def command_chat(args: argparse.Namespace) -> int:
             ),
             model_route=args.route,
         )
+        if result.model_change_notice:
+            print(f"\n{result.model_change_notice}")
         print(f"\n{name}: {result.text}\n")
     return 0
 
