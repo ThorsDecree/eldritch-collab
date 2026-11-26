@@ -115,9 +115,11 @@ class CoreRuntime:
             open_curation=self.curator.create_batch,
             image_service=self.images,
         )
+        self.model_approval = ModelApprovalGate(
+            config.get("model_approval", {}), self.house.legible
+        )
         self.assembler = ContextAssembler(config, self.db)
         self.counter = TokenCounter(str(config.get("models.default")))
-        self.model_approval = ModelApprovalGate(config.get("model_approval", {}), self.house.legible)
         if provider is not None:
             self.provider = provider
         else:
