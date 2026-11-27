@@ -81,7 +81,7 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
     async def scenario():
         async with Client(create_server(settings)) as client:
             names = {tool.name for tool in (await client.list_tools()).tools}
-            assert {"gramophone.register", "gramophone.list", "gramophone.inspect", "gramophone.spectrogram", "gramophone.rhythm", "gramophone.pocket", "gramophone.stereo", "gramophone.harmony"} <= names
+            assert {"gramophone.register", "gramophone.list", "gramophone.inspect", "gramophone.spectrogram", "gramophone.rhythm", "gramophone.pocket", "gramophone.stereo", "gramophone.harmony", "gramophone.pitch"} <= names
             registered = await client.call_tool(
                 "gramophone.register", {"path": "Music/fixture.wav", "title": "Synthetic"}
             )
@@ -114,6 +114,22 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
             assert not rhythmic.is_error
             assert rhythmic.structured_content["sha256"] == track["sha256"]
             assert rhythmic.structured_content["tempo_candidates"] == []
+            pitch = await client.call_tool(
+                "gramophone.pitch",
+                {"track_id": track["track_id"], "expected_sha256": track["sha256"],
+                 "start_ms": 500, "end_ms": 1500, "limit": 2},
+            )
+            assert not pitch.is_error
+            assert pitch.structured_content["source_context"] == "unverified_mix"
+            assert pitch.structured_content["next_offset"] == 2
+            assert pitch.structured_content["frames"][0]["candidate_hz"] == pytest.approx(440, rel=0.02)
+            assert "not evidence of a human voice" in pitch.structured_content["limitations"]
+            rejected_pitch = await client.call_tool(
+                "gramophone.pitch",
+                {"track_id": track["track_id"], "expected_sha256": "0" * 64,
+                 "start_ms": 500, "end_ms": 1500},
+            )
+            assert rejected_pitch.is_error
             harmony = await client.call_tool(
                 "gramophone.harmony",
                 {"track_id": track["track_id"], "expected_sha256": track["sha256"],
@@ -203,6 +219,8 @@ def test_spectrogram_is_versioned_and_validates_passage(audio):
         service.stereo(track["track_id"], track["sha256"], 0, 1000)
     with pytest.raises(ArchiveError, match="changed"):
         service.harmony(track["track_id"], track["sha256"], 0, 1000)
+    with pytest.raises(ArchiveError, match="changed"):
+        service.pitch(track["track_id"], track["sha256"], 0, 1000)
 
 
 def test_spectrogram_reflects_requested_audio_passage(audio):
@@ -293,3 +311,21 @@ def test_harmony_reports_phase_cancelled_mono_downmix_as_quiet(audio):
     result = service.harmony(track["track_id"], track["sha256"], 0, 1000)
     assert not result["windows"][0]["active"]
     assert "downmix can cancel" in result["limitations"]
+    pitch = service.pitch(track["track_id"], track["sha256"], 0, 1000)
+    assert all(frame["candidate_hz"] is None for frame in pitch["frames"])
+    assert "downmix cancellation" in pitch["limitations"]
+
+
+def test_pitch_rejects_invalid_ranges_context_and_pagination(audio):
+    root, _, state = audio
+    service = GramophoneService(ArchiveSource(root), state, "Music")
+    track = service.register("Music/fixture.wav", "Synthetic")
+    args = (track["track_id"], track["sha256"], 0, 1000)
+    for kwargs in ({"offset": -1}, {"limit": 0}, {"limit": 51}, {"offset": True},
+                   {"source_context": "verified_vocals"}):
+        with pytest.raises(ArchiveError):
+            service.pitch(*args, **kwargs)
+    with pytest.raises(ArchiveError, match="15 seconds"):
+        service.pitch(track["track_id"], track["sha256"], 0, 15001)
+    with pytest.raises(ArchiveError, match="250 ms"):
+        service.pitch(track["track_id"], track["sha256"], 0, 100)

@@ -119,6 +119,13 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
             key: payload[key] for key in ("track_id", "expected_sha256", "start_ms", "end_ms")
         })
 
+    def pitch(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
+        arguments = {key: payload[key] for key in ("track_id", "expected_sha256", "start_ms", "end_ms")}
+        for key in ("source_context", "offset", "limit"):
+            if key in payload:
+                arguments[key] = payload[key]
+        return call("gramophone.pitch", arguments)
+
     def spectrogram(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
         arguments = {key: payload[key] for key in ("track_id", "expected_sha256", "start_ms", "end_ms")}
         response = client.call_tool("gramophone.spectrogram", arguments)
@@ -371,6 +378,11 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
         ("gramophone.harmony", "Explore pitch-class energy and tentative triad matches in a passage; these are not verified chords.", {
             "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
         }, ("track_id", "expected_sha256", "start_ms", "end_ms"), harmony, ("process:spawn_local",)),
+        ("gramophone.pitch", "Explore single-period pitch candidates, not voice detection; full mixes may mislead.", {
+            "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
+            "source_context": {"type": "string", "enum": ["unverified_mix", "caller_asserted_monophonic"]},
+            **pagination,
+        }, ("track_id", "expected_sha256", "start_ms", "end_ms"), pitch, ("process:spawn_local",)),
         ("gramophone.spectrogram", "Render a private time-frequency plot for a cataloged passage.", {
             "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
         }, ("track_id", "expected_sha256", "start_ms", "end_ms"), spectrogram,
@@ -423,6 +435,10 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
         "gramophone.harmony": {
             "track_id": example_track, "expected_sha256": example_hash,
             "start_ms": 0, "end_ms": 10000,
+        },
+        "gramophone.pitch": {
+            "track_id": example_track, "expected_sha256": example_hash,
+            "start_ms": 0, "end_ms": 10000, "source_context": "unverified_mix",
         },
         "gramophone.spectrogram": {
             "track_id": example_track, "expected_sha256": example_hash,

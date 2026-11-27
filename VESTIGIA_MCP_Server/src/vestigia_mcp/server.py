@@ -1826,6 +1826,19 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                        lambda: gramophone_service().harmony(track_id, expected_sha256, start_ms, end_ms))
 
     @server.tool(
+        name="gramophone.pitch",
+        title="Explore periodicity and pitch candidates",
+        description="Estimate a single periodicity-based pitch candidate per 80 ms frame in a 250 ms to 15 second passage. A candidate is not voice detection; full mixes are unreliable. Results are paginated.",
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def gramophone_pitch(track_id: str, expected_sha256: str, start_ms: int, end_ms: int,
+                         source_context: str = "unverified_mix", offset: int = 0, limit: int = 50) -> dict[str, object]:
+        arguments = {"track_id": track_id, "expected_sha256": expected_sha256,
+                     "start_ms": start_ms, "end_ms": end_ms, "source_context": source_context,
+                     "offset": offset, "limit": limit}
+        return guarded("gramophone.pitch", arguments, lambda: gramophone_service().pitch(**arguments))
+
+    @server.tool(
         name="gramophone.spectrogram",
         title="Render a Gramophone passage spectrogram",
         description="Return a PNG time-frequency plot for a 250 ms to 60 second passage of a cataloged track, pinned to its SHA-256. Time is relative to the requested start.",
