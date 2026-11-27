@@ -210,6 +210,10 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Measure a bounded passage of an unchanged cataloged track.",
     ),
     Capability(
+        "gramophone.rhythm", EffectClass.PERCEIVE, Decision.ALLOW,
+        "Estimate energy attacks and periodicities in an unchanged cataloged passage.",
+    ),
+    Capability(
         "gramophone.spectrogram", EffectClass.PERCEIVE, Decision.ALLOW,
         "Render a bounded passage of an unchanged cataloged track as an image.",
     ),
