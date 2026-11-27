@@ -14,6 +14,7 @@ from typing import Any
 
 from .adapters.archive import ArchiveError, ArchiveSource, normalize_relative_path
 from .gramophone_rhythm import measure_pocket, measure_rhythm
+from .gramophone_pitch import measure_pitch
 from .gramophone_harmony import measure_harmony
 from .gramophone_stereo import measure_stereo
 
@@ -243,6 +244,23 @@ class GramophoneService:
             raise ArchiveError("Harmony passages must be at least 250 ms")
         return {"track_id": track_id, "sha256": expected_sha256,
                 "start_ms": start_ms, "end_ms": end_ms, **measure_harmony(raw, start_ms, end_ms)}
+
+    def pitch(self, track_id: str, expected_sha256: str, start_ms: int, end_ms: int,
+              source_context: str = "unverified_mix", offset: int = 0, limit: int = 50) -> dict[str, Any]:
+        if source_context not in ("unverified_mix", "caller_asserted_monophonic"):
+            raise ArchiveError("Invalid pitch source context")
+        if (isinstance(offset, bool) or not isinstance(offset, int) or offset < 0 or
+            isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50):
+            raise ArchiveError("Invalid pitch pagination")
+        if (isinstance(start_ms, int) and not isinstance(start_ms, bool) and
+            isinstance(end_ms, int) and not isinstance(end_ms, bool) and end_ms - start_ms > 15_000):
+            raise ArchiveError("Pitch passages must be at most 15 seconds")
+        raw = self._decode_passage(track_id, expected_sha256, start_ms, end_ms, SAMPLE_RATE)
+        if end_ms - start_ms < 250:
+            raise ArchiveError("Pitch passages must be at least 250 ms")
+        return {"track_id": track_id, "sha256": expected_sha256,
+                "start_ms": start_ms, "end_ms": end_ms,
+                **measure_pitch(raw, start_ms, source_context, offset, limit)}
 
     def spectrogram(self, track_id: str, expected_sha256: str, start_ms: int,
                     end_ms: int) -> tuple[dict[str, Any], bytes]:

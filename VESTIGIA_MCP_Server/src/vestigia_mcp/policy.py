@@ -226,6 +226,10 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Estimate pitch-class energy and tentative triad matches in a bounded passage.",
     ),
     Capability(
+        "gramophone.pitch", EffectClass.PERCEIVE, Decision.ALLOW,
+        "Estimate bounded periodicity and pitch candidates without identifying voices.",
+    ),
+    Capability(
         "gramophone.spectrogram", EffectClass.PERCEIVE, Decision.ALLOW,
         "Render a bounded passage of an unchanged cataloged track as an image.",
     ),

@@ -484,3 +484,26 @@ def test_private_bell_explores_harmony_candidates(listening_house, monkeypatch):
     disabled = CoreRuntime(load_config(home), fake=True)
     with pytest.raises(PermissionError):
         disabled.house.dispatch(action, turn_id="disabled", context={"interface": "bell", "invocation": "conversation"})
+
+
+def test_private_bell_explores_periodicity_without_claiming_voice(listening_house, monkeypatch):
+    home, _, track, _ = listening_house
+    action = {"action": "gramophone.pitch", "track_id": track["track_id"],
+              "expected_sha256": track["sha256"], "start_ms": 0, "end_ms": 1000,
+              "source_context": "unverified_mix", "limit": 3}
+    provider = FakeProvider(['[[TOOL_ACTION ' + json.dumps({**action, "after": "continue"}) + ']]',
+                             "These are signal candidates."])
+    runtime = CoreRuntime(load_config(home), provider=provider, fake=True)
+    result = runtime.chat(NormalizedMessage(content="Explore pitch", interface="bell", speaker_id="bell:test",
+                                            room_id=runtime.room_id, external_id="bell-pitch"))
+    receipts = runtime.house.legible.list_receipts(turn_id=result.turn_id, action="gramophone.pitch")
+    assert len(receipts) == 1
+    receipt = runtime.house.legible.inspect_receipt(receipts[0]["id"])
+    assert receipt["status"] == "succeeded"
+    assert receipt["result"]["frames"][0]["candidate_hz"] == pytest.approx(440, rel=0.02)
+    assert receipt["result"]["next_offset"] == 3
+    assert "not evidence of a human voice" in json.dumps(provider.requests[-1].messages)
+    monkeypatch.setenv("VESTIGIA_GRAMOPHONE_BELLS_ENABLED", "false")
+    disabled = CoreRuntime(load_config(home), fake=True)
+    with pytest.raises(PermissionError):
+        disabled.house.dispatch(action, turn_id="disabled", context={"interface": "bell", "invocation": "conversation"})
