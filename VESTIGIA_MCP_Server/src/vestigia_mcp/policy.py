@@ -222,6 +222,10 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Measure channel energy and mid/side relationships in a bounded passage.",
     ),
     Capability(
+        "gramophone.harmony", EffectClass.PERCEIVE, Decision.ALLOW,
+        "Estimate pitch-class energy and tentative triad matches in a bounded passage.",
+    ),
+    Capability(
         "gramophone.spectrogram", EffectClass.PERCEIVE, Decision.ALLOW,
         "Render a bounded passage of an unchanged cataloged track as an image.",
     ),

@@ -14,6 +14,7 @@ from typing import Any
 
 from .adapters.archive import ArchiveError, ArchiveSource, normalize_relative_path
 from .gramophone_rhythm import measure_pocket, measure_rhythm
+from .gramophone_harmony import measure_harmony
 from .gramophone_stereo import measure_stereo
 
 
@@ -235,6 +236,13 @@ class GramophoneService:
             raise ArchiveError("Stereo passages must be at least 250 ms")
         return {"track_id": track_id, "sha256": expected_sha256,
                 "start_ms": start_ms, "end_ms": end_ms, **measure_stereo(raw, channels, start_ms, end_ms)}
+
+    def harmony(self, track_id: str, expected_sha256: str, start_ms: int, end_ms: int) -> dict[str, Any]:
+        raw = self._decode_passage(track_id, expected_sha256, start_ms, end_ms, SAMPLE_RATE)
+        if end_ms - start_ms < 250:
+            raise ArchiveError("Harmony passages must be at least 250 ms")
+        return {"track_id": track_id, "sha256": expected_sha256,
+                "start_ms": start_ms, "end_ms": end_ms, **measure_harmony(raw, start_ms, end_ms)}
 
     def spectrogram(self, track_id: str, expected_sha256: str, start_ms: int,
                     end_ms: int) -> tuple[dict[str, Any], bytes]:

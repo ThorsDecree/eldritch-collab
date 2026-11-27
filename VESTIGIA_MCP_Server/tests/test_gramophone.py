@@ -81,7 +81,7 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
     async def scenario():
         async with Client(create_server(settings)) as client:
             names = {tool.name for tool in (await client.list_tools()).tools}
-            assert {"gramophone.register", "gramophone.list", "gramophone.inspect", "gramophone.spectrogram", "gramophone.rhythm", "gramophone.pocket", "gramophone.stereo"} <= names
+            assert {"gramophone.register", "gramophone.list", "gramophone.inspect", "gramophone.spectrogram", "gramophone.rhythm", "gramophone.pocket", "gramophone.stereo", "gramophone.harmony"} <= names
             registered = await client.call_tool(
                 "gramophone.register", {"path": "Music/fixture.wav", "title": "Synthetic"}
             )
@@ -114,6 +114,21 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
             assert not rhythmic.is_error
             assert rhythmic.structured_content["sha256"] == track["sha256"]
             assert rhythmic.structured_content["tempo_candidates"] == []
+            harmony = await client.call_tool(
+                "gramophone.harmony",
+                {"track_id": track["track_id"], "expected_sha256": track["sha256"],
+                 "start_ms": 500, "end_ms": 1500},
+            )
+            assert not harmony.is_error
+            assert harmony.structured_content["sha256"] == track["sha256"]
+            assert harmony.structured_content["windows"][0]["active"]
+            assert harmony.structured_content["windows"][0]["triad_candidates"] == []
+            short_harmony = await client.call_tool(
+                "gramophone.harmony",
+                {"track_id": track["track_id"], "expected_sha256": track["sha256"],
+                 "start_ms": 500, "end_ms": 600},
+            )
+            assert short_harmony.is_error
             mono = await client.call_tool(
                 "gramophone.stereo",
                 {"track_id": track["track_id"], "expected_sha256": track["sha256"],
@@ -186,6 +201,8 @@ def test_spectrogram_is_versioned_and_validates_passage(audio):
         service.pocket(track["track_id"], track["sha256"], 0, 1000, 120, 0)
     with pytest.raises(ArchiveError, match="changed"):
         service.stereo(track["track_id"], track["sha256"], 0, 1000)
+    with pytest.raises(ArchiveError, match="changed"):
+        service.harmony(track["track_id"], track["sha256"], 0, 1000)
 
 
 def test_spectrogram_reflects_requested_audio_passage(audio):
@@ -258,3 +275,21 @@ def test_real_mcp_stereo_passage_and_short_range_rejection(audio):
             assert wrong_hash.is_error
     asyncio.run(scenario())
     assert path.read_bytes() == original
+
+
+def test_harmony_reports_phase_cancelled_mono_downmix_as_quiet(audio):
+    root, path, state = audio
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(2)
+        output.setsampwidth(2)
+        output.setframerate(8000)
+        data = []
+        for i in range(8000):
+            value = int(12000 * math.sin(2 * math.pi * 440 * i / 8000))
+            data.append(struct.pack("<hh", value, -value))
+        output.writeframes(b"".join(data))
+    service = GramophoneService(ArchiveSource(root), state, "Music")
+    track = service.register("Music/fixture.wav", "Phase-cancelled tone")
+    result = service.harmony(track["track_id"], track["sha256"], 0, 1000)
+    assert not result["windows"][0]["active"]
+    assert "downmix can cancel" in result["limitations"]

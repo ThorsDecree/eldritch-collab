@@ -50,6 +50,7 @@ EXPECTED_TOOLS = {
     "gramophone.rhythm",
     "gramophone.pocket",
     "gramophone.stereo",
+    "gramophone.harmony",
     "lanternslide.status",
     "lanternslide.scan",
     "lanternslide.find",
@@ -401,7 +402,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert identity_result.structured_content["archive"]["live"]["available"] is True
             assert (
                 identity_result.structured_content["capability_registry"]["capability_count"]
-                == 64
+                == 65
             )
 
             glance_result = await client.call_tool("house.glance", {})
@@ -415,7 +416,7 @@ def test_wire_catalog_is_read_only_and_sensory_tools_work(tmp_path: Path) -> Non
             assert status_result.is_error is False
             assert status_result.structured_content is not None
             assert status_result.structured_content["server"]["version"] == __version__
-            assert status_result.structured_content["policy"]["capability_count"] == 64
+            assert status_result.structured_content["policy"]["capability_count"] == 65
             assert status_result.structured_content["runtime"]["configured"] is False
             assert status_result.structured_content["archive"]["promotion_configured"] is True
             assert (

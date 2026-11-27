@@ -451,3 +451,36 @@ def test_private_bell_explores_stereo_relationships(listening_house, monkeypatch
     disabled = CoreRuntime(load_config(home), fake=True)
     with pytest.raises(PermissionError):
         disabled.house.dispatch(action, turn_id="disabled", context={"interface": "bell", "invocation": "conversation"})
+
+
+def test_private_bell_explores_harmony_candidates(listening_house, monkeypatch):
+    home, track_file, _, client = listening_house
+    with wave.open(str(track_file), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(8000)
+        frequencies = (261.626, 329.628, 391.995)
+        output.writeframes(b"".join(
+            struct.pack("<h", int(sum(12000 * math.sin(2 * math.pi * hz * i / 8000)
+                                      for hz in frequencies) / len(frequencies)))
+            for i in range(8000 * 2)
+        ))
+    track = client.call_tool("gramophone.register", {"path": "Music/fixture.wav", "title": "Synthetic chord"})["structured_content"]
+    action = {"action": "gramophone.harmony", "track_id": track["track_id"],
+              "expected_sha256": track["sha256"], "start_ms": 0, "end_ms": 2000}
+    provider = FakeProvider(['[[TOOL_ACTION ' + json.dumps({**action, "after": "continue"}) + ']]',
+                             "A candidate to investigate."])
+    runtime = CoreRuntime(load_config(home), provider=provider, fake=True)
+    result = runtime.chat(NormalizedMessage(content="Explore harmony", interface="bell", speaker_id="bell:test",
+                                            room_id=runtime.room_id, external_id="bell-harmony"))
+    receipts = runtime.house.legible.list_receipts(turn_id=result.turn_id, action="gramophone.harmony")
+    assert len(receipts) == 1
+    receipt = runtime.house.legible.inspect_receipt(receipts[0]["id"])
+    assert receipt["status"] == "succeeded"
+    assert any(x["root"] == "C" and x["quality"] == "major"
+               for x in receipt["result"]["windows"][0]["triad_candidates"])
+    assert "not musical tension" in json.dumps(provider.requests[-1].messages)
+    monkeypatch.setenv("VESTIGIA_GRAMOPHONE_BELLS_ENABLED", "false")
+    disabled = CoreRuntime(load_config(home), fake=True)
+    with pytest.raises(PermissionError):
+        disabled.house.dispatch(action, turn_id="disabled", context={"interface": "bell", "invocation": "conversation"})

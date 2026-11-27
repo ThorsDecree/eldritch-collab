@@ -1814,6 +1814,18 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                        lambda: gramophone_service().stereo(track_id, expected_sha256, start_ms, end_ms))
 
     @server.tool(
+        name="gramophone.harmony",
+        title="Explore passage pitch-class energy",
+        description="Estimate pitch-class energy and tentative major/minor triad matches in a 250 ms to 60 second passage. Scores are not probabilities; this does not establish chords, key, or emotional tension.",
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def gramophone_harmony(track_id: str, expected_sha256: str, start_ms: int, end_ms: int) -> dict[str, object]:
+        arguments = {"track_id": track_id, "expected_sha256": expected_sha256,
+                     "start_ms": start_ms, "end_ms": end_ms}
+        return guarded("gramophone.harmony", arguments,
+                       lambda: gramophone_service().harmony(track_id, expected_sha256, start_ms, end_ms))
+
+    @server.tool(
         name="gramophone.spectrogram",
         title="Render a Gramophone passage spectrogram",
         description="Return a PNG time-frequency plot for a 250 ms to 60 second passage of a cataloged track, pinned to its SHA-256. Time is relative to the requested start.",
