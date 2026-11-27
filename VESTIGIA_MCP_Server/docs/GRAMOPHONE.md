@@ -39,6 +39,19 @@ into that directory through your existing provisioning workflow.
   merge or be missed; numeric precision is not temporal accuracy. These events
   do not identify instruments, swing, or intentional groove. The initial frame
   has no preceding audio for comparison. Request another grid to compare readings.
+- `gramophone.stereo(track_id, expected_sha256, start_ms, end_ms)` measures a
+  250 ms–60 s passage in one-second windows plus a passage-wide summary. For a
+  stereo source, it returns left/right RMS, uncentered channel correlation,
+  mid/side RMS, side-energy fraction, and balance `(R_RMS - L_RMS) / (R_RMS +
+  L_RMS)`. RMS values are normalized to full scale; mid is `(L + R) / 2`, side
+  is `(L - R) / 2`, and the fraction is side energy divided by mid plus side
+  energy. Correlation is null if either channel has zero energy; balance and
+  side-energy fraction are null if both are digitally silent. A mono source has
+  mono RMS and explicitly reports stereo measurements as unavailable. Time
+  ranges are track-relative, and decoded duration is recorded. Analysis uses
+  16 kHz PCM, so content above 8 kHz is not represented. These measurements do
+  not identify instrument locations or establish perceived width or motion;
+  side energy can also reflect phase differences. The source remains unchanged.
 - `gramophone.spectrogram(track_id, expected_sha256, start_ms, end_ms)` returns
   a PNG and metadata for a passage between 250 ms and 60 seconds. Its horizontal
   axis is seconds from the requested start, and its vertical axis is logarithmic
@@ -59,7 +72,7 @@ identify instruments, lyrics or subjective qualities of the track.
 The current MCP connection can discover these tools using its usual tool listing.
 With a dedicated MCP deployment configured, Runtime also exposes focused
 `gramophone.list`, `gramophone.inspect`, `gramophone.rhythm`, `gramophone.pocket`,
-`gramophone.spectrogram`, `gramophone.note.add`, and
+`gramophone.stereo`, `gramophone.spectrogram`, `gramophone.note.add`, and
 `gramophone.note.list` capabilities. Notes belong to the Runtime resident and
 stay in that Runtime home's continuity database. Notes identify the track and
 exact source digest plus a start and end time in milliseconds.
@@ -106,6 +119,7 @@ without advancing the revision. A successful retry returns the original result,
 which may be older than the current session; use `session.view` for current state.
 
 Use the returned track ID, digest, start and end with `gramophone.inspect`,
-`gramophone.rhythm`, `gramophone.pocket`, `gramophone.spectrogram`, or `gramophone.note.add`. Notes remain private to the
+`gramophone.rhythm`, `gramophone.pocket`, `gramophone.stereo`, `gramophone.spectrogram`,
+or `gramophone.note.add`. Notes remain private to the
 resident and attached to their own ranges and track version. These tools do not
 deliver actual audio to a model or provide a graphical playback interface.

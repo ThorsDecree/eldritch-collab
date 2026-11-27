@@ -14,6 +14,7 @@ from typing import Any
 
 from .adapters.archive import ArchiveError, ArchiveSource, normalize_relative_path
 from .gramophone_rhythm import measure_pocket, measure_rhythm
+from .gramophone_stereo import measure_stereo
 
 
 MAX_BYTES = 30 * 1024 * 1024
@@ -146,7 +147,7 @@ class GramophoneService:
         }
 
     def _decode_passage(self, track_id: str, expected_sha256: str, start_ms: int,
-                        end_ms: int, sample_rate: int) -> bytes:
+                        end_ms: int, sample_rate: int, channels: int = 1) -> bytes:
         track = self.get(track_id)
         if expected_sha256 != track["sha256"]:
             raise ArchiveError("Requested track digest differs from the catalog")
@@ -166,10 +167,10 @@ class GramophoneService:
                 "ffmpeg", "-v", "error", "-protocol_whitelist", "file,pipe",
                 "-f", suffix[1:], "-i", str(copy), "-ss", f"{start_ms / 1000:.3f}",
                 "-t", f"{(end_ms - start_ms) / 1000:.3f}", "-map", "0:a:0",
-                "-ac", "1", "-ar", str(sample_rate), "-f", "s16le", "pipe:1",
+                "-ac", str(channels), "-ar", str(sample_rate), "-f", "s16le", "pipe:1",
             ])
         expected_samples = round((end_ms - start_ms) * sample_rate / 1000)
-        if len(raw) % 2 or len(raw) // 2 < expected_samples - sample_rate // 20:
+        if len(raw) % (2 * channels) or len(raw) // (2 * channels) < expected_samples - sample_rate // 20:
             raise ArchiveError("Decoded passage was incomplete")
         return raw
 
@@ -225,6 +226,15 @@ class GramophoneService:
         return {"track_id": track_id, "sha256": expected_sha256,
                 "start_ms": start_ms, "end_ms": end_ms,
                 **measure_pocket(raw, start_ms, bpm, anchor_ms, subdivisions, offset, limit)}
+
+    def stereo(self, track_id: str, expected_sha256: str, start_ms: int, end_ms: int) -> dict[str, Any]:
+        track = self.get(track_id)
+        channels = track["channels"]
+        raw = self._decode_passage(track_id, expected_sha256, start_ms, end_ms, 16_000, channels)
+        if end_ms - start_ms < 250:
+            raise ArchiveError("Stereo passages must be at least 250 ms")
+        return {"track_id": track_id, "sha256": expected_sha256,
+                "start_ms": start_ms, "end_ms": end_ms, **measure_stereo(raw, channels, start_ms, end_ms)}
 
     def spectrogram(self, track_id: str, expected_sha256: str, start_ms: int,
                     end_ms: int) -> tuple[dict[str, Any], bytes]:
