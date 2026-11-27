@@ -87,6 +87,17 @@ into that directory through your existing provisioning workflow.
   candidate does not prove the absence of a voice. Octave errors, percussion,
   multiple sources and mono downmix cancellation can all mislead. The score is
   not a probability. No person, emotion, lyrics or vocal identity is inferred.
+- `gramophone.pitch_chart(track_id, expected_sha256, start_ms, end_ms,
+  source_context)` renders every complete pitch frame in a 250 ms–15 s passage
+  as a PNG. Dots are placed at frame midpoints on absolute track-time and
+  logarithmic frequency axes. There are no lines across missing candidates;
+  an all-empty passage is labeled accordingly. The result includes the source
+  hash, full range, unverified source context, method, frame and candidate counts,
+  decoded duration, image hash, and the same limitations as `gramophone.pitch`.
+  The image is response-only on the MCP server. The focused Runtime tool validates
+  provenance and image digest, then places a copy on the resident's private image
+  shelf; use `image.inspect` to interpret it. Creating the image does not itself
+  send it to a vision model. This is not voice detection or verified melody.
 - `gramophone.spectrogram(track_id, expected_sha256, start_ms, end_ms)` returns
   a PNG and metadata for a passage between 250 ms and 60 seconds. Its horizontal
   axis is seconds from the requested start, and its vertical axis is logarithmic
@@ -107,7 +118,8 @@ identify instruments, lyrics or subjective qualities of the track.
 The current MCP connection can discover these tools using its usual tool listing.
 With a dedicated MCP deployment configured, Runtime also exposes focused
 `gramophone.list`, `gramophone.inspect`, `gramophone.rhythm`, `gramophone.pocket`,
-`gramophone.stereo`, `gramophone.harmony`, `gramophone.pitch`, `gramophone.spectrogram`, `gramophone.note.add`, and
+`gramophone.stereo`, `gramophone.harmony`, `gramophone.pitch`, `gramophone.pitch_chart`,
+`gramophone.spectrogram`, `gramophone.note.add`, and
 `gramophone.note.list` capabilities. Notes belong to the Runtime resident and
 stay in that Runtime home's continuity database. Notes identify the track and
 exact source digest plus a start and end time in milliseconds.
@@ -154,7 +166,8 @@ without advancing the revision. A successful retry returns the original result,
 which may be older than the current session; use `session.view` for current state.
 
 Use the returned track ID, digest, start and end with `gramophone.inspect`,
-`gramophone.rhythm`, `gramophone.pocket`, `gramophone.stereo`, `gramophone.harmony`, `gramophone.pitch`, `gramophone.spectrogram`,
+`gramophone.rhythm`, `gramophone.pocket`, `gramophone.stereo`, `gramophone.harmony`, `gramophone.pitch`, `gramophone.pitch_chart`,
+`gramophone.spectrogram`,
 or `gramophone.note.add`. Notes remain private to the
 resident and attached to their own ranges and track version. These tools do not
 deliver actual audio to a model or provide a graphical playback interface.

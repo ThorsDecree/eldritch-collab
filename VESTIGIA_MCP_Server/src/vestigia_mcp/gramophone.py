@@ -15,6 +15,7 @@ from typing import Any
 from .adapters.archive import ArchiveError, ArchiveSource, normalize_relative_path
 from .gramophone_rhythm import measure_pocket, measure_rhythm
 from .gramophone_pitch import measure_pitch
+from .gramophone_pitch_chart import HEIGHT as PITCH_CHART_HEIGHT, WIDTH as PITCH_CHART_WIDTH, render_pitch_chart
 from .gramophone_harmony import measure_harmony
 from .gramophone_stereo import measure_stereo
 
@@ -245,22 +246,50 @@ class GramophoneService:
         return {"track_id": track_id, "sha256": expected_sha256,
                 "start_ms": start_ms, "end_ms": end_ms, **measure_harmony(raw, start_ms, end_ms)}
 
-    def pitch(self, track_id: str, expected_sha256: str, start_ms: int, end_ms: int,
-              source_context: str = "unverified_mix", offset: int = 0, limit: int = 50) -> dict[str, Any]:
+    def _pitch_passage(self, track_id: str, expected_sha256: str, start_ms: int, end_ms: int,
+                       source_context: str) -> bytes:
         if source_context not in ("unverified_mix", "caller_asserted_monophonic"):
             raise ArchiveError("Invalid pitch source context")
-        if (isinstance(offset, bool) or not isinstance(offset, int) or offset < 0 or
-            isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50):
-            raise ArchiveError("Invalid pitch pagination")
         if (isinstance(start_ms, int) and not isinstance(start_ms, bool) and
             isinstance(end_ms, int) and not isinstance(end_ms, bool) and end_ms - start_ms > 15_000):
             raise ArchiveError("Pitch passages must be at most 15 seconds")
         raw = self._decode_passage(track_id, expected_sha256, start_ms, end_ms, SAMPLE_RATE)
         if end_ms - start_ms < 250:
             raise ArchiveError("Pitch passages must be at least 250 ms")
+        return raw
+
+    def pitch(self, track_id: str, expected_sha256: str, start_ms: int, end_ms: int,
+              source_context: str = "unverified_mix", offset: int = 0, limit: int = 50) -> dict[str, Any]:
+        if (isinstance(offset, bool) or not isinstance(offset, int) or offset < 0 or
+            isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50):
+            raise ArchiveError("Invalid pitch pagination")
+        raw = self._pitch_passage(track_id, expected_sha256, start_ms, end_ms, source_context)
         return {"track_id": track_id, "sha256": expected_sha256,
                 "start_ms": start_ms, "end_ms": end_ms,
                 **measure_pitch(raw, start_ms, source_context, offset, limit)}
+
+    def pitch_chart(self, track_id: str, expected_sha256: str, start_ms: int, end_ms: int,
+                    source_context: str = "unverified_mix") -> tuple[dict[str, Any], bytes]:
+        raw = self._pitch_passage(track_id, expected_sha256, start_ms, end_ms, source_context)
+        # A 15 s passage contains fewer than 300 complete frames.
+        result = measure_pitch(raw, start_ms, source_context, 0, 300)
+        if result["next_offset"] is not None:
+            raise ArchiveError("Pitch chart exceeded its bounded frame count")
+        image = render_pitch_chart({**result, "track_id": track_id, "sha256": expected_sha256}, start_ms, end_ms)
+        if not image.startswith(b"\x89PNG\r\n\x1a\n") or len(image) > 4 * 1024 * 1024:
+            raise ArchiveError("Pitch chart renderer returned an invalid image")
+        return ({"track_id": track_id, "sha256": expected_sha256, "start_ms": start_ms, "end_ms": end_ms,
+                 "source_context": source_context, "source_context_provenance": "caller_declared_unverified",
+                 "method": result["method"], "frame_ms": result["frame_ms"], "hop_ms": result["hop_ms"],
+                 "analysis_sample_rate_hz": result["analysis_sample_rate_hz"],
+                 "frequency_min_hz": result["frequency_min_hz"], "frequency_max_hz": result["frequency_max_hz"],
+                 "rms_floor": result["rms_floor"], "periodicity_floor": result["periodicity_floor"],
+                 "width": PITCH_CHART_WIDTH, "height": PITCH_CHART_HEIGHT,
+                 "decoded_duration_ms": result["decoded_duration_ms"], "total_frames": result["total_frames"],
+                 "candidate_count": sum(frame["candidate_hz"] is not None for frame in result["frames"]),
+                 "time_axis": "absolute track seconds; dot at frame midpoint", "frequency_axis": "logarithmic Hz",
+                 "limitations": result["limitations"], "mime_type": "image/png", "retention": "response_only",
+                 "image_sha256": hashlib.sha256(image).hexdigest()}, image)
 
     def spectrogram(self, track_id: str, expected_sha256: str, start_ms: int,
                     end_ms: int) -> tuple[dict[str, Any], bytes]:

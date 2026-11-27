@@ -230,6 +230,10 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Estimate bounded periodicity and pitch candidates without identifying voices.",
     ),
     Capability(
+        "gramophone.pitch_chart", EffectClass.PERCEIVE, Decision.ALLOW,
+        "Render bounded pitch candidates as a provenance-labeled image.",
+    ),
+    Capability(
         "gramophone.spectrogram", EffectClass.PERCEIVE, Decision.ALLOW,
         "Render a bounded passage of an unchanged cataloged track as an image.",
     ),

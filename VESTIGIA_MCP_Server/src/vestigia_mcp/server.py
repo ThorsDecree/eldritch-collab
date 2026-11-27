@@ -1839,6 +1839,22 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         return guarded("gramophone.pitch", arguments, lambda: gramophone_service().pitch(**arguments))
 
     @server.tool(
+        name="gramophone.pitch_chart",
+        title="Render passage pitch candidates",
+        description="Return a labeled PNG of periodicity candidates for a 250 ms to 15 second passage. Gaps mean no candidate; the chart does not identify voices or verify melody.",
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def gramophone_pitch_chart(track_id: str, expected_sha256: str, start_ms: int, end_ms: int,
+                               source_context: str = "unverified_mix") -> list[TextContent | ImageContent]:
+        arguments = {"track_id": track_id, "expected_sha256": expected_sha256,
+                     "start_ms": start_ms, "end_ms": end_ms, "source_context": source_context}
+        def operation() -> list[TextContent | ImageContent]:
+            metadata, image = gramophone_service().pitch_chart(**arguments)
+            return [TextContent(text=json.dumps(metadata, ensure_ascii=False, sort_keys=True)),
+                    ImageContent(data=base64.b64encode(image).decode("ascii"), mimeType="image/png")]
+        return guarded("gramophone.pitch_chart", arguments, operation)
+
+    @server.tool(
         name="gramophone.spectrogram",
         title="Render a Gramophone passage spectrogram",
         description="Return a PNG time-frequency plot for a 250 ms to 60 second passage of a cataloged track, pinned to its SHA-256. Time is relative to the requested start.",

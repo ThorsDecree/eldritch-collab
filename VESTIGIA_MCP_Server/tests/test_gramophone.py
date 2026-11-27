@@ -81,7 +81,7 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
     async def scenario():
         async with Client(create_server(settings)) as client:
             names = {tool.name for tool in (await client.list_tools()).tools}
-            assert {"gramophone.register", "gramophone.list", "gramophone.inspect", "gramophone.spectrogram", "gramophone.rhythm", "gramophone.pocket", "gramophone.stereo", "gramophone.harmony", "gramophone.pitch"} <= names
+            assert {"gramophone.register", "gramophone.list", "gramophone.inspect", "gramophone.spectrogram", "gramophone.rhythm", "gramophone.pocket", "gramophone.stereo", "gramophone.harmony", "gramophone.pitch", "gramophone.pitch_chart"} <= names
             registered = await client.call_tool(
                 "gramophone.register", {"path": "Music/fixture.wav", "title": "Synthetic"}
             )
@@ -130,6 +130,19 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
                  "start_ms": 500, "end_ms": 1500},
             )
             assert rejected_pitch.is_error
+            chart = await client.call_tool(
+                "gramophone.pitch_chart",
+                {"track_id": track["track_id"], "expected_sha256": track["sha256"],
+                 "start_ms": 0, "end_ms": 3000},
+            )
+            assert not chart.is_error
+            chart_text, chart_image = chart.content
+            chart_metadata = json.loads(chart_text.text)
+            assert chart_metadata["total_frames"] == chart_metadata["candidate_count"] == 59
+            assert (chart_metadata["width"], chart_metadata["height"]) == (1100, 560)
+            assert chart_metadata["periodicity_floor"] == 0.75
+            assert hashlib.sha256(base64.b64decode(chart_image.data)).hexdigest() == chart_metadata["image_sha256"]
+            assert chart_image.mime_type == "image/png"
             harmony = await client.call_tool(
                 "gramophone.harmony",
                 {"track_id": track["track_id"], "expected_sha256": track["sha256"],
@@ -221,6 +234,8 @@ def test_spectrogram_is_versioned_and_validates_passage(audio):
         service.harmony(track["track_id"], track["sha256"], 0, 1000)
     with pytest.raises(ArchiveError, match="changed"):
         service.pitch(track["track_id"], track["sha256"], 0, 1000)
+    with pytest.raises(ArchiveError, match="changed"):
+        service.pitch_chart(track["track_id"], track["sha256"], 0, 1000)
 
 
 def test_spectrogram_reflects_requested_audio_passage(audio):
@@ -329,3 +344,39 @@ def test_pitch_rejects_invalid_ranges_context_and_pagination(audio):
         service.pitch(track["track_id"], track["sha256"], 0, 15001)
     with pytest.raises(ArchiveError, match="250 ms"):
         service.pitch(track["track_id"], track["sha256"], 0, 100)
+
+
+def test_pitch_chart_silence_and_input_validation(audio):
+    root, path, state = audio
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(8000)
+        output.writeframes(bytes(16000))
+    service = GramophoneService(ArchiveSource(root), state, "Music")
+    track = service.register("Music/fixture.wav", "Silence")
+    args = (track["track_id"], track["sha256"], 0, 1000)
+    metadata, image = service.pitch_chart(*args)
+    assert metadata["candidate_count"] == 0 and metadata["total_frames"] == 19
+    assert metadata["image_sha256"] == hashlib.sha256(image).hexdigest()
+    with pytest.raises(ArchiveError, match="context"):
+        service.pitch_chart(*args, source_context="verified_voice")
+    with pytest.raises(ArchiveError, match="250 ms"):
+        service.pitch_chart(track["track_id"], track["sha256"], 0, 100)
+    with pytest.raises(ArchiveError, match="15 seconds"):
+        service.pitch_chart(track["track_id"], track["sha256"], 0, 15001)
+
+
+def test_pitch_chart_covers_complete_15_second_limit(audio):
+    root, path, state = audio
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(8000)
+        one_second = b"".join(struct.pack("<h", int(12000 * math.sin(2 * math.pi * 440 * i / 8000)))
+                              for i in range(8000))
+        output.writeframes(one_second * 15)
+    service = GramophoneService(ArchiveSource(root), state, "Music")
+    track = service.register("Music/fixture.wav", "Synthetic long passage")
+    metadata, _ = service.pitch_chart(track["track_id"], track["sha256"], 0, 15000)
+    assert metadata["total_frames"] == metadata["candidate_count"] == 299
