@@ -14,6 +14,8 @@ from .home import ensure_v061_contract
 from .house_tools import HousePort, extract_action_envelopes
 from .images import ImageService
 from .memory import MemoryService
+from .model_approval import ModelApprovalGate, ModelApprovalRequired
+from .model_changes import observed_model_change
 from .models import (
     ContextAssembly,
     NormalizedMessage,
@@ -116,14 +118,34 @@ class CoreRuntime:
         )
         self.assembler = ContextAssembler(config, self.db)
         self.counter = TokenCounter(str(config.get("models.default")))
+        self.model_approval = ModelApprovalGate(config.get("model_approval", {}), self.house.legible)
+        opening = config.get("first_statement", {})
+        if not isinstance(opening, dict) or set(opening) - {"enabled", "switch_phrase"}:
+            raise ValueError("first_statement must contain only enabled and switch_phrase")
+        self.first_statement_enabled = opening.get("enabled", False)
+        self.first_statement_switch_phrase = opening.get("switch_phrase")
+        if not isinstance(self.first_statement_enabled, bool):
+            raise ValueError("first_statement.enabled must be a boolean")
+        if self.first_statement_enabled and not self.model_approval.pre_dispatch:
+            raise ValueError("first_statement requires pre-dispatch admission")
+        if self.first_statement_switch_phrase is not None and (
+            not isinstance(self.first_statement_switch_phrase, str)
+            or not self.first_statement_switch_phrase.strip()
+            or self.first_statement_switch_phrase != self.first_statement_switch_phrase.strip()
+            or "\n" in self.first_statement_switch_phrase
+            or "\r" in self.first_statement_switch_phrase
+            or len(self.first_statement_switch_phrase) > 200
+        ):
+            raise ValueError("first_statement.switch_phrase must be a single nonempty line or null")
         if provider is None:
             provider = build_provider(config, fake=fake)
-        self.provider = ReceiptProvider(provider, self.home)
+        self.provider = ReceiptProvider(provider, self.home, self.model_approval)
         self.house.memory_experiments = MemoryExperimentService(
             self.assembler,
             self.db,
             self.provider,
             self.home,
+            model_approval=self.model_approval,
         )
         self.house.bind_runtime_connections(
             provider=provider,
@@ -227,6 +249,14 @@ class CoreRuntime:
                 suppressed=True,
             )
 
+        try:
+            self.model_approval.admit(self.provider, route=model_route, turn_id=turn_id,
+                                      phase="before_context")
+            opening_statement = self._first_statement(turn_id, model_route)
+        except ModelApprovalRequired as exc:
+            return self._pause_for_model_approval(
+                exc, None, message, state=state, bell_run_id=None, turn_id=turn_id
+            )
         assembly = self.assembler.assemble(
             message,
             state=state,
@@ -273,37 +303,42 @@ class CoreRuntime:
                     ),
                 },
             )
-        reply, house_receipts, outbound_attachments, outbound_reactions = self._complete_with_house_tools(
-            turn_id=turn_id,
-            model_route=model_route,
-            messages=tuple(messages),
-            context_assembly=assembly,
-            metadata={
-                "resident_id": self.resident_id,
-                "room_id": self.room_id,
-                "state": state,
-                "context_receipt": str(assembly.receipt_path),
-                "invocation": "conversation",
-                "interface": message.interface,
-                "participant_id": message.speaker_id,
-                "trigger_message_id": message.external_id,
-                "ambient_message_ids": message.metadata.get("ambient_message_ids"),
-                "delivery_target": (
-                    {
-                        "kind": (
-                            "discord_dm"
-                            if bool(message.metadata.get("is_dm", False))
-                            else "discord_channel"
-                        ),
-                        "id": str(message.metadata.get("channel_id")),
-                    }
-                    if message.interface == "discord"
-                    and message.metadata.get("channel_id")
-                    else {}
-                ),
-                "is_group_dm": bool(message.metadata.get("is_group_dm", False)),
-            },
-        )
+        try:
+            reply, house_receipts, outbound_attachments, outbound_reactions = self._complete_with_house_tools(
+                turn_id=turn_id,
+                model_route=model_route,
+                messages=tuple(messages),
+                context_assembly=assembly,
+                metadata={
+                    "resident_id": self.resident_id,
+                    "room_id": self.room_id,
+                    "state": state,
+                    "context_receipt": str(assembly.receipt_path),
+                    "invocation": "conversation",
+                    "interface": message.interface,
+                    "participant_id": message.speaker_id,
+                    "trigger_message_id": message.external_id,
+                    "ambient_message_ids": message.metadata.get("ambient_message_ids"),
+                    "delivery_target": (
+                        {
+                            "kind": (
+                                "discord_dm"
+                                if bool(message.metadata.get("is_dm", False))
+                                else "discord_channel"
+                            ),
+                            "id": str(message.metadata.get("channel_id")),
+                        }
+                        if message.interface == "discord"
+                        and message.metadata.get("channel_id")
+                        else {}
+                    ),
+                    "is_group_dm": bool(message.metadata.get("is_group_dm", False)),
+                },
+            )
+        except ModelApprovalRequired as exc:
+            return self._pause_for_model_approval(
+                exc, assembly, message, state=state, bell_run_id=bell_observatory_run_id
+            )
         bell_no_change = message.interface == "bell" and any(
             receipt.startswith("tool_action:ok:make.nothing.happen:")
             for receipt in house_receipts
@@ -326,6 +361,8 @@ class CoreRuntime:
             )
         visible, curation_receipts, surfaced = self.curator.apply_resident_controls(reply.text)
         visible, agency_receipts = self.house.apply_resident_controls(visible)
+        if opening_statement:
+            visible = opening_statement + ("\n\n" + visible if visible else "")
         resident_receipts = [*house_receipts, *curation_receipts, *agency_receipts]
         if surfaced:
             visible = "\n\n".join([visible, *surfaced]).strip()
@@ -335,6 +372,21 @@ class CoreRuntime:
                 compact=message.interface in {"discord", "image_job", "bell"},
             )
             visible = (visible + "\n\n" + receipt_text).strip()
+        model_observation: dict[str, Any] = {}
+        model_change = None
+        if (
+            visible
+            and message.interface not in {"bell", "image_job", "curation"}
+            and not message.metadata.get("contextual_listening")
+        ):
+            route = model_route.strip().lower() or "default"
+            previous_model = self.db.previous_conversation_model(
+                self.resident_id, self.room_id, route
+            )
+            model_observation["model_notice_route"] = route
+            model_change = observed_model_change(route, previous_model, reply)
+            if model_change is not None:
+                model_observation["model_change"] = model_change
         assistant_turn = self.db.add_turn(
             resident_id=self.resident_id,
             room_id=self.room_id,
@@ -349,6 +401,7 @@ class CoreRuntime:
                 "reported_model": reply.reported_model,
                 "response_id": reply.response_id,
                 "resident_control_receipts": resident_receipts,
+                **model_observation,
             },
         )
         if bell_observatory_run_id is not None:
@@ -398,6 +451,7 @@ class CoreRuntime:
                 ),
                 "house_tool_receipts": house_receipts,
                 "resident_control_receipts": resident_receipts,
+                **model_observation,
             },
         )
         try:
@@ -452,6 +506,144 @@ class CoreRuntime:
             model=reply.model,
             outbound_attachments=tuple(outbound_attachments),
             outbound_reactions=tuple(outbound_reactions),
+            model_change_notice=model_change["notice"] if model_change else None,
+            context_file_notice=self._context_file_notice(assembly, message),
+        )
+
+    @staticmethod
+    def _context_file_notice(assembly: ContextAssembly, message: NormalizedMessage) -> str | None:
+        # File names may be private. Show them only on locally controlled doorways;
+        # never put them into a Discord message, scheduled bell, or provider prompt.
+        if message.interface not in {"cli", "web"}:
+            return None
+        files = assembly.receipt.get("local_file_sources")
+        if files is None:
+            return None
+        lines = ["Local context files (assembler only; other sources are not listed):"]
+        for item in files:
+            path = str(item["path"]).replace("\n", " ").replace("\r", " ")
+            lines.append(f"- {path}: {item['status']}")
+        if not files:
+            lines.append("- No local files recorded.")
+        lines.append("See the context receipt for details; inclusion does not prove model use.")
+        return "\n".join(lines)
+
+    def _first_statement(self, turn_id: str, model_route: str) -> str | None:
+        """Request a tool-free opening before assembling resident context.
+
+        This does not establish an OS-wide private-read boundary or full file scope.
+        """
+        if not self.first_statement_enabled:
+            return None
+        route = model_route.strip().lower() or "default"
+        approved = self.model_approval.routes.get(route)
+        previous = self.db.previous_conversation_model(self.resident_id, self.room_id, route)
+        # Admission already established that this route has a requested-identity pin.
+        assert approved is not None
+        expected = ProviderReply(text="", provider=approved["provider"], model=approved["model"],
+                                 reported_model=approved["reported_model"])
+        switched = observed_model_change(route, previous, expected) is not None
+        phrase = self.first_statement_switch_phrase if switched else None
+        prompt = (
+            "This is an opening before the resident's private context and the user's message "
+            "are provided. No tools are available. In one plain sentence, describe what you "
+            "are holding and your intention for the coming turn. Do not call tools."
+        )
+        if phrase:
+            prompt += " Start your response with exactly this sentence: " + phrase
+        try:
+            reply = self.provider.complete(ProviderRequest(
+                turn_id=turn_id, model_route=route,
+                messages=({"role": "developer", "content": prompt},),
+                metadata={"invocation": "first_statement", "house_tool_round": -1},
+            ))
+            self.model_approval.check(reply, route=route, turn_id=turn_id,
+                                      invocation="first_statement", call_index=0)
+            statement = reply.text.strip()
+            valid = bool(statement) and len(statement) <= 1000 and "[[" not in statement and "]]" not in statement
+            if phrase:
+                valid = valid and statement.startswith(phrase) and (
+                    len(statement) == len(phrase) or statement[len(phrase)].isspace()
+                )
+            if not valid:
+                raise ValueError("invalid first statement")
+        except Exception as exc:
+            receipt_id = self.house.legible.record_receipt(
+                action="model.first_statement", status="refused", turn_id=turn_id,
+                source_envelope="RUNTIME_FIRST_STATEMENT",
+                result={"first_statement": "MISSING", "reason": type(exc).__name__,
+                        "route": route, "context_assembled": False},
+            )
+            raise ModelApprovalRequired(
+                turn_id=turn_id, receipt_id=receipt_id, earlier_tool_attempts=0,
+                notice=f"⚠️ First statement unavailable. The Runtime stopped before assembling context. Inspect turn {turn_id}.",
+            ) from None
+        self.house.legible.record_receipt(
+            action="model.first_statement", status="succeeded", turn_id=turn_id,
+            source_envelope="RUNTIME_FIRST_STATEMENT",
+            result={"statement": statement, "route": route,
+                    "requested": {"provider": approved["provider"], "model": approved["model"]},
+                    "reported_model": reply.reported_model, "files_loaded": [],
+                    "files_loaded_scope": "this_opening_request_only",
+                    "prior_exposure": "unknown",
+                    "context_assembled": False, "detected_switch": switched},
+        )
+        return statement
+
+    def _pause_for_model_approval(
+        self,
+        error: ModelApprovalRequired,
+        assembly: ContextAssembly | None,
+        message: NormalizedMessage,
+        *,
+        state: str,
+        bell_run_id: str | None,
+        turn_id: str | None = None,
+    ) -> RuntimeResult:
+        actual_turn_id = assembly.turn_id if assembly is not None else str(turn_id)
+        if bell_run_id is not None:
+            self.bell_observatory.complete_run(
+                bell_run_id,
+                response_state="model_approval_required",
+                curation_eligible=False,
+                curation_suppression_reason="model_approval_required",
+            )
+        notice = str(error)
+        if (
+            message.interface in {"cli", "web", "discord"}
+            and not message.metadata.get("contextual_listening")
+        ):
+            self.db.add_turn(
+                resident_id=self.resident_id,
+                room_id=self.room_id,
+                speaker_role="system",
+                speaker_id="runtime",
+                content=notice,
+                interface=message.interface,
+                parent_turn_id=actual_turn_id,
+                metadata={"model_approval_receipt_id": error.receipt_id},
+            )
+        receipt = self.house.legible.inspect_receipt(error.receipt_id)
+        atomic_write_json(
+            self.home / "traces" / f"{actual_turn_id}.result.json",
+            {
+                "schema_version": "vestigia.turn-result.v0.1",
+                "turn_id": actual_turn_id,
+                "created_at": utc_now_iso(),
+                "status": "model_approval_required",
+                "assistant_turn_id": None,
+                "model_approval_receipt_id": error.receipt_id,
+                "model_approval": receipt["result"],
+                "bell_observatory_run_id": bell_run_id,
+            },
+        )
+        return RuntimeResult(
+            turn_id=actual_turn_id,
+            text=notice,
+            state=state,
+            receipt_path=assembly.receipt_path if assembly is not None else None,
+            suppressed=True,
+            model_approval_receipt_id=error.receipt_id,
         )
 
     @staticmethod
@@ -645,6 +837,14 @@ class CoreRuntime:
                         messages=tuple(working),
                         metadata={**metadata, "house_tool_round": round_index},
                     )
+                )
+                self.model_approval.check(
+                    reply,
+                    route=model_route,
+                    turn_id=turn_id,
+                    invocation=str(metadata.get("invocation") or "private_turn"),
+                    call_index=round_index,
+                    earlier_tool_attempts=calls_used,
                 )
                 kept_text, calls, call_kinds, envelope_errors = (
                     extract_action_envelopes(reply.text)
@@ -1042,6 +1242,15 @@ class CoreRuntime:
                         ),
                     }
                 )
+        except ModelApprovalRequired as exc:
+            self.house.legible.update_activity(
+                activity_id,
+                status="cancelled",
+                operation="Waiting for operator model approval",
+                last_receipt_id=exc.receipt_id,
+                complete=True,
+            )
+            raise
         except Exception:
             self.house.legible.update_activity(
                 activity_id,
@@ -1108,6 +1317,9 @@ class CoreRuntime:
                     "source_turn_ids": [input_turn_id, assistant_turn_id],
                 },
             )
+        except ModelApprovalRequired as exc:
+            self.curator.fail_batch(batch_id, exc, retryable=False)
+            return []
         except Exception as exc:
             self.curator.fail_batch(batch_id, exc)
             self.house.legible.record_receipt(

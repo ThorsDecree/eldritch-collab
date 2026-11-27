@@ -39,6 +39,13 @@ class OpenAIProvider:
             return str(self.config.get("models.thinking"))
         return str(self.config.get("models.default"))
 
+    def admission_identity(self, route: str) -> dict[str, str]:
+        style = str(self.config.get("provider.api_style", "responses")).strip().lower()
+        if style not in {"responses", "chat_completions"}:
+            raise ValueError("unknown OpenAI API style")
+        return {"provider": "openai-compatible" if style == "chat_completions" else "openai",
+                "model": self.model_for(route)}
+
     def complete(self, request: ProviderRequest) -> ProviderReply:
         model = self.model_for(request.model_route)
         api_style = str(self.config.get("provider.api_style", "responses")).strip().lower()

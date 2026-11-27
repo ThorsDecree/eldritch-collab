@@ -10,6 +10,9 @@ class FakeProvider:
         self.replies = deque(replies or [])
         self.requests: list[ProviderRequest] = []
 
+    def admission_identity(self, route: str) -> dict[str, str]:
+        return {"provider": "fake", "model": f"fake-{route}"}
+
     def complete(self, request: ProviderRequest) -> ProviderReply:
         self.requests.append(request)
         if self.replies:

@@ -47,7 +47,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "auto_route_big": False,
         "auto_route_thinking": False,
     },
+    "model_approval": {"enabled": False, "routes": {}},
+    "first_statement": {"enabled": False, "switch_phrase": None},
     "context": {
+        "show_file_receipt": False,
         "total_tokens": 20000,
         "runtime_contract_tokens": 1000,
         "identity_core_tokens": 800,
@@ -259,6 +262,7 @@ def _as_int(value: str) -> int:
 
 
 ENV_MAP: dict[str, tuple[str, Callable[[str], Any]]] = {
+    "VESTIGIA_CONTEXT_FILE_RECEIPT": ("context.show_file_receipt", _as_bool),
     "VESTIGIA_PROVIDER": ("provider.kind", str),
     "VESTIGIA_API_STYLE": ("provider.api_style", str),
     "VESTIGIA_PROVIDER_MAX_OUTPUT_TOKENS": ("provider.max_output_tokens", _as_int),

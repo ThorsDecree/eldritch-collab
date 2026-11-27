@@ -28,6 +28,9 @@ class GeminiProvider:
     def model_for(self, route: str) -> str:
         return model_for_route(self.config, route)
 
+    def admission_identity(self, route: str) -> dict[str, str]:
+        return {"provider": "gemini", "model": self.model_for(route)}
+
     def complete(self, request: ProviderRequest) -> ProviderReply:
         model = self.model_for(request.model_route)
         system, conversation = system_and_conversation(request.messages)

@@ -125,6 +125,8 @@ def _write_web_profile(home: Path, *, human_name: str) -> None:
 
 
 def _display_speaker(turn: dict[str, Any], *, resident_name: str, human_name: str) -> str:
+    if turn.get("speaker_role") == "system" and turn.get("speaker_id") == "runtime":
+        return "Runtime"
     return resident_name if turn.get("speaker_role") == "assistant" else human_name
 
 
@@ -341,17 +343,38 @@ def create_app(*, initial_home: str | Path | None = None, env_file: str | Path |
             return RedirectResponse(url="/", status_code=303)
         status = _status(selected, app.state.env_file)
         profile = _web_profile(selected)
-        turns = "".join(
-            f'<div class="turn"><strong>{_escape(_display_speaker(turn, resident_name=str(status["resident_name"]), human_name=profile["human_name"]))}</strong><p>{_escape(turn["content"])}</p></div>'
-            for turn in status["turns"]
-        ) or '<p class="muted">The room is quiet.</p>'
+        turn_blocks = []
+        for turn in status["turns"]:
+            speaker = _display_speaker(turn, resident_name=str(status["resident_name"]), human_name=profile["human_name"])
+            notice = ""
+            if turn["speaker_role"] == "assistant":
+                change = turn["metadata"].get("model_change")
+                if isinstance(change, dict) and change.get("notice"):
+                    notice = f'<p class="notice" role="status">{_escape(change["notice"])}</p>'
+            turn_blocks.append(
+                f'<div class="turn">{notice}<strong>{_escape(speaker)}</strong><p>{_escape(turn["content"])}</p></div>'
+            )
+        turns = "".join(turn_blocks) or '<p class="muted">The room is quiet.</p>'
         error_block = f'<p class="notice">{_escape(error)}</p>' if error else ""
         body = f"""<div class=\"eyebrow\">Local conversation</div><h1>Talk with {_escape(status['resident_name'])}</h1>{_nav(selected)}{error_block}<section class=\"card\"><div id=\"conversation\" class=\"conversation\">{turns}</div><form id=\"talk-form\" method=\"post\" action=\"/talk\" enctype=\"multipart/form-data\"><input type=\"hidden\" name=\"csrf_token\" value=\"{app.state.csrf_token}\"><input type=\"hidden\" name=\"home\" value=\"{_escape(selected)}\"><label>Your message</label><textarea name=\"message\" required autofocus></textarea><label>Attachments <span class=\"muted\">(images or readable text)</span></label><input name=\"attachments\" type=\"file\" multiple accept=\".png,.jpg,.jpeg,.webp,.gif,.txt,.md,.json,.jsonl,.html,.htm\"><button id=\"send-button\">Send</button></form></section>
 <script>
 const form=document.getElementById('talk-form'), conversation=document.getElementById('conversation'), button=document.getElementById('send-button');
 const resident={_escape(str(status['resident_name']))!r}, humie={_escape(profile['human_name'])!r};
-function addTurn(name,text,extra='') {{ const node=document.createElement('div'); node.className='turn'; const label=document.createElement('strong'); label.textContent=name; const body=document.createElement('p'); body.textContent=text; node.append(label,body); if(extra) {{ const note=document.createElement('p'); note.className='attachment-note'; note.textContent=extra; node.append(note); }} conversation.append(node); node.scrollIntoView({{block:'end'}}); }}
-form.addEventListener('submit', async (event) => {{ event.preventDefault(); const data=new FormData(form), message=(data.get('message')||'').trim(); const attachments=[...form.querySelector('[name=attachments]').files].map(file=>file.name); if(!message && !attachments.length) return; addTurn(humie,message || '[Attachment shared]',attachments.length ? `Attached: ${{attachments.join(', ')}}` : ''); form.querySelector('[name=message]').value=''; form.querySelector('[name=attachments]').value=''; button.disabled=true; button.textContent='Listening…'; try {{ const response=await fetch('/api/talk',{{method:'POST',body:data}}); const payload=await response.json(); if(!response.ok) throw new Error(payload.detail||'The local doorway could not complete that turn.'); addTurn(resident,payload.text,payload.attachments_note||''); }} catch(error) {{ addTurn('House notice',error.message); }} finally {{ button.disabled=false; button.textContent='Send'; form.querySelector('[name=message]').focus(); }} }});
+function addTurn(name,text,extra='',modelNotice='') {{
+    const node=document.createElement('div'); node.className='turn';
+    if(modelNotice) {{
+        const warning=document.createElement('p');
+        warning.className='notice';
+        warning.setAttribute('role','status');
+        warning.textContent=modelNotice;
+        node.append(warning);
+    }}
+    const label=document.createElement('strong'); label.textContent=name;
+    const body=document.createElement('p'); body.textContent=text; node.append(label,body);
+    if(extra) {{ const note=document.createElement('p'); note.className='attachment-note'; note.textContent=extra; node.append(note); }}
+    conversation.append(node); node.scrollIntoView({{block:'end'}});
+}}
+form.addEventListener('submit', async (event) => {{ event.preventDefault(); const data=new FormData(form), message=(data.get('message')||'').trim(); const attachments=[...form.querySelector('[name=attachments]').files].map(file=>file.name); if(!message && !attachments.length) return; addTurn(humie,message || '[Attachment shared]',attachments.length ? `Attached: ${{attachments.join(', ')}}` : ''); form.querySelector('[name=message]').value=''; form.querySelector('[name=attachments]').value=''; button.disabled=true; button.textContent='Listening…'; try {{ const response=await fetch('/api/talk',{{method:'POST',body:data}}); const payload=await response.json(); if(!response.ok) throw new Error(payload.detail||'The local doorway could not complete that turn.'); addTurn(payload.model_approval_receipt_id ? 'Runtime' : resident,payload.text,payload.attachments_note||'', [payload.model_change_notice,payload.context_file_notice].filter(Boolean).join(String.fromCharCode(10))); }} catch(error) {{ addTurn('House notice',error.message); }} finally {{ button.disabled=false; button.textContent='Send'; form.querySelector('[name=message]').focus(); }} }});
 window.scrollTo({{top:document.body.scrollHeight,behavior:'instant'}});
 </script>"""
         return _page("Talk", body)
@@ -425,7 +448,14 @@ window.scrollTo({{top:document.body.scrollHeight,behavior:'instant'}});
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return JSONResponse({"text": result.text, "attachments_note": " · ".join(attachment_notices)})
+        payload = {"text": result.text, "attachments_note": " · ".join(attachment_notices)}
+        if result.model_change_notice:
+            payload["model_change_notice"] = result.model_change_notice
+        if result.context_file_notice:
+            payload["context_file_notice"] = result.context_file_notice
+        if result.model_approval_receipt_id:
+            payload["model_approval_receipt_id"] = result.model_approval_receipt_id
+        return JSONResponse(payload)
 
     @app.get("/review", response_class=HTMLResponse)
     def review_page(home: str | None = None, message: str | None = None):

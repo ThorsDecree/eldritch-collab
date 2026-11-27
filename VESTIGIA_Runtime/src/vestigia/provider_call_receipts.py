@@ -4,14 +4,18 @@ from .utils import atomic_write_json, new_id, utc_now_iso
 class ReceiptProvider:
     """Record application-level provider calls; SDK network retries are not counted."""
 
-    def __init__(self, provider, home):
+    def __init__(self, provider, home, approval=None):
         self.provider = provider
         self.home = home
+        self.approval = approval
 
     def __getattr__(self, name):
         return getattr(self.provider, name)
 
     def complete(self, request):
+        if self.approval is not None:
+            self.approval.admit(self.provider, route=request.model_route,
+                                turn_id=request.turn_id, phase="before_dispatch")
         call_id = new_id('pcall')
         path = self.home / 'traces' / 'provider-calls' / f'{call_id}.json'
         record = {

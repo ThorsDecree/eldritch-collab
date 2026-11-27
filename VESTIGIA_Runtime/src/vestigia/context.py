@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
+import hashlib
+import io
 from pathlib import Path
 import re
 from typing import Iterable
@@ -273,6 +275,23 @@ class ContextAssembler:
                 for item in (memory_result.items if memory_result else ())
             ],
         }
+        if bool(self.config.get("context.show_file_receipt", False)):
+            files = []
+            for layer in layers:
+                source_hashes = dict(layer.source_file_hashes)
+                total_cap = f"{layer.name}:total-cap" in layer.omitted_item_ids
+                for path in layer.source_file_ids:
+                    if total_cap:
+                        status = "unknown_after_total_cap"
+                    elif path not in layer.item_ids:
+                        status = "omitted"
+                    elif f"{path}:remainder" in layer.omitted_item_ids:
+                        status = "partial"
+                    else:
+                        status = "included"
+                    files.append({"path": path, "layer": layer.name, "status": status,
+                                  "read_sha256": source_hashes[path]})
+            receipt["local_file_sources"] = files
         if receipt_path is not None:
             atomic_write_json(receipt_path, receipt)
         if receipt_path is not None and bool(self.config.get("traces.save_full_context", False)):
@@ -760,7 +779,8 @@ class ContextAssembler:
                     self.home / "identity" / "protocols",
                 ]
             )
-        items = self._read_files(paths)
+        items, hashes = self._read_files(paths)
+        source_file_ids = tuple(path for path, _ in items)
         statuses = ["accepted"] + (
             ["inherited_unreviewed"] if include_inherited_memories else []
         )
@@ -778,7 +798,8 @@ class ContextAssembler:
             if digest not in seen:
                 seen.add(digest)
                 items.append((record.id, block))
-        return self._pack("identity_core", budget, items)
+        return self._pack("identity_core", budget, items, source_file_ids=source_file_ids,
+                          source_file_hashes=hashes)
 
     def _typed_memory_layer(
         self,
@@ -788,7 +809,8 @@ class ContextAssembler:
         paths: list[Path],
         include_inherited: bool,
     ) -> ContextLayer:
-        items = self._read_files(paths)
+        items, hashes = self._read_files(paths)
+        source_file_ids = tuple(path for path, _ in items)
         statuses = ["accepted"] + (
             ["inherited_unreviewed"] if include_inherited else []
         )
@@ -803,7 +825,8 @@ class ContextAssembler:
         items.extend(
             (record.id, self._memory_block(record, None)) for record in records
         )
-        return self._pack(name, budget, items)
+        return self._pack(name, budget, items, source_file_ids=source_file_ids,
+                          source_file_hashes=hashes)
 
     def _attention_tray_layer(self, budget: int) -> ContextLayer:
         with self.db.connect() as connection:
@@ -970,33 +993,40 @@ class ContextAssembler:
         return self._pack("compressed_transcript", budget, items)
 
     def _file_layer(self, name: str, budget: int, paths: list[Path]) -> ContextLayer:
-        return self._pack(name, budget, self._read_files(paths))
+        items, hashes = self._read_files(paths)
+        return self._pack(name, budget, items, source_file_ids=tuple(path for path, _ in items),
+                          source_file_hashes=hashes)
 
-    def _read_files(self, paths: Iterable[Path]) -> list[tuple[str, str]]:
+    def _read_files(self, paths: Iterable[Path]) -> tuple[list[tuple[str, str]], tuple[tuple[str, str], ...]]:
         items: list[tuple[str, str]] = []
+        hashes: list[tuple[str, str]] = []
+
+        def read(path: Path) -> None:
+            raw = path.read_bytes()
+            # Match Path.read_text's universal-newline behavior while hashing
+            # the exact bytes read, without a second race-prone disk read.
+            with io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8") as stream:
+                text = stream.read()
+            relative = str(path.relative_to(self.home))
+            items.append((relative, text))
+            hashes.append((relative, hashlib.sha256(raw).hexdigest()))
+
         for path in paths:
             if path.is_dir():
                 for child in sorted(path.rglob("*.md")):
-                    items.append(
-                        (
-                            str(child.relative_to(self.home)),
-                            child.read_text(encoding="utf-8"),
-                        )
-                    )
+                    read(child)
             elif path.is_file():
-                items.append(
-                    (
-                        str(path.relative_to(self.home)),
-                        path.read_text(encoding="utf-8"),
-                    )
-                )
-        return items
+                read(path)
+        return items, tuple(hashes)
 
     def _pack(
         self,
         name: str,
         budget: int,
         items: Iterable[tuple[str, str]],
+        *,
+        source_file_ids: tuple[str, ...] = (),
+        source_file_hashes: tuple[tuple[str, str], ...] = (),
     ) -> ContextLayer:
         used = 0
         included: list[str] = []
@@ -1029,6 +1059,8 @@ class ContextAssembler:
             item_ids=tuple(included),
             omitted_item_ids=tuple(omitted),
             content_hash=sha256_text(joined),
+            source_file_ids=source_file_ids,
+            source_file_hashes=source_file_hashes,
         )
 
     def _enforce_total(

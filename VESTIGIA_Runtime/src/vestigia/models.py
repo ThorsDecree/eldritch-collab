@@ -114,6 +114,8 @@ class ContextLayer:
     item_ids: tuple[str, ...] = ()
     omitted_item_ids: tuple[str, ...] = ()
     content_hash: str = ""
+    source_file_ids: tuple[str, ...] = ()
+    source_file_hashes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -165,6 +167,9 @@ class RuntimeResult:
     suppressed: bool = False
     outbound_attachments: tuple[Path, ...] = ()
     outbound_reactions: tuple[dict[str, Any], ...] = ()
+    model_change_notice: str | None = None
+    context_file_notice: str | None = None
+    model_approval_receipt_id: str | None = None
 
 
 @dataclass(frozen=True)
