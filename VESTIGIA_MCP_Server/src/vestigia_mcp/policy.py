@@ -194,6 +194,18 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Check whether an explicitly requested sense-organ capture fits its declared scope.",
     ),
     Capability(
+        "gramophone.register", EffectClass.PREPARE, Decision.ALLOW,
+        "Catalog one explicitly selected live Archive audio track.",
+    ),
+    Capability(
+        "gramophone.list", EffectClass.PERCEIVE, Decision.ALLOW,
+        "List bounded Gramophone track metadata.",
+    ),
+    Capability(
+        "gramophone.inspect", EffectClass.PERCEIVE, Decision.ALLOW,
+        "Measure a bounded passage of an unchanged cataloged track.",
+    ),
+    Capability(
         "lanternslide.status",
         EffectClass.PERCEIVE,
         Decision.ALLOW,
