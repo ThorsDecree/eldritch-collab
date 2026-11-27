@@ -126,6 +126,34 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
                 arguments[key] = payload[key]
         return call("gramophone.pitch", arguments)
 
+    def pitch_chart(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
+        arguments = {key: payload[key] for key in ("track_id", "expected_sha256", "start_ms", "end_ms")}
+        arguments["source_context"] = payload.get("source_context", "unverified_mix")
+        response = client.call_tool("gramophone.pitch_chart", arguments)
+        text, images = response.get("text_blocks", []), response.get("image_blocks", [])
+        if len(text) != 1 or len(images) != 1:
+            raise RuntimeError("Gramophone did not return one pitch chart with its metadata")
+        metadata = json.loads(text[0])
+        if not isinstance(metadata, dict) or any((
+            metadata.get("track_id") != arguments["track_id"],
+            metadata.get("sha256") != arguments["expected_sha256"],
+            metadata.get("start_ms") != arguments["start_ms"],
+            metadata.get("end_ms") != arguments["end_ms"],
+            metadata.get("source_context") != arguments["source_context"],
+            images[0].get("mime_type") != "image/png",
+        )):
+            raise RuntimeError("Gramophone pitch-chart provenance does not match the request")
+        image_bytes = base64.b64decode(images[0]["data"], validate=True)
+        if hashlib.sha256(image_bytes).hexdigest() != metadata.get("image_sha256"):
+            raise RuntimeError("Gramophone pitch-chart image digest does not match")
+        saved = _save_images(house, "gramophone.pitch_chart", images, {
+            "track_id": arguments["track_id"], "source_sha256": arguments["expected_sha256"],
+            "start_ms": arguments["start_ms"], "end_ms": arguments["end_ms"],
+            "source_context": arguments["source_context"],
+        })
+        return {**metadata, "retention": "runtime_private_image_shelf", "images": saved,
+                "next_step": "Use image.inspect on the image ID to examine the chart."}
+
     def spectrogram(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
         arguments = {key: payload[key] for key in ("track_id", "expected_sha256", "start_ms", "end_ms")}
         response = client.call_tool("gramophone.spectrogram", arguments)
@@ -383,6 +411,11 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
             "source_context": {"type": "string", "enum": ["unverified_mix", "caller_asserted_monophonic"]},
             **pagination,
         }, ("track_id", "expected_sha256", "start_ms", "end_ms"), pitch, ("process:spawn_local",)),
+        ("gramophone.pitch_chart", "Render a private chart of periodicity candidates; not voice detection.", {
+            "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
+            "source_context": {"type": "string", "enum": ["unverified_mix", "caller_asserted_monophonic"]},
+        }, ("track_id", "expected_sha256", "start_ms", "end_ms"), pitch_chart,
+         ("process:spawn_local", "filesystem:write_private_image_cache")),
         ("gramophone.spectrogram", "Render a private time-frequency plot for a cataloged passage.", {
             "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
         }, ("track_id", "expected_sha256", "start_ms", "end_ms"), spectrogram,
@@ -437,6 +470,10 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
             "start_ms": 0, "end_ms": 10000,
         },
         "gramophone.pitch": {
+            "track_id": example_track, "expected_sha256": example_hash,
+            "start_ms": 0, "end_ms": 10000, "source_context": "unverified_mix",
+        },
+        "gramophone.pitch_chart": {
             "track_id": example_track, "expected_sha256": example_hash,
             "start_ms": 0, "end_ms": 10000, "source_context": "unverified_mix",
         },

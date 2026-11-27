@@ -507,3 +507,62 @@ def test_private_bell_explores_periodicity_without_claiming_voice(listening_hous
     disabled = CoreRuntime(load_config(home), fake=True)
     with pytest.raises(PermissionError):
         disabled.house.dispatch(action, turn_id="disabled", context={"interface": "bell", "invocation": "conversation"})
+
+
+def test_private_bell_pitch_chart_is_saved_and_inspectable(listening_house, monkeypatch):
+    home, track_file, track, _ = listening_house
+    runtime = CoreRuntime(load_config(home), fake=True)
+    action = {"action": "gramophone.pitch_chart", "track_id": track["track_id"],
+              "expected_sha256": track["sha256"], "start_ms": 0, "end_ms": 3000}
+    result = runtime.house.dispatch(action, turn_id="bell-chart", context={
+        "interface": "bell", "invocation": "conversation",
+    })
+    [picture] = result["images"]
+    asset = runtime.house.images.get_asset(picture["image_id"])
+    assert result["retention"] == "runtime_private_image_shelf"
+    assert result["candidate_count"] == result["total_frames"] == 59
+    assert asset["privacy"] == "private" and asset["media_type"] == "image/png"
+    assert asset["content_hash"] == result["image_sha256"] == picture["sha256"]
+    assert hashlib.sha256(track_file.read_bytes()).hexdigest() == track["sha256"]
+    inspection = runtime.house.dispatch({"action": "image.inspect", "image_id": picture["image_id"],
+                                         "routes": ["vision_low"], "question": "Examine the plotted candidates."},
+                                        turn_id="bell-vision", context={"interface": "bell", "invocation": "conversation"})
+    assert inspection["results"][0]["status"] == "ok" and inspection["results"][0]["model"] == "fake-vision"
+    receipt = runtime.house.legible.inspect_receipt(result["receipt_id"])
+    assert receipt["status"] == "succeeded" and "data:image" not in json.dumps(receipt)
+    restarted = CoreRuntime(load_config(home), fake=True)
+    assert restarted.house.images.get_asset(picture["image_id"])["content_hash"] == picture["sha256"]
+    monkeypatch.setenv("VESTIGIA_GRAMOPHONE_BELLS_ENABLED", "false")
+    disabled = CoreRuntime(load_config(home), fake=True)
+    with pytest.raises(PermissionError):
+        disabled.house.dispatch(action, turn_id="disabled", context={"interface": "bell", "invocation": "conversation"})
+
+
+def test_pitch_chart_rejects_mismatched_source_context(listening_house, monkeypatch):
+    home, _, track, _ = listening_house
+    runtime = CoreRuntime(load_config(home), fake=True)
+    def response(_self, tool, arguments):
+        return {"text_blocks": [json.dumps({"track_id": arguments["track_id"],
+                "sha256": arguments["expected_sha256"], "start_ms": 0, "end_ms": 1000,
+                "source_context": "caller_asserted_monophonic"})],
+                "image_blocks": [{"mime_type": "image/png", "data": ""}]}
+    monkeypatch.setattr(McpStdioClient, "call_tool", response)
+    with pytest.raises(RuntimeError, match="provenance"):
+        runtime.house.dispatch({"action": "gramophone.pitch_chart", "track_id": track["track_id"],
+                                "expected_sha256": track["sha256"], "start_ms": 0, "end_ms": 1000},
+                               turn_id="forged", context={"interface": "web", "invocation": "conversation"})
+
+
+def test_pitch_chart_rejects_a_mismatched_image_digest(listening_house, monkeypatch):
+    home, _, track, _ = listening_house
+    runtime = CoreRuntime(load_config(home), fake=True)
+    def response(_self, tool, arguments):
+        return {"text_blocks": [json.dumps({"track_id": arguments["track_id"],
+                "sha256": arguments["expected_sha256"], "start_ms": 0, "end_ms": 1000,
+                "source_context": "unverified_mix", "image_sha256": "0" * 64})],
+                "image_blocks": [{"mime_type": "image/png", "data": "YWJj"}]}
+    monkeypatch.setattr(McpStdioClient, "call_tool", response)
+    with pytest.raises(RuntimeError, match="image digest"):
+        runtime.house.dispatch({"action": "gramophone.pitch_chart", "track_id": track["track_id"],
+                                "expected_sha256": track["sha256"], "start_ms": 0, "end_ms": 1000},
+                               turn_id="forged-digest", context={"interface": "web", "invocation": "conversation"})
