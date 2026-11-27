@@ -101,6 +101,14 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
             key: payload[key] for key in ("track_id", "expected_sha256", "start_ms", "end_ms")
         })
 
+    def pocket(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
+        arguments = {key: payload[key] for key in (
+            "track_id", "expected_sha256", "start_ms", "end_ms", "bpm", "anchor_ms")}
+        for key in ("subdivisions", "offset", "limit"):
+            if key in payload:
+                arguments[key] = payload[key]
+        return call("gramophone.pocket", arguments)
+
     def spectrogram(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
         arguments = {key: payload[key] for key in ("track_id", "expected_sha256", "start_ms", "end_ms")}
         response = client.call_tool("gramophone.spectrogram", arguments)
@@ -341,6 +349,12 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
         ("gramophone.rhythm", "Estimate energy attacks and possible tempo in a track passage.", {
             "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
         }, ("track_id", "expected_sha256", "start_ms", "end_ms"), rhythm, ("process:spawn_local",)),
+        ("gramophone.pocket", "Compare energy attacks with a caller-supplied timing grid; offsets are not instrument labels.", {
+            "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
+            "bpm": {"type": "number", "minimum": 40, "maximum": 240}, "anchor_ms": millis,
+            "subdivisions": {"type": "integer", "enum": [1, 2, 4]}, **pagination,
+        }, ("track_id", "expected_sha256", "start_ms", "end_ms", "bpm", "anchor_ms"),
+         pocket, ("process:spawn_local",)),
         ("gramophone.spectrogram", "Render a private time-frequency plot for a cataloged passage.", {
             "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
         }, ("track_id", "expected_sha256", "start_ms", "end_ms"), spectrogram,
@@ -381,6 +395,10 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
         "gramophone.rhythm": {
             "track_id": example_track, "expected_sha256": example_hash,
             "start_ms": 0, "end_ms": 10000,
+        },
+        "gramophone.pocket": {
+            "track_id": example_track, "expected_sha256": example_hash,
+            "start_ms": 0, "end_ms": 10000, "bpm": 120, "anchor_ms": 0,
         },
         "gramophone.spectrogram": {
             "track_id": example_track, "expected_sha256": example_hash,

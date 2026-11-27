@@ -81,7 +81,7 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
     async def scenario():
         async with Client(create_server(settings)) as client:
             names = {tool.name for tool in (await client.list_tools()).tools}
-            assert {"gramophone.register", "gramophone.list", "gramophone.inspect", "gramophone.spectrogram", "gramophone.rhythm"} <= names
+            assert {"gramophone.register", "gramophone.list", "gramophone.inspect", "gramophone.spectrogram", "gramophone.rhythm", "gramophone.pocket"} <= names
             registered = await client.call_tool(
                 "gramophone.register", {"path": "Music/fixture.wav", "title": "Synthetic"}
             )
@@ -114,6 +114,20 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
             assert not rhythmic.is_error
             assert rhythmic.structured_content["sha256"] == track["sha256"]
             assert rhythmic.structured_content["tempo_candidates"] == []
+            pocket = await client.call_tool(
+                "gramophone.pocket",
+                {"track_id": track["track_id"], "expected_sha256": track["sha256"],
+                 "start_ms": 500, "end_ms": 1500, "bpm": 120, "anchor_ms": 500},
+            )
+            assert not pocket.is_error
+            assert pocket.structured_content["grid"]["source"] == "caller_supplied_unverified"
+            assert pocket.structured_content["sha256"] == track["sha256"]
+            invalid_grid = await client.call_tool(
+                "gramophone.pocket",
+                {"track_id": track["track_id"], "expected_sha256": track["sha256"],
+                 "start_ms": 500, "end_ms": 1500, "bpm": 0, "anchor_ms": 500},
+            )
+            assert invalid_grid.is_error
             refused = await client.call_tool(
                 "gramophone.rhythm",
                 {"track_id": track["track_id"], "expected_sha256": "0" * 64,
@@ -160,6 +174,8 @@ def test_spectrogram_is_versioned_and_validates_passage(audio):
         service.spectrogram(track["track_id"], track["sha256"], 0, 1000)
     with pytest.raises(ArchiveError, match="changed"):
         service.rhythm(track["track_id"], track["sha256"], 0, 1000)
+    with pytest.raises(ArchiveError, match="changed"):
+        service.pocket(track["track_id"], track["sha256"], 0, 1000, 120, 0)
 
 
 def test_spectrogram_reflects_requested_audio_passage(audio):
@@ -183,3 +199,20 @@ def test_spectrogram_reflects_requested_audio_passage(audio):
         with Image.open(io.BytesIO(data)) as picture:
             return sum(ImageStat.Stat(picture.convert("RGB").crop((200, 100, 800, 400))).mean)
     assert brightness(tone_image) > brightness(silence_image) + 10
+
+
+def test_pocket_rejects_invalid_grid_and_passage(audio):
+    root, _, state = audio
+    service = GramophoneService(ArchiveSource(root), state, "Music")
+    track = service.register("Music/fixture.wav", "Synthetic")
+    args = (track["track_id"], track["sha256"], 0, 1000)
+    for bpm in (float("nan"), float("inf"), 0, 241, True):
+        with pytest.raises(ArchiveError):
+            service.pocket(*args, bpm, 0)
+    for kwargs in ({"subdivisions": 3}, {"anchor_ms": -1}, {"anchor_ms": 3001},
+                   {"offset": -1}, {"limit": 0}, {"limit": 101}):
+        options = {"bpm": 120, "anchor_ms": 0, **kwargs}
+        with pytest.raises(ArchiveError):
+            service.pocket(*args, **options)
+    with pytest.raises(ArchiveError, match="250 ms"):
+        service.pocket(track["track_id"], track["sha256"], 0, 100, 120, 0)
