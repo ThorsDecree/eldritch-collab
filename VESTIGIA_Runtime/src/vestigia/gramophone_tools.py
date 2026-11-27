@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 import math
 from typing import Any
 
 from .capabilities import CapabilitySpec, object_schema
-from .mcp_deployment_tools import require_private_mcp_turn
+from .mcp_deployment_tools import _save_images, require_private_mcp_turn
 from .utils import new_id, utc_now_iso
 
 
@@ -81,6 +84,32 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
             result["bin_ms"] = factor * bin_ms
             result["aggregation"] = "Maximum peak and duration-weighted RMS"
         return result
+
+    def spectrogram(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
+        arguments = {key: payload[key] for key in ("track_id", "expected_sha256", "start_ms", "end_ms")}
+        response = client.call_tool("gramophone.spectrogram", arguments)
+        text = response.get("text_blocks", [])
+        images = response.get("image_blocks", [])
+        if len(text) != 1 or len(images) != 1:
+            raise RuntimeError("Gramophone did not return one spectrogram with its metadata")
+        metadata = json.loads(text[0])
+        if not isinstance(metadata, dict) or any((
+            metadata.get("track_id") != arguments["track_id"],
+            metadata.get("sha256") != arguments["expected_sha256"],
+            metadata.get("start_ms") != arguments["start_ms"],
+            metadata.get("end_ms") != arguments["end_ms"],
+            images[0].get("mime_type") != "image/png",
+        )):
+            raise RuntimeError("Gramophone spectrogram provenance does not match the request")
+        image_bytes = base64.b64decode(images[0]["data"], validate=True)
+        if hashlib.sha256(image_bytes).hexdigest() != metadata.get("image_sha256"):
+            raise RuntimeError("Gramophone spectrogram image digest does not match")
+        saved = _save_images(house, "gramophone.spectrogram", images, {
+            "track_id": arguments["track_id"], "source_sha256": arguments["expected_sha256"],
+            "start_ms": arguments["start_ms"], "end_ms": arguments["end_ms"],
+        })
+        return {**metadata, "retention": "runtime_private_image_shelf", "images": saved,
+                "next_step": "Use image.inspect on the image ID to examine the plot."}
 
     def add_note(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
         content = payload["content"].strip()
@@ -160,6 +189,10 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
         ("gramophone.inspect", "Measure a passage of a cataloged track.", {
             "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
         }, ("track_id", "expected_sha256", "start_ms", "end_ms"), inspect, ("process:spawn_local",)),
+        ("gramophone.spectrogram", "Render a private time-frequency plot for a cataloged passage.", {
+            "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
+        }, ("track_id", "expected_sha256", "start_ms", "end_ms"), spectrogram,
+         ("process:spawn_local", "filesystem:write_private_image_cache")),
         ("gramophone.note.add", "Save a private listening note. Reuse the same request_id to retry.",
          {"track_id": track, "source_sha256": digest, "start_ms": millis, "end_ms": millis,
           "content": {"type": "string", "minLength": 1, "maxLength": 4000},
@@ -175,6 +208,10 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
     examples = {
         "gramophone.list": {"limit": 20},
         "gramophone.inspect": {
+            "track_id": example_track, "expected_sha256": example_hash,
+            "start_ms": 0, "end_ms": 1000,
+        },
+        "gramophone.spectrogram": {
             "track_id": example_track, "expected_sha256": example_hash,
             "start_ms": 0, "end_ms": 1000,
         },

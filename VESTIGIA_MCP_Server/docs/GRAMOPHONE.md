@@ -15,6 +15,12 @@ into that directory through your existing provisioning workflow.
 - `gramophone.inspect(track_id, expected_sha256, start_ms, end_ms)` measures a
   passage of at most 60 seconds in 100 ms peak and RMS bins. It refuses a changed
   file or mismatched catalog version.
+- `gramophone.spectrogram(track_id, expected_sha256, start_ms, end_ms)` returns
+  a PNG and metadata for a passage between 250 ms and 60 seconds. Its horizontal
+  axis is seconds from the requested start, and its vertical axis is logarithmic
+  frequency. Mono 16 kHz conversion limits the plot to 8 kHz; it cannot recover
+  frequencies missing from the source. The source and image hashes travel with
+  the time range. The MCP server keeps no copy of the image.
 
 Registration assigns a stable ID to a path. Registering that path again refreshes
 its metadata and digest while preserving the ID. Consumers should retain the digest
@@ -28,7 +34,7 @@ identify instruments, lyrics or subjective qualities of the track.
 
 The current MCP connection can discover these tools using its usual tool listing.
 With a dedicated MCP deployment configured, Runtime also exposes focused
-`gramophone.list`, `gramophone.inspect`, `gramophone.note.add`, and
+`gramophone.list`, `gramophone.inspect`, `gramophone.spectrogram`, `gramophone.note.add`, and
 `gramophone.note.list` capabilities. Notes belong to the Runtime resident and
 stay in that Runtime home's continuity database. Notes identify the track and
 exact source digest plus a start and end time in milliseconds.
@@ -42,7 +48,10 @@ Runtime prompt-capture settings and provider processing still apply.
 
 Set `VESTIGIA_GRAMOPHONE_BELLS_ENABLED=true` in the Runtime environment to
 allow the focused capabilities during scheduled bell turns. Private conversations
-may use them without that setting. The broader `mcp.call` capability retains its
+may use them without that setting. The spectrogram enters the Runtime resident’s
+private image shelf. Use `image.inspect` and a configured vision route to interpret
+it; producing the image alone does not send it to a model. Vision may incur provider
+costs. The broader `mcp.call` capability retains its
 own private-conversation policy. Direct audio delivery, a shared browser, and
 authorized note export remain future work.
 

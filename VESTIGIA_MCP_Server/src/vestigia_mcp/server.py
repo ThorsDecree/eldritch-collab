@@ -1775,6 +1775,23 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                        lambda: gramophone_service().inspect(track_id, expected_sha256, start_ms, end_ms))
 
     @server.tool(
+        name="gramophone.spectrogram",
+        title="Render a Gramophone passage spectrogram",
+        description="Return a PNG time-frequency plot for a 250 ms to 60 second passage of a cataloged track, pinned to its SHA-256. Time is relative to the requested start.",
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def gramophone_spectrogram(track_id: str, expected_sha256: str, start_ms: int, end_ms: int) -> list[TextContent | ImageContent]:
+        arguments = {"track_id": track_id, "expected_sha256": expected_sha256,
+                     "start_ms": start_ms, "end_ms": end_ms}
+
+        def operation() -> list[TextContent | ImageContent]:
+            metadata, image = gramophone_service().spectrogram(track_id, expected_sha256, start_ms, end_ms)
+            return [TextContent(text=json.dumps(metadata, ensure_ascii=False, sort_keys=True)),
+                    ImageContent(data=base64.b64encode(image).decode("ascii"), mimeType="image/png")]
+
+        return guarded("gramophone.spectrogram", arguments, operation)
+
+    @server.tool(
         name="lanternslide.status",
         title="Inspect Lanternslide catalog state",
         description=(
