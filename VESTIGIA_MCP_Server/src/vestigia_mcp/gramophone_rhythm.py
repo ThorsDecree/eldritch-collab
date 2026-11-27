@@ -12,7 +12,7 @@ FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000
 MAX_ATTACKS = 100
 
 
-def measure_rhythm(raw: bytes, start_ms: int, end_ms: int) -> dict[str, Any]:
+def _energy_attacks(raw: bytes) -> tuple[list[float], float, list[tuple[int, float]]]:
     samples = struct.iter_unpack("<h", raw)
     energies: list[float] = []
     total = count = 0
@@ -39,6 +39,11 @@ def measure_rhythm(raw: bytes, start_ms: int, end_ms: int) -> dict[str, Any]:
                 attacks[-1] = (i, strength)
         else:
             attacks.append((i, strength))
+    return energies, threshold, attacks
+
+
+def measure_rhythm(raw: bytes, start_ms: int, end_ms: int) -> dict[str, Any]:
+    energies, threshold, attacks = _energy_attacks(raw)
     candidates: list[dict[str, float]] = []
     if end_ms - start_ms >= 5000 and len(attacks) >= 4:
         # Binary impulses avoid treating louder hits as automatically more important.
@@ -70,4 +75,35 @@ def measure_rhythm(raw: bytes, start_ms: int, end_ms: int) -> dict[str, Any]:
         "limitations": "Energy attacks can miss soft or legato sounds and do not identify instruments. "
                        "The passage start has no preceding audio and is not counted as an attack. "
                        "Tempo candidates are estimates, not probabilities; half/double tempo and syncopation are ambiguous.",
+    }
+
+
+def measure_pocket(raw: bytes, start_ms: int, bpm: float, anchor_ms: int,
+                   subdivisions: int, offset: int = 0, limit: int = 50) -> dict[str, Any]:
+    """Compare energy attacks with an explicit, unverified regular reference grid."""
+    _energies, threshold, attacks = _energy_attacks(raw)
+    grid_ms = 60000.0 / bpm / subdivisions
+    points = []
+    for frame, strength in attacks:
+        time_ms = start_ms + frame * FRAME_MS
+        # A midpoint tie chooses the later grid line, including before the anchor.
+        grid_index = math.floor((time_ms - anchor_ms) / grid_ms + 0.5)
+        nearest_ms = anchor_ms + grid_index * grid_ms
+        points.append({"time_ms": time_ms, "strength": round(strength, 5),
+                       "grid_index": grid_index, "grid_time_ms": round(nearest_ms, 3),
+                       "offset_ms": round(time_ms - nearest_ms, 3)})
+    return {
+        "method": "10 ms mono RMS energy attacks compared with caller-supplied fixed grid",
+        "grid": {"bpm": bpm, "anchor_ms": anchor_ms, "subdivisions_per_beat": subdivisions,
+                 "interval_ms": round(grid_ms, 3), "source": "caller_supplied_unverified"},
+        "attack_threshold": round(threshold, 5), "attack_count": len(points),
+        "temporal_resolution_ms": FRAME_MS, "minimum_attack_separation_ms": 80,
+        "attacks": points[offset:offset + limit],
+        "next_offset": offset + limit if offset + limit < len(points) else None,
+        "limitations": "Positive offsets are later than the chosen grid and negative offsets earlier. "
+                       "Grid phase and tempo are supplied, not detected or verified. "
+                       "Energy attacks are not instrument labels, can miss soft or legato sounds, "
+                       "are quantized to 10 ms frames, and require 80 ms separation. "
+                       "Passage-start attacks cannot be verified. "
+                       "This does not establish swing, intentional timing, or perceived groove.",
     }

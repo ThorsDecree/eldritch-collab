@@ -214,6 +214,10 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Estimate energy attacks and periodicities in an unchanged cataloged passage.",
     ),
     Capability(
+        "gramophone.pocket", EffectClass.PERCEIVE, Decision.ALLOW,
+        "Compare a passage's energy attacks with an explicit timing grid.",
+    ),
+    Capability(
         "gramophone.spectrogram", EffectClass.PERCEIVE, Decision.ALLOW,
         "Render a bounded passage of an unchanged cataloged track as an image.",
     ),

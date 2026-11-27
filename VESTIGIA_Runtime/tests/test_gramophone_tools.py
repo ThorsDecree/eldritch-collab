@@ -387,3 +387,36 @@ def test_opted_in_bell_measures_rhythm_with_private_tool(listening_house, monkey
     disabled = CoreRuntime(load_config(home), fake=True)
     with pytest.raises(PermissionError):
         disabled.house.dispatch(action, turn_id="disabled", context={"interface": "bell", "invocation": "conversation"})
+
+
+def test_private_bell_compares_pocket_against_explicit_grid(listening_house, monkeypatch):
+    home, track_file, _, client = listening_house
+    samples = [0] * (8000 * 3)
+    for onset in (450, 1040, 1460, 2010):
+        for i in range(160):
+            samples[onset * 8 + i] = int(18000 * math.sin(2 * math.pi * 800 * i / 8000))
+    with wave.open(str(track_file), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(8000)
+        output.writeframes(b"".join(struct.pack("<h", sample) for sample in samples))
+    track = client.call_tool("gramophone.register", {"path": "Music/fixture.wav", "title": "Synthetic pocket"})["structured_content"]
+    action = {"action": "gramophone.pocket", "track_id": track["track_id"],
+              "expected_sha256": track["sha256"], "start_ms": 0, "end_ms": 3000,
+              "bpm": 120, "anchor_ms": 500, "limit": 2}
+    provider = FakeProvider(['[[TOOL_ACTION ' + json.dumps({**action, "after": "continue"}) + ']]',
+                             "Compared the timing."])
+    runtime = CoreRuntime(load_config(home), provider=provider, fake=True)
+    result = runtime.chat(NormalizedMessage(content="Explore timing", interface="bell", speaker_id="bell:test",
+                                            room_id=runtime.room_id, external_id="bell-pocket"))
+    receipts = runtime.house.legible.list_receipts(turn_id=result.turn_id, action="gramophone.pocket")
+    assert len(receipts) == 1
+    receipt = runtime.house.legible.inspect_receipt(receipts[0]["id"])
+    assert receipt["status"] == "succeeded"
+    assert [x["offset_ms"] for x in receipt["result"]["attacks"]] == pytest.approx([-50, 40], abs=10)
+    assert receipt["result"]["next_offset"] == 2
+    assert "caller_supplied_unverified" in json.dumps(provider.requests[-1].messages)
+    monkeypatch.setenv("VESTIGIA_GRAMOPHONE_BELLS_ENABLED", "false")
+    disabled = CoreRuntime(load_config(home), fake=True)
+    with pytest.raises(PermissionError):
+        disabled.house.dispatch(action, turn_id="disabled", context={"interface": "bell", "invocation": "conversation"})

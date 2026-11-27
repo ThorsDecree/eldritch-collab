@@ -1787,6 +1787,21 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                        lambda: gramophone_service().rhythm(track_id, expected_sha256, start_ms, end_ms))
 
     @server.tool(
+        name="gramophone.pocket",
+        title="Compare passage attacks with a timing grid",
+        description="Compare energy attacks in a 250 ms to 60 second passage with a caller-supplied BPM and track-relative grid anchor. Offsets are estimates, not instrument labels or detected swing.",
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def gramophone_pocket(track_id: str, expected_sha256: str, start_ms: int, end_ms: int,
+                         bpm: float, anchor_ms: int, subdivisions: int = 1,
+                         offset: int = 0, limit: int = 50) -> dict[str, object]:
+        arguments = {"track_id": track_id, "expected_sha256": expected_sha256,
+                     "start_ms": start_ms, "end_ms": end_ms, "bpm": bpm, "anchor_ms": anchor_ms,
+                     "subdivisions": subdivisions, "offset": offset, "limit": limit}
+        return guarded("gramophone.pocket", arguments,
+                       lambda: gramophone_service().pocket(**arguments))
+
+    @server.tool(
         name="gramophone.spectrogram",
         title="Render a Gramophone passage spectrogram",
         description="Return a PNG time-frequency plot for a 250 ms to 60 second passage of a cataloged track, pinned to its SHA-256. Time is relative to the requested start.",
