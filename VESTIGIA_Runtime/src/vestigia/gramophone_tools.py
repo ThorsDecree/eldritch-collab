@@ -96,6 +96,11 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
             result["aggregation"] = "Maximum peak and duration-weighted RMS"
         return result
 
+    def rhythm(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
+        return call("gramophone.rhythm", {
+            key: payload[key] for key in ("track_id", "expected_sha256", "start_ms", "end_ms")
+        })
+
     def spectrogram(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
         arguments = {key: payload[key] for key in ("track_id", "expected_sha256", "start_ms", "end_ms")}
         response = client.call_tool("gramophone.spectrogram", arguments)
@@ -333,6 +338,9 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
         ("gramophone.inspect", "Measure a passage of a cataloged track.", {
             "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
         }, ("track_id", "expected_sha256", "start_ms", "end_ms"), inspect, ("process:spawn_local",)),
+        ("gramophone.rhythm", "Estimate energy attacks and possible tempo in a track passage.", {
+            "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
+        }, ("track_id", "expected_sha256", "start_ms", "end_ms"), rhythm, ("process:spawn_local",)),
         ("gramophone.spectrogram", "Render a private time-frequency plot for a cataloged passage.", {
             "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
         }, ("track_id", "expected_sha256", "start_ms", "end_ms"), spectrogram,
@@ -369,6 +377,10 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
         "gramophone.inspect": {
             "track_id": example_track, "expected_sha256": example_hash,
             "start_ms": 0, "end_ms": 1000,
+        },
+        "gramophone.rhythm": {
+            "track_id": example_track, "expected_sha256": example_hash,
+            "start_ms": 0, "end_ms": 10000,
         },
         "gramophone.spectrogram": {
             "track_id": example_track, "expected_sha256": example_hash,

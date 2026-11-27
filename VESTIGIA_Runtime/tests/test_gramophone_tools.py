@@ -352,3 +352,38 @@ def test_simulated_bell_uses_cursor_to_measure_and_note(listening_house):
     view = runtime.house.dispatch({"action": "gramophone.session.view", **base}, turn_id="later",
                                   context={"interface": "web", "invocation": "conversation"})
     assert view["session"]["start_ms"] == 1000
+
+
+def test_opted_in_bell_measures_rhythm_with_private_tool(listening_house, monkeypatch):
+    home, track_file, _, client = listening_house
+    rate = 8000
+    with wave.open(str(track_file), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(rate)
+        samples = []
+        for i in range(rate * 12):
+            since = (i / rate) % (60 / 140)
+            samples.append(struct.pack("<h", int(18000 * math.sin(2 * math.pi * 800 * since))
+                                       if since < 0.025 else 0))
+        output.writeframes(b"".join(samples))
+    track = client.call_tool("gramophone.register", {
+        "path": "Music/fixture.wav", "title": "Synthetic click",
+    })["structured_content"]
+    action = {"action": "gramophone.rhythm", "track_id": track["track_id"],
+              "expected_sha256": track["sha256"], "start_ms": 0, "end_ms": 12000}
+    provider = FakeProvider(['[[TOOL_ACTION ' + json.dumps({**action, "after": "continue"}) + ']]',
+                             "Measured a pulse."])
+    runtime = CoreRuntime(load_config(home), provider=provider, fake=True)
+    result = runtime.chat(NormalizedMessage(content="Explore the pulse", interface="bell", speaker_id="bell:test",
+                                            room_id=runtime.room_id, external_id="bell-rhythm"))
+    receipts = runtime.house.legible.list_receipts(turn_id=result.turn_id, action="gramophone.rhythm")
+    assert len(receipts) == 1
+    receipt = runtime.house.legible.inspect_receipt(receipts[0]["id"])
+    assert receipt["status"] == "succeeded"
+    assert any(abs(x["bpm"] - 140) < 4 for x in receipt["result"]["tempo_candidates"])
+    assert "tempo_candidates" in json.dumps(provider.requests[-1].messages)
+    monkeypatch.setenv("VESTIGIA_GRAMOPHONE_BELLS_ENABLED", "false")
+    disabled = CoreRuntime(load_config(home), fake=True)
+    with pytest.raises(PermissionError):
+        disabled.house.dispatch(action, turn_id="disabled", context={"interface": "bell", "invocation": "conversation"})

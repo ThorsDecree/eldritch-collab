@@ -81,7 +81,7 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
     async def scenario():
         async with Client(create_server(settings)) as client:
             names = {tool.name for tool in (await client.list_tools()).tools}
-            assert {"gramophone.register", "gramophone.list", "gramophone.inspect", "gramophone.spectrogram"} <= names
+            assert {"gramophone.register", "gramophone.list", "gramophone.inspect", "gramophone.spectrogram", "gramophone.rhythm"} <= names
             registered = await client.call_tool(
                 "gramophone.register", {"path": "Music/fixture.wav", "title": "Synthetic"}
             )
@@ -106,6 +106,26 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
             metadata = json.loads(text.text)
             assert hashlib.sha256(base64.b64decode(image.data)).hexdigest() == metadata["image_sha256"]
             assert image.mime_type == "image/png"
+            rhythmic = await client.call_tool(
+                "gramophone.rhythm",
+                {"track_id": track["track_id"], "expected_sha256": track["sha256"],
+                 "start_ms": 500, "end_ms": 1500},
+            )
+            assert not rhythmic.is_error
+            assert rhythmic.structured_content["sha256"] == track["sha256"]
+            assert rhythmic.structured_content["tempo_candidates"] == []
+            refused = await client.call_tool(
+                "gramophone.rhythm",
+                {"track_id": track["track_id"], "expected_sha256": "0" * 64,
+                 "start_ms": 500, "end_ms": 1500},
+            )
+            assert refused.is_error
+            too_short = await client.call_tool(
+                "gramophone.rhythm",
+                {"track_id": track["track_id"], "expected_sha256": track["sha256"],
+                 "start_ms": 500, "end_ms": 600},
+            )
+            assert too_short.is_error
             rejected = await client.call_tool(
                 "gramophone.inspect",
                 {"track_id": track["track_id"], "expected_sha256": "0" * 64,
@@ -138,6 +158,8 @@ def test_spectrogram_is_versioned_and_validates_passage(audio):
     path.write_bytes(original[:-8])
     with pytest.raises(ArchiveError, match="changed"):
         service.spectrogram(track["track_id"], track["sha256"], 0, 1000)
+    with pytest.raises(ArchiveError, match="changed"):
+        service.rhythm(track["track_id"], track["sha256"], 0, 1000)
 
 
 def test_spectrogram_reflects_requested_audio_passage(audio):

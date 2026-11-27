@@ -15,6 +15,16 @@ into that directory through your existing provisioning workflow.
 - `gramophone.inspect(track_id, expected_sha256, start_ms, end_ms)` measures a
   passage of at most 60 seconds in 100 ms peak and RMS bins. It refuses a changed
   file or mismatched catalog version.
+- `gramophone.rhythm(track_id, expected_sha256, start_ms, end_ms)` estimates
+  energy attacks and possible rhythmic periodicities for a passage of 250 ms to
+  60 seconds. Timestamps are absolute track milliseconds. The first passage
+  frame is not labeled as an attack because its preceding audio is unavailable.
+  At most 100 attacks are returned; `attack_count` and `attacks_truncated` show
+  when to inspect a shorter range. Tempo candidates require at least five
+  seconds and four attacks, and can be empty. The periodicity scores are
+  autocorrelation measurements, not calibrated probabilities. Half/double
+  tempo, syncopation, low-energy attacks and steady notes make the estimate
+  uncertain; the method does not identify instruments or provide audio input.
 - `gramophone.spectrogram(track_id, expected_sha256, start_ms, end_ms)` returns
   a PNG and metadata for a passage between 250 ms and 60 seconds. Its horizontal
   axis is seconds from the requested start, and its vertical axis is logarithmic
@@ -34,7 +44,7 @@ identify instruments, lyrics or subjective qualities of the track.
 
 The current MCP connection can discover these tools using its usual tool listing.
 With a dedicated MCP deployment configured, Runtime also exposes focused
-`gramophone.list`, `gramophone.inspect`, `gramophone.spectrogram`, `gramophone.note.add`, and
+`gramophone.list`, `gramophone.inspect`, `gramophone.rhythm`, `gramophone.spectrogram`, `gramophone.note.add`, and
 `gramophone.note.list` capabilities. Notes belong to the Runtime resident and
 stay in that Runtime home's continuity database. Notes identify the track and
 exact source digest plus a start and end time in milliseconds.
@@ -81,6 +91,6 @@ without advancing the revision. A successful retry returns the original result,
 which may be older than the current session; use `session.view` for current state.
 
 Use the returned track ID, digest, start and end with `gramophone.inspect`,
-`gramophone.spectrogram`, or `gramophone.note.add`. Notes remain private to the
+`gramophone.rhythm`, `gramophone.spectrogram`, or `gramophone.note.add`. Notes remain private to the
 resident and attached to their own ranges and track version. These tools do not
 deliver actual audio to a model or provide a graphical playback interface.
