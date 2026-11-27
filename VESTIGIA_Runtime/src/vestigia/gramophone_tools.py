@@ -26,6 +26,17 @@ CREATE TABLE IF NOT EXISTS gramophone_notes (
 );
 CREATE INDEX IF NOT EXISTS idx_gramophone_notes_track
 ON gramophone_notes(resident_id, track_id, source_sha256, created_at);
+CREATE TABLE IF NOT EXISTS gramophone_sessions (
+    resident_id TEXT NOT NULL, track_id TEXT NOT NULL, source_sha256 TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL, window_ms INTEGER NOT NULL, start_ms INTEGER NOT NULL,
+    revision INTEGER NOT NULL, updated_at TEXT NOT NULL,
+    PRIMARY KEY(resident_id, track_id, source_sha256)
+);
+CREATE TABLE IF NOT EXISTS gramophone_session_moves (
+    resident_id TEXT NOT NULL, request_id TEXT NOT NULL, request_json TEXT NOT NULL,
+    result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+    PRIMARY KEY(resident_id, request_id)
+);
 """
 
 
@@ -179,6 +190,139 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
         return {"notes": [dict(row) for row in rows[:limit]],
                 "next_offset": offset + limit if len(rows) > limit else None}
 
+    def session_key(payload: dict[str, Any]) -> tuple[str, str, str]:
+        return resident_id, payload["track_id"], payload["source_sha256"]
+
+    def session_snapshot(row: Any) -> dict[str, Any]:
+        item = dict(row)
+        item["end_ms"] = min(item["start_ms"] + item["window_ms"], item["duration_ms"])
+        item["previous_start_ms"] = max(0, item["start_ms"] - item["window_ms"]) if item["start_ms"] else None
+        item["next_start_ms"] = item["end_ms"] if item["end_ms"] < item["duration_ms"] else None
+        return item
+
+    def verify_track(payload: dict[str, Any]) -> dict[str, Any]:
+        track = call("gramophone.track", {"track_id": payload["track_id"], "verify_source": True})
+        if track.get("sha256") != payload["source_sha256"]:
+            raise ValueError("Track digest differs from the current catalog")
+        return track
+
+    def open_session(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
+        track = verify_track(payload)
+        duration = int(track["duration_ms"])
+        start = payload.get("start_ms", 0)
+        window = payload.get("window_ms", 15000)
+        if start >= duration:
+            raise ValueError("The starting position must be inside the track")
+        key = session_key(payload)
+        with house.db.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM gramophone_sessions WHERE resident_id=? AND track_id=? AND source_sha256=?", key,
+            ).fetchone()
+            if existing:
+                return {"session": session_snapshot(existing), "resumed": True}
+            connection.execute(
+                "INSERT INTO gramophone_sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (*key, duration, window, start, 1, utc_now_iso()),
+            )
+            row = connection.execute(
+                "SELECT * FROM gramophone_sessions WHERE resident_id=? AND track_id=? AND source_sha256=?", key,
+            ).fetchone()
+        return {"session": session_snapshot(row), "resumed": False}
+
+    def view_session(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
+        key = session_key(payload)
+        limit, offset = payload.get("limit", 20), payload.get("offset", 0)
+        with house.db.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM gramophone_sessions WHERE resident_id=? AND track_id=? AND source_sha256=?", key,
+            ).fetchone()
+            if not row:
+                raise ValueError("No listening session exists for this track version")
+            session = session_snapshot(row)
+            notes = connection.execute(
+                """SELECT * FROM gramophone_notes WHERE resident_id=? AND track_id=? AND source_sha256=?
+                AND start_ms < ? AND end_ms > ? ORDER BY start_ms, created_at, note_id LIMIT ? OFFSET ?""",
+                (*key, session["end_ms"], session["start_ms"], limit + 1, offset),
+            ).fetchall()
+        return {"session": session, "notes": [dict(note) for note in notes[:limit]],
+                "next_offset": offset + limit if len(notes) > limit else None,
+                "source_verified": False}
+
+    def move_session(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
+        request_id = payload["request_id"].strip()
+        if not request_id:
+            raise ValueError("A session move needs a retry key")
+        mode = payload["mode"]
+        if (mode == "seek") != ("start_ms" in payload):
+            raise ValueError("Supply start_ms only when seeking")
+        if (mode == "resize") != ("window_ms" in payload):
+            raise ValueError("Supply window_ms only when resizing")
+        request = {key: payload[key] for key in ("track_id", "source_sha256", "expected_revision", "mode")}
+        if mode == "seek":
+            request["start_ms"] = payload["start_ms"]
+        if mode == "resize":
+            request["window_ms"] = payload["window_ms"]
+        encoded = json.dumps(request, sort_keys=True, separators=(",", ":"))
+
+        def replay(connection: Any) -> dict[str, Any] | None:
+            row = connection.execute(
+                "SELECT request_json, result_json FROM gramophone_session_moves WHERE resident_id=? AND request_id=?",
+                (resident_id, request_id),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["request_json"] != encoded:
+                raise ValueError("Retry key already belongs to a different session move")
+            return {**json.loads(row["result_json"]), "reused": True}
+
+        with house.db.connect() as connection:
+            prior = replay(connection)
+        if prior is not None:
+            return prior
+        track = verify_track(payload)
+        key = session_key(payload)
+        with house.db.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            prior = replay(connection)
+            if prior is not None:
+                return prior
+            row = connection.execute(
+                "SELECT * FROM gramophone_sessions WHERE resident_id=? AND track_id=? AND source_sha256=?", key,
+            ).fetchone()
+            if not row:
+                raise ValueError("No listening session exists for this track version")
+            current = session_snapshot(row)
+            if current["revision"] != payload["expected_revision"]:
+                raise ValueError("Listening session revision changed; view it before moving")
+            if int(track["duration_ms"]) != current["duration_ms"]:
+                raise ValueError("Catalog duration differs from the listening session")
+            window = current["window_ms"]
+            if mode == "seek":
+                start = payload["start_ms"]
+                if start >= current["duration_ms"]:
+                    raise ValueError("The requested position must be inside the track")
+            elif mode == "resize":
+                start, window = current["start_ms"], payload["window_ms"]
+            else:
+                start = current["next_start_ms" if mode == "next" else "previous_start_ms"]
+            boundary = start is None
+            if not boundary and (start != current["start_ms"] or window != current["window_ms"]):
+                connection.execute(
+                    """UPDATE gramophone_sessions SET start_ms=?, window_ms=?, revision=revision+1, updated_at=?
+                    WHERE resident_id=? AND track_id=? AND source_sha256=?""",
+                    (start, window, utc_now_iso(), *key),
+                )
+            row = connection.execute(
+                "SELECT * FROM gramophone_sessions WHERE resident_id=? AND track_id=? AND source_sha256=?", key,
+            ).fetchone()
+            result = {"session": session_snapshot(row), "boundary": boundary}
+            connection.execute(
+                "INSERT INTO gramophone_session_moves VALUES (?, ?, ?, ?, ?)",
+                (resident_id, request_id, encoded, json.dumps(result, sort_keys=True), utc_now_iso()),
+            )
+        return {**result, "reused": False}
+
     track = {"type": "string", "pattern": "track_[0-9a-f]{32}"}
     digest = {"type": "string", "pattern": "[0-9a-f]{64}"}
     millis = {"type": "integer", "minimum": 0, "maximum": 600000}
@@ -193,6 +337,21 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
             "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
         }, ("track_id", "expected_sha256", "start_ms", "end_ms"), spectrogram,
          ("process:spawn_local", "filesystem:write_private_image_cache")),
+        ("gramophone.session.open", "Open or resume a private, versioned listening cursor.",
+         {"track_id": track, "source_sha256": digest, "start_ms": millis,
+          "window_ms": {"type": "integer", "minimum": 250, "maximum": 60000}},
+         ("track_id", "source_sha256"), open_session, ("database:write", "process:spawn_local")),
+        ("gramophone.session.view", "View your current passage and overlapping private notes.",
+         {"track_id": track, "source_sha256": digest, **pagination},
+         ("track_id", "source_sha256"), view_session, ("database:read",)),
+        ("gramophone.session.move", "Move, seek, or resize the listening window; use the current revision and a retry key.",
+         {"track_id": track, "source_sha256": digest,
+          "expected_revision": {"type": "integer", "minimum": 1},
+          "mode": {"type": "string", "enum": ["next", "previous", "seek", "resize"]}, "start_ms": millis,
+          "window_ms": {"type": "integer", "minimum": 250, "maximum": 60000},
+          "request_id": {"type": "string", "minLength": 1, "maxLength": 120}},
+         ("track_id", "source_sha256", "expected_revision", "mode", "request_id"),
+         move_session, ("database:write", "process:spawn_local")),
         ("gramophone.note.add", "Save a private listening note. Reuse the same request_id to retry.",
          {"track_id": track, "source_sha256": digest, "start_ms": millis, "end_ms": millis,
           "content": {"type": "string", "minLength": 1, "maxLength": 4000},
@@ -215,6 +374,10 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
             "track_id": example_track, "expected_sha256": example_hash,
             "start_ms": 0, "end_ms": 1000,
         },
+        "gramophone.session.open": {"track_id": example_track, "source_sha256": example_hash, "window_ms": 15000},
+        "gramophone.session.view": {"track_id": example_track, "source_sha256": example_hash},
+        "gramophone.session.move": {"track_id": example_track, "source_sha256": example_hash,
+                                     "expected_revision": 1, "mode": "next", "request_id": "my-move-1"},
         "gramophone.note.add": {
             "track_id": example_track, "source_sha256": example_hash,
             "start_ms": 0, "end_ms": 1000, "content": "My observation",

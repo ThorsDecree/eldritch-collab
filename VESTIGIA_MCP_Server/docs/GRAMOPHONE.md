@@ -58,3 +58,29 @@ authorized note export remain future work.
 Runtime combines longer passage measurements to at most 100 bins using maximum
 peak and duration-weighted RMS, so its durable receipt preserves the full range.
 The MCP tool retains its 100 ms bins.
+
+## Listening cursor
+
+The focused Runtime capabilities also provide a private, durable cursor for each
+resident and exact track digest. `gramophone.session.open` verifies the current
+source and starts a session with a 250 ms to 60 s window, or resumes the saved
+cursor without changing its existing position or window. `gramophone.session.view`
+returns the current range and paginated notes that overlap it, in time order.
+A view is available even if the source has changed or become unavailable and
+reports `source_verified: false`; analysis tools independently recheck the source.
+Note text is removed from general session-view receipts and house events, while
+normal Runtime prompt-capture settings and provider processing still apply.
+
+`gramophone.session.move` supports `next`, `previous`, `seek` with an explicit
+`start_ms`, and `resize` with an explicit `window_ms`. It checks the source and requires the current session
+`expected_revision`. Each move has a caller-chosen `request_id`; a retry with the
+same arguments returns the originally committed result, even after a restart or
+source change. Reusing the key for a different move fails. Concurrent moves at the
+same revision cannot both change the cursor. A boundary move reports `boundary`
+without advancing the revision. A successful retry returns the original result,
+which may be older than the current session; use `session.view` for current state.
+
+Use the returned track ID, digest, start and end with `gramophone.inspect`,
+`gramophone.spectrogram`, or `gramophone.note.add`. Notes remain private to the
+resident and attached to their own ranges and track version. These tools do not
+deliver actual audio to a model or provide a graphical playback interface.
