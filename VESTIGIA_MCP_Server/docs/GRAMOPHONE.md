@@ -45,3 +45,7 @@ allow the focused capabilities during scheduled bell turns. Private conversation
 may use them without that setting. The broader `mcp.call` capability retains its
 own private-conversation policy. Direct audio delivery, a shared browser, and
 authorized note export remain future work.
+
+Runtime combines longer passage measurements to at most 100 bins using maximum
+peak and duration-weighted RMS, so its durable receipt preserves the full range.
+The MCP tool retains its 100 ms bins.

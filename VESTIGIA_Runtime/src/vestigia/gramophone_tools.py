@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from .capabilities import CapabilitySpec, object_schema
@@ -51,9 +52,35 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
         return call("gramophone.list", {"offset": payload.get("offset", 0), "limit": payload.get("limit", 20)})
 
     def inspect(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
-        return call("gramophone.inspect", {
+        result = call("gramophone.inspect", {
             key: payload[key] for key in ("track_id", "expected_sha256", "start_ms", "end_ms")
         })
+        bins = result.get("bins", [])
+        if len(bins) > 100:
+            factor = math.ceil(len(bins) / 100)
+            bin_ms = int(result["bin_ms"])
+            duration_ms = int(result["end_ms"]) - int(result["start_ms"])
+            combined = []
+            for start in range(0, len(bins), factor):
+                group = bins[start:start + factor]
+                weights = [
+                    min(bin_ms, max(0, duration_ms - (start + index) * bin_ms))
+                    for index in range(len(group))
+                ]
+                total = sum(weights)
+                if not total:
+                    raise ValueError("Gramophone returned bins outside the requested passage")
+                combined.append({
+                    "peak": max(item["peak"] for item in group),
+                    "rms": round(math.sqrt(sum(
+                        item["rms"] ** 2 * weight for item, weight in zip(group, weights)
+                    ) / total), 5),
+                })
+            result["bins"] = combined
+            result["source_bin_ms"] = bin_ms
+            result["bin_ms"] = factor * bin_ms
+            result["aggregation"] = "Maximum peak and duration-weighted RMS"
+        return result
 
     def add_note(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
         content = payload["content"].strip()

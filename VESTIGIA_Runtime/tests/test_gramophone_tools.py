@@ -158,3 +158,24 @@ def test_policy_and_concurrent_retry(listening_house, monkeypatch):
             "interface": "discord", "invocation": "conversation",
             "delivery_target": {"kind": "discord_channel", "id": "1"},
         })
+
+
+def test_long_passage_receipt_preserves_the_end(listening_house, monkeypatch):
+    home, _, track, _ = listening_house
+    runtime = CoreRuntime(load_config(home), fake=True)
+    samples = [{"peak": 0.1, "rms": 0.1}] * 120 + [{"peak": 0.9, "rms": 0.9}]
+    def response(_self, tool, arguments):
+        assert tool == "gramophone.inspect"
+        return {"structured_content": {
+            **arguments, "sha256": track["sha256"], "bin_ms": 100, "bins": samples,
+        }}
+    monkeypatch.setattr(McpStdioClient, "call_tool", response)
+    result = runtime.house.dispatch({
+        "action": "gramophone.inspect", "track_id": track["track_id"],
+        "expected_sha256": track["sha256"], "start_ms": 0, "end_ms": 12050,
+    }, turn_id="long", context={"interface": "web", "invocation": "conversation"})
+    assert len(result["bins"]) == 61
+    assert result["bin_ms"] == 200 and result["source_bin_ms"] == 100
+    assert result["bins"][-1]["peak"] == 0.9
+    receipt = runtime.house.legible.inspect_receipt(result["receipt_id"])
+    assert receipt["result"]["bins"] == result["bins"]
