@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import json
 import hashlib
 import math
 import shutil
@@ -79,7 +81,7 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
     async def scenario():
         async with Client(create_server(settings)) as client:
             names = {tool.name for tool in (await client.list_tools()).tools}
-            assert {"gramophone.register", "gramophone.list", "gramophone.inspect"} <= names
+            assert {"gramophone.register", "gramophone.list", "gramophone.inspect", "gramophone.spectrogram"} <= names
             registered = await client.call_tool(
                 "gramophone.register", {"path": "Music/fixture.wav", "title": "Synthetic"}
             )
@@ -94,6 +96,16 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
             )
             assert not result.is_error
             assert len(result.structured_content["bins"]) == 10
+            picture = await client.call_tool(
+                "gramophone.spectrogram",
+                {"track_id": track["track_id"], "expected_sha256": track["sha256"],
+                 "start_ms": 500, "end_ms": 1500},
+            )
+            assert not picture.is_error
+            text, image = picture.content
+            metadata = json.loads(text.text)
+            assert hashlib.sha256(base64.b64decode(image.data)).hexdigest() == metadata["image_sha256"]
+            assert image.mime_type == "image/png"
             rejected = await client.call_tool(
                 "gramophone.inspect",
                 {"track_id": track["track_id"], "expected_sha256": "0" * 64,
@@ -101,3 +113,51 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
             )
             assert rejected.is_error
     asyncio.run(scenario())
+
+
+def test_spectrogram_is_versioned_and_validates_passage(audio):
+    import io
+    from PIL import Image
+
+    root, path, state = audio
+    service = GramophoneService(ArchiveSource(root), state, "Music")
+    track = service.register("Music/fixture.wav", "Synthetic")
+    metadata, data = service.spectrogram(track["track_id"], track["sha256"], 500, 1500)
+    assert metadata["image_sha256"] == hashlib.sha256(data).hexdigest()
+    assert (metadata["start_ms"], metadata["end_ms"]) == (500, 1500)
+    assert metadata["sha256"] == track["sha256"]
+    with Image.open(io.BytesIO(data)) as image:
+        assert image.format == "PNG"
+        assert image.width >= 900 and image.height >= 420
+        assert image.getbbox() is not None
+    with pytest.raises(ArchiveError, match="250 ms"):
+        service.spectrogram(track["track_id"], track["sha256"], 0, 100)
+    with pytest.raises(ArchiveError, match="digest"):
+        service.spectrogram(track["track_id"], "0" * 64, 0, 1000)
+    original = path.read_bytes()
+    path.write_bytes(original[:-8])
+    with pytest.raises(ArchiveError, match="changed"):
+        service.spectrogram(track["track_id"], track["sha256"], 0, 1000)
+
+
+def test_spectrogram_reflects_requested_audio_passage(audio):
+    import io
+    from PIL import Image, ImageStat
+
+    root, path, state = audio
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(8000)
+        tone = b"".join(struct.pack("<h", int(12000 * math.sin(2 * math.pi * 440 * i / 8000)))
+                        for i in range(8000))
+        output.writeframes(tone + bytes(16000))
+    service = GramophoneService(ArchiveSource(root), state, "Music")
+    track = service.register("Music/fixture.wav", "Tone and silence")
+    _, tone_image = service.spectrogram(track["track_id"], track["sha256"], 0, 1000)
+    _, silence_image = service.spectrogram(track["track_id"], track["sha256"], 1000, 2000)
+    # Sample only the plot area, excluding the axes and legend.
+    def brightness(data):
+        with Image.open(io.BytesIO(data)) as picture:
+            return sum(ImageStat.Stat(picture.convert("RGB").crop((200, 100, 800, 400))).mean)
+    assert brightness(tone_image) > brightness(silence_image) + 10

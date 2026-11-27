@@ -179,3 +179,50 @@ def test_long_passage_receipt_preserves_the_end(listening_house, monkeypatch):
     assert result["bins"][-1]["peak"] == 0.9
     receipt = runtime.house.legible.inspect_receipt(result["receipt_id"])
     assert receipt["result"]["bins"] == result["bins"]
+
+
+def test_spectrogram_reaches_private_shelf_from_bell_and_survives_restart(listening_house, monkeypatch):
+    home, track_file, track, _ = listening_house
+    runtime = CoreRuntime(load_config(home), fake=True)
+    action = {"action": "gramophone.spectrogram", "track_id": track["track_id"],
+              "expected_sha256": track["sha256"], "start_ms": 500, "end_ms": 1500}
+    result = runtime.house.dispatch(action, turn_id="bell-picture", context={
+        "interface": "bell", "invocation": "conversation",
+    })
+    [picture] = result["images"]
+    assert result["retention"] == "runtime_private_image_shelf"
+    asset = runtime.house.images.get_asset(picture["image_id"])
+    assert asset["privacy"] == "private"
+    assert asset["content_hash"] == result["image_sha256"] == picture["sha256"]
+    assert asset["media_type"] == "image/png"
+    inspected = runtime.house.dispatch({
+        "action": "image.inspect", "image_id": picture["image_id"],
+        "routes": ["vision_low"], "question": "Examine the plotted frequencies.",
+    }, turn_id="bell-vision", context={"interface": "bell", "invocation": "conversation"})
+    assert inspected["results"][0]["status"] == "ok"
+    assert inspected["results"][0]["model"] == "fake-vision"
+    assert hashlib.sha256(track_file.read_bytes()).hexdigest() == track["sha256"]
+    receipt = runtime.house.legible.inspect_receipt(result["receipt_id"])
+    assert receipt["status"] == "succeeded"
+    assert "data:image" not in json.dumps(receipt)
+    restarted = CoreRuntime(load_config(home), fake=True)
+    assert restarted.house.images.get_asset(picture["image_id"])["content_hash"] == picture["sha256"]
+    monkeypatch.setenv("VESTIGIA_GRAMOPHONE_BELLS_ENABLED", "false")
+    disabled = CoreRuntime(load_config(home), fake=True)
+    with pytest.raises(PermissionError):
+        disabled.house.dispatch(action, turn_id="disabled", context={
+            "interface": "bell", "invocation": "conversation",
+        })
+
+
+def test_spectrogram_rejects_mismatched_provenance(listening_house, monkeypatch):
+    home, _, track, _ = listening_house
+    runtime = CoreRuntime(load_config(home), fake=True)
+    def response(_self, tool, arguments):
+        return {"text_blocks": [json.dumps({**arguments, "sha256": "0" * 64})],
+                "image_blocks": [{"mime_type": "image/png", "data": ""}]}
+    monkeypatch.setattr(McpStdioClient, "call_tool", response)
+    with pytest.raises(RuntimeError, match="provenance"):
+        runtime.house.dispatch({"action": "gramophone.spectrogram", "track_id": track["track_id"],
+                                "expected_sha256": track["sha256"], "start_ms": 0, "end_ms": 1000},
+                               turn_id="forged", context={"interface": "web", "invocation": "conversation"})

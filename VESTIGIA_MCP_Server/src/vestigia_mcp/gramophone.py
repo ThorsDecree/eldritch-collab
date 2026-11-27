@@ -144,7 +144,8 @@ class GramophoneService:
             "next_offset": offset + limit if len(rows) > limit else None,
         }
 
-    def inspect(self, track_id: str, expected_sha256: str, start_ms: int, end_ms: int) -> dict[str, Any]:
+    def _decode_passage(self, track_id: str, expected_sha256: str, start_ms: int,
+                        end_ms: int, sample_rate: int) -> bytes:
         track = self.get(track_id)
         if expected_sha256 != track["sha256"]:
             raise ArchiveError("Requested track digest differs from the catalog")
@@ -164,11 +165,15 @@ class GramophoneService:
                 "ffmpeg", "-v", "error", "-protocol_whitelist", "file,pipe",
                 "-f", suffix[1:], "-i", str(copy), "-ss", f"{start_ms / 1000:.3f}",
                 "-t", f"{(end_ms - start_ms) / 1000:.3f}", "-map", "0:a:0",
-                "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "pipe:1",
+                "-ac", "1", "-ar", str(sample_rate), "-f", "s16le", "pipe:1",
             ])
-        expected_samples = round((end_ms - start_ms) * SAMPLE_RATE / 1000)
-        if len(raw) % 2 or len(raw) // 2 < expected_samples - SAMPLE_RATE // 20:
+        expected_samples = round((end_ms - start_ms) * sample_rate / 1000)
+        if len(raw) % 2 or len(raw) // 2 < expected_samples - sample_rate // 20:
             raise ArchiveError("Decoded passage was incomplete")
+        return raw
+
+    def inspect(self, track_id: str, expected_sha256: str, start_ms: int, end_ms: int) -> dict[str, Any]:
+        raw = self._decode_passage(track_id, expected_sha256, start_ms, end_ms, SAMPLE_RATE)
         samples = struct.iter_unpack("<h", raw)
         bins = []
         squares = 0
@@ -191,3 +196,27 @@ class GramophoneService:
             "method": "ffmpeg mono 8000 Hz signed PCM; peak and RMS in 100 ms bins",
             "bin_ms": 100, "bins": bins,
         }
+
+    def spectrogram(self, track_id: str, expected_sha256: str, start_ms: int,
+                    end_ms: int) -> tuple[dict[str, Any], bytes]:
+        # The duration bounds and source digest are checked before any decoding.
+        raw = self._decode_passage(track_id, expected_sha256, start_ms, end_ms, 16_000)
+        if end_ms - start_ms < 250:
+            raise ArchiveError("Spectrogram passages must be at least 250 ms")
+        image = self._run([
+            "ffmpeg", "-v", "error", "-f", "s16le", "-ar", "16000", "-ac", "1",
+            "-i", "pipe:0", "-lavfi",
+            "showspectrumpic=s=900x420:legend=1:fscale=log:scale=log:color=magma:start=40:stop=8000",
+            "-frames:v", "1", "-threads", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1",
+        ], input_data=raw)
+        if not image.startswith(b"\x89PNG\r\n\x1a\n") or len(image) > 4 * 1024 * 1024:
+            raise ArchiveError("Spectrogram renderer returned an invalid image")
+        return ({
+            "track_id": track_id, "sha256": expected_sha256,
+            "start_ms": start_ms, "end_ms": end_ms,
+            "method": "ffmpeg showspectrumpic; mono, 16000 Hz; logarithmic frequency and magnitude",
+            "frequency_min_hz": 40, "frequency_max_hz": 8000,
+            "image_sha256": hashlib.sha256(image).hexdigest(),
+            "mime_type": "image/png", "retention": "response_only",
+            "time_axis": "seconds relative to start_ms",
+        }, image)
