@@ -109,6 +109,11 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
                 arguments[key] = payload[key]
         return call("gramophone.pocket", arguments)
 
+    def stereo(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
+        return call("gramophone.stereo", {
+            key: payload[key] for key in ("track_id", "expected_sha256", "start_ms", "end_ms")
+        })
+
     def spectrogram(payload: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
         arguments = {key: payload[key] for key in ("track_id", "expected_sha256", "start_ms", "end_ms")}
         response = client.call_tool("gramophone.spectrogram", arguments)
@@ -355,6 +360,9 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
             "subdivisions": {"type": "integer", "enum": [1, 2, 4]}, **pagination,
         }, ("track_id", "expected_sha256", "start_ms", "end_ms", "bpm", "anchor_ms"),
          pocket, ("process:spawn_local",)),
+        ("gramophone.stereo", "Measure a passage's left/right and mid/side energy relationship.", {
+            "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
+        }, ("track_id", "expected_sha256", "start_ms", "end_ms"), stereo, ("process:spawn_local",)),
         ("gramophone.spectrogram", "Render a private time-frequency plot for a cataloged passage.", {
             "track_id": track, "expected_sha256": digest, "start_ms": millis, "end_ms": millis,
         }, ("track_id", "expected_sha256", "start_ms", "end_ms"), spectrogram,
@@ -399,6 +407,10 @@ def register_gramophone_tools(house: Any, client: Any) -> None:
         "gramophone.pocket": {
             "track_id": example_track, "expected_sha256": example_hash,
             "start_ms": 0, "end_ms": 10000, "bpm": 120, "anchor_ms": 0,
+        },
+        "gramophone.stereo": {
+            "track_id": example_track, "expected_sha256": example_hash,
+            "start_ms": 0, "end_ms": 10000,
         },
         "gramophone.spectrogram": {
             "track_id": example_track, "expected_sha256": example_hash,

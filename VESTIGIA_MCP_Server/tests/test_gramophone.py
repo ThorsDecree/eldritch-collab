@@ -81,7 +81,7 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
     async def scenario():
         async with Client(create_server(settings)) as client:
             names = {tool.name for tool in (await client.list_tools()).tools}
-            assert {"gramophone.register", "gramophone.list", "gramophone.inspect", "gramophone.spectrogram", "gramophone.rhythm", "gramophone.pocket"} <= names
+            assert {"gramophone.register", "gramophone.list", "gramophone.inspect", "gramophone.spectrogram", "gramophone.rhythm", "gramophone.pocket", "gramophone.stereo"} <= names
             registered = await client.call_tool(
                 "gramophone.register", {"path": "Music/fixture.wav", "title": "Synthetic"}
             )
@@ -114,6 +114,14 @@ def test_tools_are_discoverable_and_callable_over_mcp(audio):
             assert not rhythmic.is_error
             assert rhythmic.structured_content["sha256"] == track["sha256"]
             assert rhythmic.structured_content["tempo_candidates"] == []
+            mono = await client.call_tool(
+                "gramophone.stereo",
+                {"track_id": track["track_id"], "expected_sha256": track["sha256"],
+                 "start_ms": 500, "end_ms": 1500},
+            )
+            assert not mono.is_error
+            assert not mono.structured_content["stereo_available"]
+            assert mono.structured_content["summary"]["correlation"] is None
             pocket = await client.call_tool(
                 "gramophone.pocket",
                 {"track_id": track["track_id"], "expected_sha256": track["sha256"],
@@ -176,6 +184,8 @@ def test_spectrogram_is_versioned_and_validates_passage(audio):
         service.rhythm(track["track_id"], track["sha256"], 0, 1000)
     with pytest.raises(ArchiveError, match="changed"):
         service.pocket(track["track_id"], track["sha256"], 0, 1000, 120, 0)
+    with pytest.raises(ArchiveError, match="changed"):
+        service.stereo(track["track_id"], track["sha256"], 0, 1000)
 
 
 def test_spectrogram_reflects_requested_audio_passage(audio):
@@ -216,3 +226,35 @@ def test_pocket_rejects_invalid_grid_and_passage(audio):
             service.pocket(*args, **options)
     with pytest.raises(ArchiveError, match="250 ms"):
         service.pocket(track["track_id"], track["sha256"], 0, 100, 120, 0)
+
+
+def test_real_mcp_stereo_passage_and_short_range_rejection(audio):
+    root, path, state = audio
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(2)
+        output.setsampwidth(2)
+        output.setframerate(16000)
+        data = []
+        for i in range(16000 * 2):
+            left = int(12000 * math.sin(2 * math.pi * 440 * i / 16000))
+            right = left if i < 16000 else -left
+            data.append(struct.pack("<hh", left, right))
+        output.writeframes(b"".join(data))
+    original = path.read_bytes()
+    settings = Settings(live_archive_root=root, snapshot_archive_root=None, state_dir=state, deployment_id="synthetic")
+    async def scenario():
+        async with Client(create_server(settings)) as client:
+            registered = await client.call_tool("gramophone.register", {"path": "Music/fixture.wav", "title": "Stereo"})
+            track = registered.structured_content
+            assert track["channels"] == 2
+            args = {"track_id": track["track_id"], "expected_sha256": track["sha256"],
+                    "start_ms": 0, "end_ms": 2000}
+            response = await client.call_tool("gramophone.stereo", args)
+            assert not response.is_error
+            assert [w["correlation"] for w in response.structured_content["windows"]] == [1, -1]
+            too_short = await client.call_tool("gramophone.stereo", {**args, "end_ms": 100})
+            assert too_short.is_error
+            wrong_hash = await client.call_tool("gramophone.stereo", {**args, "expected_sha256": "0" * 64})
+            assert wrong_hash.is_error
+    asyncio.run(scenario())
+    assert path.read_bytes() == original

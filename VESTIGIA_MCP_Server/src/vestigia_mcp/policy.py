@@ -218,6 +218,10 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "Compare a passage's energy attacks with an explicit timing grid.",
     ),
     Capability(
+        "gramophone.stereo", EffectClass.PERCEIVE, Decision.ALLOW,
+        "Measure channel energy and mid/side relationships in a bounded passage.",
+    ),
+    Capability(
         "gramophone.spectrogram", EffectClass.PERCEIVE, Decision.ALLOW,
         "Render a bounded passage of an unchanged cataloged track as an image.",
     ),

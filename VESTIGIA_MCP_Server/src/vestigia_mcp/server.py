@@ -1802,6 +1802,18 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                        lambda: gramophone_service().pocket(**arguments))
 
     @server.tool(
+        name="gramophone.stereo",
+        title="Measure passage channel relationships",
+        description="Measure per-channel energy, mid/side energy, and uncentered left/right correlation over a 250 ms to 60 second passage. Mono sources report stereo as unavailable.",
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def gramophone_stereo(track_id: str, expected_sha256: str, start_ms: int, end_ms: int) -> dict[str, object]:
+        arguments = {"track_id": track_id, "expected_sha256": expected_sha256,
+                     "start_ms": start_ms, "end_ms": end_ms}
+        return guarded("gramophone.stereo", arguments,
+                       lambda: gramophone_service().stereo(track_id, expected_sha256, start_ms, end_ms))
+
+    @server.tool(
         name="gramophone.spectrogram",
         title="Render a Gramophone passage spectrogram",
         description="Return a PNG time-frequency plot for a 250 ms to 60 second passage of a cataloged track, pinned to its SHA-256. Time is relative to the requested start.",

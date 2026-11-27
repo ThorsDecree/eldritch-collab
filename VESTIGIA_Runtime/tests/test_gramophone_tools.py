@@ -420,3 +420,34 @@ def test_private_bell_compares_pocket_against_explicit_grid(listening_house, mon
     disabled = CoreRuntime(load_config(home), fake=True)
     with pytest.raises(PermissionError):
         disabled.house.dispatch(action, turn_id="disabled", context={"interface": "bell", "invocation": "conversation"})
+
+
+def test_private_bell_explores_stereo_relationships(listening_house, monkeypatch):
+    home, track_file, _, client = listening_house
+    with wave.open(str(track_file), "wb") as output:
+        output.setnchannels(2)
+        output.setsampwidth(2)
+        output.setframerate(16000)
+        data = []
+        for i in range(16000 * 2):
+            left = int(12000 * math.sin(2 * math.pi * 440 * i / 16000))
+            data.append(struct.pack("<hh", left, left if i < 16000 else -left))
+        output.writeframes(b"".join(data))
+    track = client.call_tool("gramophone.register", {"path": "Music/fixture.wav", "title": "Synthetic stereo"})["structured_content"]
+    action = {"action": "gramophone.stereo", "track_id": track["track_id"],
+              "expected_sha256": track["sha256"], "start_ms": 0, "end_ms": 2000}
+    provider = FakeProvider(['[[TOOL_ACTION ' + json.dumps({**action, "after": "continue"}) + ']]',
+                             "I can compare the channel measurements."])
+    runtime = CoreRuntime(load_config(home), provider=provider, fake=True)
+    result = runtime.chat(NormalizedMessage(content="Explore stereo", interface="bell", speaker_id="bell:test",
+                                            room_id=runtime.room_id, external_id="bell-stereo"))
+    receipts = runtime.house.legible.list_receipts(turn_id=result.turn_id, action="gramophone.stereo")
+    assert len(receipts) == 1
+    receipt = runtime.house.legible.inspect_receipt(receipts[0]["id"])
+    assert receipt["status"] == "succeeded"
+    assert [w["correlation"] for w in receipt["result"]["windows"]] == [1, -1]
+    assert "side_energy_fraction" in json.dumps(provider.requests[-1].messages)
+    monkeypatch.setenv("VESTIGIA_GRAMOPHONE_BELLS_ENABLED", "false")
+    disabled = CoreRuntime(load_config(home), fake=True)
+    with pytest.raises(PermissionError):
+        disabled.house.dispatch(action, turn_id="disabled", context={"interface": "bell", "invocation": "conversation"})
