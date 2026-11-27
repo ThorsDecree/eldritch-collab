@@ -63,6 +63,10 @@ def register_deployment_tools(house: Any) -> None:
         args=("--deployment-env", str(profile.resolve())),
     )
 
+    from .gramophone_tools import register_gramophone_tools
+
+    register_gramophone_tools(house, client)
+
     tool_name = {"type": "string", "maxLength": 128, "pattern": "[a-zA-Z0-9_.-]+"}
     after = {"type": "string", "enum": ["continue", "finish"]}
 

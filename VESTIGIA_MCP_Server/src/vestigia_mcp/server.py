@@ -1753,6 +1753,16 @@ def create_server(settings: Settings | None = None) -> MCPServer:
                        lambda: gramophone_service().list_tracks(offset, limit))
 
     @server.tool(
+        name="gramophone.track",
+        title="Inspect a Gramophone track",
+        description="Read metadata for one cataloged track ID.",
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def gramophone_track(track_id: str, verify_source: bool = False) -> dict[str, object]:
+        return guarded("gramophone.track", {"track_id": track_id, "verify_source": verify_source},
+                       lambda: gramophone_service().get(track_id, verify_source=verify_source))
+
+    @server.tool(
         name="gramophone.inspect",
         title="Inspect a Gramophone passage",
         description="Measure peak and RMS loudness in 100 ms bins for a selected passage. Pass the cataloged SHA-256 and start/end milliseconds.",
