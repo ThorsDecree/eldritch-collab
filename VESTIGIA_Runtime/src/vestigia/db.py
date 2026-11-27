@@ -749,6 +749,23 @@ class ContinuityDB:
             ).fetchone()
         return int(row["count"] if row else 0)
 
+    def previous_conversation_model(
+        self, resident_id: str, room_id: str, route: str
+    ) -> tuple[str, dict[str, Any]] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, metadata_json FROM turns
+                WHERE resident_id=? AND room_id=? AND speaker_role='assistant'
+                  AND json_extract(metadata_json, '$.model_notice_route')=?
+                ORDER BY rowid DESC LIMIT 1
+                """,
+                (resident_id, room_id, route),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["id"]), json.loads(row["metadata_json"])
+
     def get_turn(self, turn_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute("SELECT * FROM turns WHERE id=?", (turn_id,)).fetchone()

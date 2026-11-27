@@ -575,6 +575,17 @@ def run_discord(
                 firing_event_id=firing.event_id,
             )
             result = await asyncio.to_thread(runtime.chat, normalized)
+            if result.model_approval_receipt_id:
+                bell_service.event(
+                    bell.id,
+                    "model_approval_required",
+                    "blocked",
+                    payload={
+                        "turn_id": result.turn_id,
+                        "receipt_id": result.model_approval_receipt_id,
+                    },
+                )
+                return
             if result.suppressed:
                 bell_service.event(
                     bell.id, "runtime_suppressed", "deferred",
@@ -1171,6 +1182,9 @@ def run_discord(
                 status="runtime_suppressed",
             )
             return
+        if result.model_approval_receipt_id:
+            await message.reply(result.text, mention_author=False)
+            return
         visible, controls = apply_resident_controls(
             result.text,
             bell_service,
@@ -1198,6 +1212,8 @@ def run_discord(
             )
         maximum = int(config.get("discord.max_message_chars", 1900))
         if visible:
+            if result.model_change_notice:
+                visible = f"{result.model_change_notice}\n\n{visible}"
             for index, chunk in enumerate(chunk_text(visible, maximum)):
                 if index == 0:
                     await message.reply(chunk, mention_author=False)

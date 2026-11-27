@@ -9,6 +9,7 @@ from vestigia.config import load_config
 from vestigia.context import ContextAssembler
 from vestigia.db import ContinuityDB
 from vestigia.home import initialize_home
+from vestigia.model_approval import ModelApprovalRequired
 from vestigia.models import NormalizedMessage, ProviderReply, RuntimeState
 from vestigia.memory_experiments import MemoryExperimentService
 from vestigia.runtime import CoreRuntime
@@ -224,6 +225,26 @@ def _experiment_context(config, db):
         "context_assembly": assembly,
         "experiment_base_messages": messages,
     }
+
+
+def test_unapproved_experiment_reply_is_discarded_before_the_other_arm(tmp_path):
+    home, config, db = _home(tmp_path)
+    config.data["model_approval"] = {"enabled": True, "routes": {}}
+    target_id = _add_memory(db, "Aurora recalls a copper lamp.")
+    provider = SequenceProvider(["withheld experiment text", "unreached second arm"])
+    runtime = CoreRuntime(config, provider=provider)
+    _, context = _experiment_context(config, db)
+
+    with pytest.raises(ModelApprovalRequired) as error:
+        runtime.house.memory_experiments.dispatch(
+            {"mode": "run", "memory_id": target_id, "intervention": "exclude"}, context
+        )
+
+    assert len(provider.requests) == 1
+    assert not list((home / "traces" / "experiments").glob("*.json"))
+    receipt = runtime.house.legible.inspect_receipt(error.value.receipt_id)
+    assert receipt["result"]["invocation"] == "memory_experiment"
+    assert "withheld experiment text" not in json.dumps(receipt)
 
 
 def test_run_makes_alternating_paired_provider_calls_without_tool_dispatch(tmp_path):

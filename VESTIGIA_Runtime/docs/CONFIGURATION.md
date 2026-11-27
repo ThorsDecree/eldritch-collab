@@ -145,3 +145,73 @@ Copy-Item .env.example .env
 ```
 
 Then edit `.env` locally. Never commit the populated file.
+
+## Model approval for text turns
+
+Model approval is off by default. To opt in, edit the Home's `home.yaml` as the
+operator. Pin one exact observed identity for each route you want to use.
+
+```yaml
+model_approval:
+  enabled: true
+  routes:
+    default:
+      provider: openai
+      model: your-requested-model-id
+      reported_model: your-provider-reported-model-id
+```
+
+Use the IDs in a verified turn receipt. With an empty `routes: {}` mapping, the
+next direct text turn records the observed IDs and pauses. Run
+`vestigia inspect-turn HOME TURN_ID` to review the approved and observed values.
+The adapter's `model` field and `reported_model` field are matched separately.
+Use an explicit YAML `null` for `reported_model` only if you accept an adapter
+that omits that field. A missing report fails a pin for a concrete ID.
+
+If you approve a change, replace the route's pin, restart the running Runtime,
+and initiate a new turn. To reject or revoke approval, keep or remove the pin.
+The Runtime does not replay the stopped reply. Earlier approved rounds in the
+same turn may already have acted. Inspect the turn and its receipts before
+retrying. `vestigia house-read HOME read --path workspace/FILE.md` and
+direct filesystem access are available independently of model approval.
+
+Approval is checked on each text reply before the Runtime interprets actions
+or final-response controls. It also covers scheduled text turns, private
+curation and Runtime-managed memory experiments. A blocked bell records the
+pause without sending a resident reply. The gate runs after inference, so a
+provider may already have received the prompt and charged for the call. It
+cannot attest to provider identity behind unchanged identifiers or gate
+separate image or vision adapters. Keep provider credentials and endpoint
+selection under operator control.
+
+### Optional pre-dispatch admission
+
+To also check requested route identity before private conversation context is
+assembled and again before each text-provider call, add `pre_dispatch: true`
+under `model_approval` while keeping `enabled: true` and explicit route
+pins. A missing pin, unknown adapter identity or mismatch is refused with a
+`model.admission` receipt. No provider request is made on refusal.
+
+The pre-dispatch comparison uses the adapter-declared provider and requested
+model; the separate reported-model comparison remains after inference.
+Identifiers cannot detect silent provider substitution. The admission contract
+does not bind the network endpoint, enforce per-file approved scope, cover the
+separate image/vision providers, implement first-statement ordering, or establish
+an append-only or power-loss-proof audit log. It is not Vex's complete protocol.
+Existing behavior remains post-response only unless `pre_dispatch` is enabled.
+
+### Optional local context file list
+
+Set `VESTIGIA_CONTEXT_FILE_RECEIPT=true` to add local assembler file paths and
+inclusion status to the context receipt and display them in local CLI and web
+turns. The switch defaults off; filenames are not displayed in Discord or bell
+messages. Paths and metadata may themselves be sensitive.
+
+Status is `included`, `partial`, `omitted`, or
+`unknown_after_total_cap`. This covers the initial assembler's local file
+layers, not MCP/external retrieval, database memories, tool results or later
+private rounds. Inclusion does not prove provider receipt or use. Each local
+entry has the SHA-256 of the file bytes actually read, including for partially
+included or omitted files; this is not the hash of the possibly trimmed prompt
+excerpt. No file contents are added. This is not a complete first-statement/read
+log or a manifest of remote and tool sources.

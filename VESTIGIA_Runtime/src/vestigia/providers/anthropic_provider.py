@@ -28,6 +28,9 @@ class AnthropicProvider:
     def model_for(self, route: str) -> str:
         return model_for_route(self.config, route)
 
+    def admission_identity(self, route: str) -> dict[str, str]:
+        return {"provider": "anthropic", "model": self.model_for(route)}
+
     def complete(self, request: ProviderRequest) -> ProviderReply:
         model = self.model_for(request.model_route)
         system, messages = system_and_conversation(request.messages)
