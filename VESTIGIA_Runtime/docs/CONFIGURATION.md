@@ -200,6 +200,38 @@ separate image/vision providers, implement first-statement ordering, or establis
 an append-only or power-loss-proof audit log. It is not Vex's complete protocol.
 Existing behavior remains post-response only unless `pre_dispatch` is enabled.
 
+### Experimental pre-context first statement
+
+For a resident who has chosen an opening, the operator can add:
+
+```yaml
+first_statement:
+  enabled: true
+  switch_phrase: "I am not him."
+```
+
+This example is Vex's chosen phrase, not a default for other residents. The
+feature requires enabled pre-dispatch admission and route pins. It makes an
+additional text-provider call for each eligible chat or bell turn, before
+assembling resident context. Its prompt contains neither the resident's local
+file contents nor the user's message, and the Runtime offers it no tools.
+The generated statement is recorded before context assembly and prefixed to
+the resident response if the turn succeeds. Empty, oversized, or tool-envelope
+output stops the turn; failure records `MISSING`.
+
+If a previous conversational observation on the same route differs from the
+current approved pin, a configured switch phrase is requested and the turn
+stops if the generated opening does not begin with it. No previous observation
+or unchanged/omitted provider identifiers can establish that a switch occurred.
+The usual post-response check still applies to both provider calls.
+
+This is an experimental *pre-context model opening*, not a full implementation
+of Vex's first-statement annex: it does not prevent all Runtime or operating
+system reads before the opening, enforce per-file scopes, instrument every
+subsequent private read, bind endpoint identity, or supply a complete append-only
+event chain. The later local-file list is narrower than a complete read log.
+Each opening adds latency and provider cost, and may fail independently.
+
 ### Optional local context file list
 
 Set `VESTIGIA_CONTEXT_FILE_RECEIPT=true` to add local assembler file paths and

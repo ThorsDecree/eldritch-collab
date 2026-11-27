@@ -9,7 +9,8 @@ if TYPE_CHECKING:
 
 
 class ModelApprovalRequired(PermissionError):
-    def __init__(self, *, turn_id: str, receipt_id: str, earlier_tool_attempts: int, pre_dispatch: bool = False) -> None:
+    def __init__(self, *, turn_id: str, receipt_id: str, earlier_tool_attempts: int,
+                 pre_dispatch: bool = False, notice: str | None = None) -> None:
         self.receipt_id = receipt_id
         self.earlier_tool_attempts = earlier_tool_attempts
         message = (
@@ -18,6 +19,8 @@ class ModelApprovalRequired(PermissionError):
             "⚠️ Model approval required. The Runtime paused before acting on this reply. "
             f"Inspect turn {turn_id}."
         )
+        if notice is not None:
+            message = notice
         if earlier_tool_attempts:
             message += " Earlier approved rounds may already have acted."
         super().__init__(message)

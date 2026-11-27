@@ -48,6 +48,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "auto_route_thinking": False,
     },
     "model_approval": {"enabled": False, "routes": {}},
+    "first_statement": {"enabled": False, "switch_phrase": None},
     "context": {
         "show_file_receipt": False,
         "total_tokens": 20000,

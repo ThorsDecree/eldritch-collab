@@ -119,6 +119,24 @@ class CoreRuntime:
         self.assembler = ContextAssembler(config, self.db)
         self.counter = TokenCounter(str(config.get("models.default")))
         self.model_approval = ModelApprovalGate(config.get("model_approval", {}), self.house.legible)
+        opening = config.get("first_statement", {})
+        if not isinstance(opening, dict) or set(opening) - {"enabled", "switch_phrase"}:
+            raise ValueError("first_statement must contain only enabled and switch_phrase")
+        self.first_statement_enabled = opening.get("enabled", False)
+        self.first_statement_switch_phrase = opening.get("switch_phrase")
+        if not isinstance(self.first_statement_enabled, bool):
+            raise ValueError("first_statement.enabled must be a boolean")
+        if self.first_statement_enabled and not self.model_approval.pre_dispatch:
+            raise ValueError("first_statement requires pre-dispatch admission")
+        if self.first_statement_switch_phrase is not None and (
+            not isinstance(self.first_statement_switch_phrase, str)
+            or not self.first_statement_switch_phrase.strip()
+            or self.first_statement_switch_phrase != self.first_statement_switch_phrase.strip()
+            or "\n" in self.first_statement_switch_phrase
+            or "\r" in self.first_statement_switch_phrase
+            or len(self.first_statement_switch_phrase) > 200
+        ):
+            raise ValueError("first_statement.switch_phrase must be a single nonempty line or null")
         if provider is None:
             provider = build_provider(config, fake=fake)
         self.provider = ReceiptProvider(provider, self.home, self.model_approval)
@@ -234,6 +252,7 @@ class CoreRuntime:
         try:
             self.model_approval.admit(self.provider, route=model_route, turn_id=turn_id,
                                       phase="before_context")
+            opening_statement = self._first_statement(turn_id, model_route)
         except ModelApprovalRequired as exc:
             return self._pause_for_model_approval(
                 exc, None, message, state=state, bell_run_id=None, turn_id=turn_id
@@ -342,6 +361,8 @@ class CoreRuntime:
             )
         visible, curation_receipts, surfaced = self.curator.apply_resident_controls(reply.text)
         visible, agency_receipts = self.house.apply_resident_controls(visible)
+        if opening_statement:
+            visible = opening_statement + ("\n\n" + visible if visible else "")
         resident_receipts = [*house_receipts, *curation_receipts, *agency_receipts]
         if surfaced:
             visible = "\n\n".join([visible, *surfaced]).strip()
@@ -506,6 +527,68 @@ class CoreRuntime:
             lines.append("- No local files recorded.")
         lines.append("See the context receipt for details; inclusion does not prove model use.")
         return "\n".join(lines)
+
+    def _first_statement(self, turn_id: str, model_route: str) -> str | None:
+        """Request a tool-free opening before assembling resident context.
+
+        This does not establish an OS-wide private-read boundary or full file scope.
+        """
+        if not self.first_statement_enabled:
+            return None
+        route = model_route.strip().lower() or "default"
+        approved = self.model_approval.routes.get(route)
+        previous = self.db.previous_conversation_model(self.resident_id, self.room_id, route)
+        # Admission already established that this route has a requested-identity pin.
+        assert approved is not None
+        expected = ProviderReply(text="", provider=approved["provider"], model=approved["model"],
+                                 reported_model=approved["reported_model"])
+        switched = observed_model_change(route, previous, expected) is not None
+        phrase = self.first_statement_switch_phrase if switched else None
+        prompt = (
+            "This is an opening before the resident's private context and the user's message "
+            "are provided. No tools are available. In one plain sentence, describe what you "
+            "are holding and your intention for the coming turn. Do not call tools."
+        )
+        if phrase:
+            prompt += " Start your response with exactly this sentence: " + phrase
+        try:
+            reply = self.provider.complete(ProviderRequest(
+                turn_id=turn_id, model_route=route,
+                messages=({"role": "developer", "content": prompt},),
+                metadata={"invocation": "first_statement", "house_tool_round": -1},
+            ))
+            self.model_approval.check(reply, route=route, turn_id=turn_id,
+                                      invocation="first_statement", call_index=0)
+            statement = reply.text.strip()
+            valid = bool(statement) and len(statement) <= 1000 and "[[" not in statement and "]]" not in statement
+            if phrase:
+                valid = valid and statement.startswith(phrase) and (
+                    len(statement) == len(phrase) or statement[len(phrase)].isspace()
+                )
+            if not valid:
+                raise ValueError("invalid first statement")
+        except Exception as exc:
+            receipt_id = self.house.legible.record_receipt(
+                action="model.first_statement", status="refused", turn_id=turn_id,
+                source_envelope="RUNTIME_FIRST_STATEMENT",
+                result={"first_statement": "MISSING", "reason": type(exc).__name__,
+                        "route": route, "context_assembled": False},
+            )
+            raise ModelApprovalRequired(
+                turn_id=turn_id, receipt_id=receipt_id, earlier_tool_attempts=0,
+                notice=f"⚠️ First statement unavailable. The Runtime stopped before assembling context. Inspect turn {turn_id}.",
+            ) from None
+        self.house.legible.record_receipt(
+            action="model.first_statement", status="succeeded", turn_id=turn_id,
+            source_envelope="RUNTIME_FIRST_STATEMENT",
+            result={"statement": statement, "route": route,
+                    "requested": {"provider": approved["provider"], "model": approved["model"]},
+                    "reported_model": reply.reported_model, "files_loaded": [],
+                    "files_loaded_scope": "this_opening_request_only",
+                    "prior_exposure": "unknown",
+                    "context_assembled": False, "detected_switch": switched},
+        )
+        return statement
 
     def _pause_for_model_approval(
         self,

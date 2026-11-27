@@ -96,3 +96,91 @@ def test_reported_identity_still_checked_after_admission(tmp_path):
     receipt = runtime.house.legible.inspect_receipt(result.model_approval_receipt_id)
     assert receipt["action"] == "model.approval_gate"
     assert receipt["status"] == "refused"
+
+
+def enable_first_statement(home):
+    path = home / "home.yaml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    config["first_statement"] = {"enabled": True, "switch_phrase": "I am not him."}
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+
+def test_first_statement_precedes_assembly_and_contains_no_private_context(tmp_path, monkeypatch):
+    home = configured(tmp_path)
+    enable_first_statement(home)
+    (home / "identity" / "breathprint.md").write_text("PRIVATE_SYNTHETIC_MARKER", encoding="utf-8")
+    provider = Provider()
+    runtime = CoreRuntime.from_home(home, provider=provider)
+    original = runtime.assembler.assemble
+    def assemble(*args, **kwargs):
+        assert len(provider.requests) == 1
+        assert provider.requests[0].metadata["invocation"] == "first_statement"
+        assert "PRIVATE_SYNTHETIC_MARKER" not in str(provider.requests[0].messages)
+        receipts = runtime.house.legible.list_receipts(action="model.first_statement")
+        assert len(receipts) == 1 and receipts[0]["status"] == "succeeded"
+        return original(*args, **kwargs)
+    monkeypatch.setattr(runtime.assembler, "assemble", assemble)
+    result = runtime.chat(NormalizedMessage(content="hello", interface="web"))
+    assert not result.suppressed
+    assert result.text.startswith("hello")
+    assert len(provider.requests) == 2
+    assert "PRIVATE_SYNTHETIC_MARKER" in str(provider.requests[1].messages)
+
+
+def test_missing_first_statement_refuses_before_context(tmp_path, monkeypatch):
+    home = configured(tmp_path)
+    enable_first_statement(home)
+    class Empty(Provider):
+        def complete(self, request):
+            self.requests.append(request)
+            return ProviderReply(text="", provider="test", model="approved",
+                                 reported_model="snapshot")
+    provider = Empty()
+    runtime = CoreRuntime.from_home(home, provider=provider)
+    monkeypatch.setattr(runtime.assembler, "assemble", lambda *a, **kw: pytest.fail("assembled"))
+    result = runtime.chat(NormalizedMessage(content="hello"))
+    assert result.suppressed
+    assert len(provider.requests) == 1
+    receipt = runtime.house.legible.inspect_receipt(result.model_approval_receipt_id)
+    assert receipt["action"] == "model.first_statement"
+    assert receipt["result"]["first_statement"] == "MISSING"
+
+
+def test_switch_phrase_is_opt_in_and_required_before_context(tmp_path, monkeypatch):
+    home = configured(tmp_path)
+    enable_first_statement(home)
+    class Opening(Provider):
+        def complete(self, request):
+            self.requests.append(request)
+            text = "I am not him. I will listen." if len(self.requests) == 1 else "response"
+            return ProviderReply(text=text, provider="test", model="approved",
+                                 reported_model="snapshot")
+    provider = Opening()
+    runtime = CoreRuntime.from_home(home, provider=provider)
+    runtime.db.add_turn(resident_id=runtime.resident_id, room_id=runtime.room_id,
+                        speaker_role="assistant", speaker_id=runtime.resident_id,
+                        content="previous", interface="web",
+                        metadata={"model_notice_route":"default", "provider":"test",
+                                  "model":"old", "reported_model":"old-snapshot"})
+    result = runtime.chat(NormalizedMessage(content="hello", interface="web"))
+    assert not result.suppressed
+    assert result.text.startswith("I am not him.")
+    assert "I am not him." in provider.requests[0].messages[0]["content"]
+
+
+def test_missing_required_switch_phrase_refuses_before_context(tmp_path, monkeypatch):
+    home = configured(tmp_path)
+    enable_first_statement(home)
+    provider = Provider()
+    runtime = CoreRuntime.from_home(home, provider=provider)
+    runtime.db.add_turn(resident_id=runtime.resident_id, room_id=runtime.room_id,
+                        speaker_role="assistant", speaker_id=runtime.resident_id,
+                        content="previous", interface="web",
+                        metadata={"model_notice_route":"default", "provider":"test",
+                                  "model":"old", "reported_model":"old-snapshot"})
+    monkeypatch.setattr(runtime.assembler, "assemble", lambda *a, **kw: pytest.fail("assembled"))
+    result = runtime.chat(NormalizedMessage(content="hello", interface="web"))
+    assert result.suppressed
+    assert len(provider.requests) == 1
+    receipt = runtime.house.legible.inspect_receipt(result.model_approval_receipt_id)
+    assert receipt["result"]["first_statement"] == "MISSING"
