@@ -52,6 +52,23 @@ into that directory through your existing provisioning workflow.
   16 kHz PCM, so content above 8 kHz is not represented. These measurements do
   not identify instrument locations or establish perceived width or motion;
   side energy can also reflect phase differences. The source remains unchanged.
+- `gramophone.harmony(track_id, expected_sha256, start_ms, end_ms)` explores
+  pitch-class energy in a 250 ms–60 s passage. It divides mono 8 kHz PCM into
+  one-second windows, applies a Hann-windowed 2048-point FFT, and maps 80–3000 Hz
+  bins to twelve equal-tempered pitch classes at A4=440 Hz. The normalized energy
+  describes the spectrum; it is not a list of played notes. Quiet windows below
+  0.001 RMS, or with less than 0.001 of spectral energy in the analyzed band,
+  return no profile or chord candidates. Each active window may return
+  up to three major/minor triad template matches when the template contains at
+  least 0.42 of energy and each chord tone has at least 0.08. These thresholds are
+  heuristics, and the overlap scores are not calibrated probabilities. A single
+  note's overtones can resemble a triad. Other chord types are not modeled.
+  `change_from_previous` is cosine distance between adjacent active spectral
+  profiles (0 means identical, 1 maximally dissimilar for nonnegative profiles);
+  a quiet window breaks the comparison. Changes can reflect timbre or percussion,
+  not just harmony, and are not an emotional-tension measurement. Mono downmix
+  can cancel out-of-phase material. Source hashes and requested and decoded times
+  accompany the result.
 - `gramophone.spectrogram(track_id, expected_sha256, start_ms, end_ms)` returns
   a PNG and metadata for a passage between 250 ms and 60 seconds. Its horizontal
   axis is seconds from the requested start, and its vertical axis is logarithmic
@@ -72,7 +89,7 @@ identify instruments, lyrics or subjective qualities of the track.
 The current MCP connection can discover these tools using its usual tool listing.
 With a dedicated MCP deployment configured, Runtime also exposes focused
 `gramophone.list`, `gramophone.inspect`, `gramophone.rhythm`, `gramophone.pocket`,
-`gramophone.stereo`, `gramophone.spectrogram`, `gramophone.note.add`, and
+`gramophone.stereo`, `gramophone.harmony`, `gramophone.spectrogram`, `gramophone.note.add`, and
 `gramophone.note.list` capabilities. Notes belong to the Runtime resident and
 stay in that Runtime home's continuity database. Notes identify the track and
 exact source digest plus a start and end time in milliseconds.
@@ -119,7 +136,7 @@ without advancing the revision. A successful retry returns the original result,
 which may be older than the current session; use `session.view` for current state.
 
 Use the returned track ID, digest, start and end with `gramophone.inspect`,
-`gramophone.rhythm`, `gramophone.pocket`, `gramophone.stereo`, `gramophone.spectrogram`,
+`gramophone.rhythm`, `gramophone.pocket`, `gramophone.stereo`, `gramophone.harmony`, `gramophone.spectrogram`,
 or `gramophone.note.add`. Notes remain private to the
 resident and attached to their own ranges and track version. These tools do not
 deliver actual audio to a model or provide a graphical playback interface.
