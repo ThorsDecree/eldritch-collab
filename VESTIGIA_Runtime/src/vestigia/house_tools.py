@@ -1596,7 +1596,7 @@ class HousePort:
             audit_response = response
             if action == "memory.experiment":
                 audit_response = self._memory_experiment_audit_projection(response)
-            elif action in {"gramophone.note.add", "gramophone.note.list"}:
+            elif action in {"gramophone.note.add", "gramophone.note.list", "gramophone.session.view"}:
                 audit_response = self._memory_experiment_audit_projection(response)
             elif action == "mcp.call":
                 audit_response = {key: value for key, value in response.items() if key != "mcp_result"}
