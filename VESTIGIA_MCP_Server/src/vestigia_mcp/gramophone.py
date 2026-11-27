@@ -119,12 +119,17 @@ class GramophoneService:
             )
         return self.get(track_id)
 
-    def get(self, track_id: str) -> dict[str, Any]:
+    def get(self, track_id: str, *, verify_source: bool = False) -> dict[str, Any]:
         with closing(self._connect()) as db:
             row = db.execute("SELECT * FROM tracks WHERE track_id=?", (track_id,)).fetchone()
         if row is None:
             raise ArchiveError("Unknown Gramophone track ID")
-        return dict(row)
+        track = dict(row)
+        if verify_source:
+            _, content = self._bytes(track["path"])
+            if hashlib.sha256(content).hexdigest() != track["sha256"]:
+                raise ArchiveError("Track source changed since it was cataloged")
+        return track
 
     def list_tracks(self, offset: int = 0, limit: int = 50) -> dict[str, Any]:
         if offset < 0 or not 1 <= limit <= 100:

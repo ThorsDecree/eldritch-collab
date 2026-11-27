@@ -202,6 +202,10 @@ DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
         "List bounded Gramophone track metadata.",
     ),
     Capability(
+        "gramophone.track", EffectClass.PERCEIVE, Decision.ALLOW,
+        "Inspect metadata for one Gramophone track.",
+    ),
+    Capability(
         "gramophone.inspect", EffectClass.PERCEIVE, Decision.ALLOW,
         "Measure a bounded passage of an unchanged cataloged track.",
     ),

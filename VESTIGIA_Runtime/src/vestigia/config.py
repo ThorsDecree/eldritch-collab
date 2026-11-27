@@ -88,6 +88,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "archive_text_max_bytes": 1000000,
             "write_prefixes": [],
             "deployment_env_file": "",
+            "gramophone_bells_enabled": False,
         },
     },
     "bridge_consult": {
@@ -320,6 +321,7 @@ ENV_MAP: dict[str, tuple[str, Callable[[str], Any]]] = {
     "VESTIGIA_CONTEXT_MCP_ARCHIVE_TEXT_MAX_BYTES": ("context_sources.mcp_archive.archive_text_max_bytes", _as_int),
     "VESTIGIA_CONTEXT_MCP_WRITE_PREFIXES": ("context_sources.mcp_archive.write_prefixes", parse_csv),
     "VESTIGIA_CONTEXT_MCP_DEPLOYMENT_ENV_FILE": ("context_sources.mcp_archive.deployment_env_file", str),
+    "VESTIGIA_GRAMOPHONE_BELLS_ENABLED": ("context_sources.mcp_archive.gramophone_bells_enabled", _as_bool),
     "VESTIGIA_RETRIEVAL_LIMIT": ("retrieval.limit", _as_int),
     "VESTIGIA_TRANSCRIPT_TAIL_MESSAGES": ("retrieval.transcript_tail_messages", _as_int),
     "VESTIGIA_AUTO_EXTRACT_MEMORY": ("memory.auto_extract_conservative_candidates", _as_bool),
