@@ -199,6 +199,7 @@ class Settings:
     runtimes_file: Path | None = None
     gametable_enabled: bool = False
     gametable_state_dir: Path | None = None
+    gramophone_prefix: str = "Music"
     lanternslide_source_prefix: str = "pics"
     lanternslide_source_prefixes: tuple[str, ...] | None = None
     lanternslide_catalog_path: str = "pics/Lanternslide/catalog.json"
@@ -304,6 +305,7 @@ class Settings:
             runtimes_file=_optional_path("VESTIGIA_MCP_RUNTIMES_FILE"),
             gametable_enabled=_bool_env("VESTIGIA_MCP_GAMETABLE_ENABLED"),
             gametable_state_dir=_optional_path("VESTIGIA_MCP_GAMETABLE_STATE_DIR"),
+            gramophone_prefix=normalize_relative_path(os.getenv("VESTIGIA_MCP_GRAMOPHONE_PREFIX", "Music")),
             lanternslide_source_prefix=lanternslide_source_prefix,
             lanternslide_source_prefixes=(
                 _path_prefix_allowlist("VESTIGIA_MCP_LANTERNSLIDE_SOURCE_PREFIXES")

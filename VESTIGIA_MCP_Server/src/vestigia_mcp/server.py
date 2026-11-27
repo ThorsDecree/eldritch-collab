@@ -28,6 +28,7 @@ from .health import (
     source_clock,
 )
 from .gametable import GameTableError, GameTableStore
+from .gramophone import GramophoneService
 from .identity import system_identity as build_system_identity
 from .lanternslide import LanternslideService
 from .mounts import MountRegistry
@@ -217,6 +218,9 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         if lanternslide is None:
             raise ArchiveError("Lanternslide requires a configured live Archive")
         return lanternslide
+
+    def gramophone_service() -> GramophoneService:
+        return GramophoneService(source_for("live"), settings.state_dir, settings.gramophone_prefix)
 
     def guarded(
         capability_name: str,
@@ -1725,6 +1729,40 @@ def create_server(settings: Settings | None = None) -> MCPServer:
             arguments,
             lambda: sense_registry.can_perceive(organ_id, request),
         )
+
+    @server.tool(
+        name="gramophone.register",
+        title="Add a track to Gramophone",
+        description="Catalog an MP3 or WAV beneath the configured live Archive prefix. The source remains in place.",
+        annotations=LOCAL_WRITE_ANNOTATIONS,
+    )
+    def gramophone_register(path: str, title: str, credits: str = "") -> dict[str, object]:
+        return guarded(
+            "gramophone.register", {"path": path, "title": title, "credits": credits},
+            lambda: gramophone_service().register(path, title, credits),
+        )
+
+    @server.tool(
+        name="gramophone.list",
+        title="Browse Gramophone tracks",
+        description="List cataloged tracks and their source digests.",
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def gramophone_list(offset: int = 0, limit: int = 50) -> dict[str, object]:
+        return guarded("gramophone.list", {"offset": offset, "limit": limit},
+                       lambda: gramophone_service().list_tracks(offset, limit))
+
+    @server.tool(
+        name="gramophone.inspect",
+        title="Inspect a Gramophone passage",
+        description="Measure peak and RMS loudness in 100 ms bins for a selected passage. Pass the cataloged SHA-256 and start/end milliseconds.",
+        annotations=READ_ONLY_ANNOTATIONS,
+    )
+    def gramophone_inspect(track_id: str, expected_sha256: str, start_ms: int, end_ms: int) -> dict[str, object]:
+        arguments = {"track_id": track_id, "expected_sha256": expected_sha256,
+                     "start_ms": start_ms, "end_ms": end_ms}
+        return guarded("gramophone.inspect", arguments,
+                       lambda: gramophone_service().inspect(track_id, expected_sha256, start_ms, end_ms))
 
     @server.tool(
         name="lanternslide.status",
