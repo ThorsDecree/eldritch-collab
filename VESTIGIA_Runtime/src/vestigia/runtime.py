@@ -120,14 +120,24 @@ class CoreRuntime:
         self.counter = TokenCounter(str(config.get("models.default")))
         self.model_approval = ModelApprovalGate(config.get("model_approval", {}), self.house.legible)
         opening = config.get("first_statement", {})
-        if not isinstance(opening, dict) or set(opening) - {"enabled", "switch_phrase"}:
-            raise ValueError("first_statement must contain only enabled and switch_phrase")
+        if not isinstance(opening, dict) or set(opening) - {"enabled", "switch_phrase", "pre_inference_record"}:
+            raise ValueError("first_statement contains unsupported configuration")
         self.first_statement_enabled = opening.get("enabled", False)
         self.first_statement_switch_phrase = opening.get("switch_phrase")
+        self.pre_inference_record = opening.get("pre_inference_record")
         if not isinstance(self.first_statement_enabled, bool):
             raise ValueError("first_statement.enabled must be a boolean")
         if self.first_statement_enabled and not self.model_approval.pre_dispatch:
             raise ValueError("first_statement requires pre-dispatch admission")
+        if self.pre_inference_record is not None:
+            if not self.first_statement_enabled:
+                raise ValueError("pre_inference_record requires first_statement.enabled")
+            if (not isinstance(self.pre_inference_record, str)
+                    or not self.pre_inference_record.strip()
+                    or self.pre_inference_record != self.pre_inference_record.strip()
+                    or "\n" in self.pre_inference_record or "\r" in self.pre_inference_record
+                    or len(self.pre_inference_record) > 1000):
+                raise ValueError("pre_inference_record must be a single nonempty line or null")
         if self.first_statement_switch_phrase is not None and (
             not isinstance(self.first_statement_switch_phrase, str)
             or not self.first_statement_switch_phrase.strip()
@@ -216,12 +226,25 @@ class CoreRuntime:
     def _chat_unlocked(self, message: NormalizedMessage, *, model_route: str = "default") -> RuntimeResult:
         from .composition import run_chat_middleware
 
+        turn_id = new_id("turn")
+        if self.pre_inference_record is not None:
+            from .pre_inference_record import write_pre_inference_record
+
+            route = model_route.strip().lower() or "default"
+            write_pre_inference_record(self.home, turn_id=turn_id, route=route,
+                                       statement=self.pre_inference_record,
+                                       approved=self.model_approval.routes.get(route))
+
+        def core(current_message: NormalizedMessage, *, model_route: str) -> RuntimeResult:
+            return self._chat_core_unlocked(current_message, model_route=model_route,
+                                            turn_id=turn_id)
+
         return run_chat_middleware(
-            self, message, model_route, self._chat_core_unlocked
+            self, message, model_route, core
         )
 
-    def _chat_core_unlocked(self, message: NormalizedMessage, *, model_route: str = "default") -> RuntimeResult:
-        turn_id = new_id("turn")
+    def _chat_core_unlocked(self, message: NormalizedMessage, *, model_route: str = "default", turn_id: str | None = None) -> RuntimeResult:
+        turn_id = turn_id or new_id("turn")
         self.db.add_turn(
             resident_id=self.resident_id,
             room_id=self.room_id,
